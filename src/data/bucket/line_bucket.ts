@@ -25,6 +25,7 @@ import {tileToMeter} from '../../geo/mercator_coordinate';
 // Import LineAtlas as a module with side effects to ensure
 // it's registered as a serializable class on the main thread
 import '../../render/line_atlas';
+import {number as interpolate} from '../../style-spec/util/interpolate';
 
 import type {ProjectionSpecification} from '../../style-spec/types';
 import type {CanonicalTileID, UnwrappedTileID} from '../../source/tile_id';
@@ -123,6 +124,7 @@ class LineBucket implements Bucket {
     index: number;
     zoom: number;
     overscaling: number;
+    pixelRatio: number;
     layers: Array<LineStyleLayer>;
     layerIds: Array<string>;
     gradients: {
@@ -164,6 +166,7 @@ class LineBucket implements Bucket {
         this.zoom = options.zoom;
         this.evaluationGlobals.zoom = this.zoom;
         this.overscaling = options.overscaling;
+        this.pixelRatio = options.pixelRatio;
         this.layers = options.layers;
         this.layerIds = this.layers.map(layer => layer.fqid);
         this.index = options.index;
@@ -198,12 +201,20 @@ class LineBucket implements Bucket {
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
-        this.hasPattern = hasPattern('line', this.layers, options);
+        this.hasPattern = hasPattern('line', this.layers, this.pixelRatio, options);
         const lineSortKey = this.layers[0].layout.get('line-sort-key');
 
         this.tileToMeter = tileToMeter(canonical);
-        this.hasZOffset = !this.layers[0].isDraped();
+
+        const zOffset = this.layers[0].layout.get('line-z-offset');
+        const zOffsetZero = zOffset.isConstant() && !zOffset.constantOr(0);
         const elevationReference = this.layers[0].layout.get('line-elevation-reference');
+        const seaOrGroundReference = elevationReference === 'sea' || elevationReference === 'ground';
+        // The bucket has z-offset if elevationReference is 'sea' or 'ground'
+        // or when elevationReference is 'none' and z-offset property is non-zero.
+        // We need to explicitly compare elevationReference agains 'none', because the property
+        // can also have hd-road specific values which are unrelated to normal z-offset.
+        this.hasZOffset = seaOrGroundReference || (!zOffsetZero && elevationReference === 'none');
         if (this.hasZOffset && elevationReference === 'none') {
             warnOnce(`line-elevation-reference: ground is used for the layer ${this.layerIds[0]} because non-zero line-z-offset value was found.`);
         }
@@ -256,7 +267,7 @@ class LineBucket implements Bucket {
             }
 
             if (this.hasPattern) {
-                const patternBucketFeature = addPatternDependencies('line', this.layers, bucketFeature, this.zoom, options);
+                const patternBucketFeature = addPatternDependencies('line', this.layers, bucketFeature, this.zoom, this.pixelRatio, options);
                 // pattern features are added only once the pattern is loaded into the image atlas
                 // so are stored during populate until later updated with positions by tile worker in addFeatures
                 this.patternFeatures.push(patternBucketFeature);
@@ -923,7 +934,8 @@ class LineBucket implements Bucket {
 
         // Constructs a second vertex buffer with higher precision line progress
         if (this.lineClips) {
-            this.layoutVertexArray2.emplaceBack(this.scaledDistance, this.lineClipsArray.length, this.lineClips.start, this.lineClips.end);
+            const lineProgress = interpolate(this.lineClips.start, this.lineClips.end, this.scaledDistance);
+            this.layoutVertexArray2.emplaceBack(this.scaledDistance, this.lineClipsArray.length, lineProgress);
         }
 
         const e = segment.vertexLength++;
@@ -939,6 +951,7 @@ class LineBucket implements Bucket {
         if (lineProgressFeatures != null) {
             this.zOffsetVertexArray.emplaceBack(
                 lineProgressFeatures.zOffset,
+                lineProgressFeatures.variableWidth,
                 lineProgressFeatures.variableWidth
             );
         }

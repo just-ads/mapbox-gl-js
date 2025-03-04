@@ -648,7 +648,7 @@ export class Map extends Camera {
         this._requestManager = new RequestManager(options.transformRequest, options.accessToken, options.testMode);
         this._silenceAuthErrors = !!options.testMode;
         if (options.contextCreateOptions) {
-            this._contextCreateOptions = {...options.contextCreateOptions};
+            this._contextCreateOptions = Object.assign({}, options.contextCreateOptions);
         } else {
             this._contextCreateOptions = {};
         }
@@ -1507,13 +1507,14 @@ export class Map extends Camera {
      * the `x` and `y` components of the returned {@link Point} are set to Number.MAX_VALUE.
      *
      * @param {LngLatLike} lnglat The geographical location to project.
+     * @param {number} altitude The height above sea level.
      * @returns {Point} The {@link Point} corresponding to `lnglat`, relative to the map's `container`.
      * @example
      * const coordinate = [-122.420679, 37.772537];
      * const point = map.project(coordinate);
      */
-    project(lnglat: LngLatLike): Point {
-        return this.transform.locationPoint3D(LngLat.convert(lnglat));
+    project(lnglat: LngLatLike, altitude?: number): Point {
+        return this.transform.locationPoint3D(LngLat.convert(lnglat), (altitude || 0));
     }
 
     /**
@@ -1523,6 +1524,7 @@ export class Map extends Camera {
      * to the point.
      *
      * @param {PointLike} point The pixel coordinates to unproject.
+     *@param {number} altitude The height above sea level.
      * @returns {LngLat} The {@link LngLat} corresponding to `point`.
      * @example
      * map.on('click', (e) => {
@@ -1530,8 +1532,8 @@ export class Map extends Camera {
      *     const coordinate = map.unproject(e.point);
      * });
      */
-    unproject(point: PointLike): LngLat {
-        return this.transform.pointLocation3D(Point.convert(point));
+    unproject(point: PointLike, altitude?: number): LngLat {
+        return this.transform.pointLocation3D(Point.convert(point), (altitude || 0));
     }
 
     /** @section {Movement state} */
@@ -4154,7 +4156,10 @@ export class Map extends Camera {
 
     _contextRestored(event: any) {
         this._setupPainter();
-        this.resize();
+        this.painter.resize(Math.ceil(this._containerWidth), Math.ceil(this._containerHeight));
+        this._updateTerrain();
+        this.style.reloadModels();
+        this.style.clearSources();
         this._update();
         this.fire(new Event('webglcontextrestored', {originalEvent: event}));
     }
@@ -4344,7 +4349,9 @@ export class Map extends Camera {
             averageElevationChanged = this._updateAverageElevation(frameStartTime);
             this.style.updateSources(this.transform);
             // Update positions of markers and popups on enabling/disabling terrain
-            this._forceMarkerAndPopupUpdate();
+            if (!this.isMoving()) {
+                this._forceMarkerAndPopupUpdate();
+            }
         } else {
             averageElevationChanged = this._updateAverageElevation(frameStartTime);
         }

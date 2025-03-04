@@ -23,7 +23,7 @@ import symbol from './draw_symbol';
 import circle from './draw_circle';
 import assert from 'assert';
 import heatmap from './draw_heatmap';
-import line from './draw_line';
+import line, {prepare as prepareLine} from './draw_line';
 import fill from './draw_fill';
 import fillExtrusion from './draw_fill_extrusion';
 import hillshade from './draw_hillshade';
@@ -136,6 +136,7 @@ const draw = {
 };
 
 const prepare = {
+    line: prepareLine,
     model: modelPrepare,
     raster: prepareRaster,
     'raster-particle': prepareRasterParticle
@@ -757,15 +758,18 @@ class Painter {
         const layers = this.style._mergedLayers;
 
         const drapingEnabled = !!(this.terrain && this.terrain.enabled);
-        const layerIds = this.style._getOrder(drapingEnabled).filter((id) => {
-            const layer = layers[id];
+        const getLayerIds = () =>
+            this.style._getOrder(drapingEnabled).filter((id) => {
+                const layer = layers[id];
 
-            if (layer.type in this._debugParams.enabledLayers) {
-                return this._debugParams.enabledLayers[layer.type];
-            }
+                if (layer.type in this._debugParams.enabledLayers) {
+                    return this._debugParams.enabledLayers[layer.type];
+                }
 
-            return true;
-        });
+                return true;
+            });
+
+        let layerIds = getLayerIds();
 
         let layersRequireTerrainDepth = false;
         let layersRequireFinalDepth = false;
@@ -786,7 +790,7 @@ class Painter {
             }
         }
 
-        const orderedLayers = layerIds.map(id => layers[id]);
+        let orderedLayers = layerIds.map(id => layers[id]);
         const sourceCaches = this.style._mergedSourceCaches;
 
         this.imageManager = style.imageManager;
@@ -974,6 +978,10 @@ class Painter {
             // All render to texture is done in translucent pass to remove need
             // for depth buffer allocation per tile.
             this.opaquePassCutoff = 0;
+
+            // Calling updateTileBinding() has possibly changed drape first layer order.
+            layerIds = getLayerIds();
+            orderedLayers = layerIds.map(id => layers[id]);
         }
 
         const shadowRenderer = this._shadowRenderer;

@@ -33,10 +33,12 @@ import type {TileTransform} from '../../geo/projection/tile_transform';
 import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {TileFootprint} from '../../../3d-style/util/conflation';
 import type {TypedStyleLayer} from '../../style/style_layer/typed_style_layer';
+import type {ElevationFeature} from '../elevation_feature';
 
 class FillBucket implements Bucket {
     index: number;
     zoom: number;
+    pixelRatio: number;
     overscaling: number;
     layers: Array<FillStyleLayer>;
     layerIds: Array<string>;
@@ -62,6 +64,7 @@ class FillBucket implements Bucket {
 
     constructor(options: BucketParameters<FillStyleLayer>) {
         this.zoom = options.zoom;
+        this.pixelRatio = options.pixelRatio;
         this.overscaling = options.overscaling;
         this.layers = options.layers;
         this.layerIds = this.layers.map(layer => layer.fqid);
@@ -83,7 +86,7 @@ class FillBucket implements Bucket {
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
-        this.hasPattern = hasPattern('fill', this.layers, options);
+        this.hasPattern = hasPattern('fill', this.layers, this.pixelRatio, options);
         const fillSortKey = this.layers[0].layout.get('fill-sort-key');
         const bucketFeatures = [];
 
@@ -124,12 +127,12 @@ class FillBucket implements Bucket {
             const {geometry, index, sourceLayerIndex} = bucketFeature;
 
             if (this.hasPattern) {
-                const patternFeature = addPatternDependencies('fill', this.layers, bucketFeature, this.zoom, options);
+                const patternFeature = addPatternDependencies('fill', this.layers, bucketFeature, this.zoom, this.pixelRatio, options);
                 // pattern features are added only once the pattern is loaded into the image atlas
                 // so are stored during populate until later updated with positions by tile worker in addFeatures
                 this.patternFeatures.push(patternFeature);
             } else {
-                this.addFeature(bucketFeature, geometry, index, canonical, {}, options.availableImages, options.brightness);
+                this.addFeature(bucketFeature, geometry, index, canonical, {}, options.availableImages, options.brightness, options.elevationFeatures);
             }
 
             const feature = features[index].feature;
@@ -143,7 +146,7 @@ class FillBucket implements Bucket {
 
     addFeatures(options: PopulateParameters, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: Array<string>, _: TileTransform, brightness?: number | null) {
         for (const feature of this.patternFeatures) {
-            this.addFeature(feature, feature.geometry, feature.index, canonical, imagePositions, availableImages, brightness);
+            this.addFeature(feature, feature.geometry, feature.index, canonical, imagePositions, availableImages, brightness, options.elevationFeatures);
         }
     }
 
@@ -174,7 +177,7 @@ class FillBucket implements Bucket {
         this.segments2.destroy();
     }
 
-    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: Array<string> = [], brightness?: number | null) {
+    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: Array<string> = [], brightness?: number | null, elevationFeatures?: ElevationFeature[]) {
         for (const polygon of classifyRings(geometry, EARCUT_MAX_RINGS)) {
             let numVertices = 0;
             for (const ring of polygon) {
