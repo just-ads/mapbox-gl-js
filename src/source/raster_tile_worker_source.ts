@@ -138,10 +138,11 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
 
     // @ts-ignore
     loadTile(params: WorkerTileParameters & WorkerCoverTilesResult, callback) {
-        const loading = this._loading[params.tileID.key] = this._loading[params.tileID.key] || {status: 'loading'};
+        const key = params.tileID.key;
+        const loading = this._loading[key] = this._loading[key] || {status: 'loading'};
         loading.request = this.loadRasterTile(params, (error, result) => {
+            delete this._loading[key];
             if (loading.status === 'unloaded') return callback(null);
-            delete loading.request;
             callback(error, result);
         });
         this.limitedStorage();
@@ -160,22 +161,14 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
     abortTile(params: TileParameters & { tileID: CanonicalTileID }) {
         const {tileID} = params;
         const loading = this._loading[tileID.key];
-        if (loading) {
-            loading.status = 'unloaded';
-            // eslint-disable-next-line no-unused-expressions
-            loading.request && loading.request.cancel();
+        if (loading && loading.request) {
+            loading.request.cancel();
             delete this._loading[tileID.key];
         }
     }
 
     removeTile(params: TileParameters & { tileID: CanonicalTileID }) {
-        const tileID = params.tileID;
-        const loading = this._loading[tileID.key];
         this.abortTile(params);
-        if (loading) {
-            // eslint-disable-next-line no-unused-expressions
-            loading.subTiles && loading.subTiles.forEach(tile => delete this._subLoading[tile]);
-        }
     }
 
 }

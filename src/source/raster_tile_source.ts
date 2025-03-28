@@ -328,7 +328,8 @@ class RasterTileSource<T extends 'raster' | 'raster-dem' | 'raster-array' = 'ras
                 uid: tile.uid,
                 tileID: tile.tileID.canonical,
                 type: this.type,
-                source: this.id
+                source: this.id,
+                scope: this.scope
             });
         }
         if (callback) callback();
@@ -355,7 +356,8 @@ class RasterTileSource<T extends 'raster' | 'raster-dem' | 'raster-array' = 'ras
                 uid: tile.uid,
                 tileID: tile.tileID.canonical,
                 type: this.type,
-                source: this.id
+                source: this.id,
+                scope: this.scope
             });
         }
         if (callback) callback();
