@@ -30,6 +30,7 @@ export type MarkerOptions = {
     occludedOpacity?: number;
     className?: string;
     altitude?: number;
+    interactable?: boolean;
 };
 
 type MarkerEvents = {
@@ -97,6 +98,7 @@ export default class Marker extends Evented<MarkerEvents> {
     _updateMoving: () => void;
     _occludedOpacity: number;
     _altitude: number;
+    _interactable: boolean;
 
     constructor(options?: MarkerOptions, legacyOptions?: MarkerOptions) {
         super();
@@ -129,6 +131,7 @@ export default class Marker extends Evented<MarkerEvents> {
         this._updateMoving = () => this._update(true);
         this._occludedOpacity = (options && options.occludedOpacity) || 0.2;
         this._altitude = (options && options.altitude) || 0;
+        this._interactable = !(options && options.interactable === false);
 
         if (!options || !options.element) {
             this._defaultMarker = true;
@@ -272,31 +275,31 @@ export default class Marker extends Evented<MarkerEvents> {
      * the marker on screen.
      *
      * @returns {LngLat} A {@link LngLat} describing the marker's location.
-    * @example
-    * // Store the marker's longitude and latitude coordinates in a variable
-    * const lngLat = marker.getLngLat();
-    * // Print the marker's longitude and latitude values in the console
-    * console.log(`Longitude: ${lngLat.lng}, Latitude: ${lngLat.lat}`);
-    * @see [Example: Create a draggable Marker](https://docs.mapbox.com/mapbox-gl-js/example/drag-a-marker/)
-    */
+     * @example
+     * // Store the marker's longitude and latitude coordinates in a variable
+     * const lngLat = marker.getLngLat();
+     * // Print the marker's longitude and latitude values in the console
+     * console.log(`Longitude: ${lngLat.lng}, Latitude: ${lngLat.lat}`);
+     * @see [Example: Create a draggable Marker](https://docs.mapbox.com/mapbox-gl-js/example/drag-a-marker/)
+     */
     getLngLat(): LngLat {
         return this._lngLat;
     }
 
     /**
-    * Set the marker's geographical position and move it.
+     * Set the marker's geographical position and move it.
      *
-    * @param {LngLat} lnglat A {@link LngLat} describing where the marker should be located.
-    * @returns {Marker} Returns itself to allow for method chaining.
-    * @example
-    * // Create a new marker, set the longitude and latitude, and add it to the map.
-    * new mapboxgl.Marker()
-    *     .setLngLat([-65.017, -16.457])
-    *     .addTo(map);
-    * @see [Example: Add custom icons with Markers](https://docs.mapbox.com/mapbox-gl-js/example/custom-marker-icons/)
-    * @see [Example: Create a draggable Marker](https://docs.mapbox.com/mapbox-gl-js/example/drag-a-marker/)
-    * @see [Example: Add a marker using a place name](https://docs.mapbox.com/mapbox-gl-js/example/marker-from-geocode/)
-    */
+     * @param {LngLat} lnglat A {@link LngLat} describing where the marker should be located.
+     * @returns {Marker} Returns itself to allow for method chaining.
+     * @example
+     * // Create a new marker, set the longitude and latitude, and add it to the map.
+     * new mapboxgl.Marker()
+     *     .setLngLat([-65.017, -16.457])
+     *     .addTo(map);
+     * @see [Example: Add custom icons with Markers](https://docs.mapbox.com/mapbox-gl-js/example/custom-marker-icons/)
+     * @see [Example: Create a draggable Marker](https://docs.mapbox.com/mapbox-gl-js/example/drag-a-marker/)
+     * @see [Example: Add a marker using a place name](https://docs.mapbox.com/mapbox-gl-js/example/marker-from-geocode/)
+     */
     setLngLat(lnglat: LngLatLike): this {
         this._lngLat = LngLat.convert(lnglat);
         this._pos = null;
@@ -473,7 +476,7 @@ export default class Marker extends Evented<MarkerEvents> {
         }
 
         this._element.style.opacity = `${opacity}`;
-        this._element.style.pointerEvents = opacity > 0 ? 'auto' : 'none';
+        this._element.style.pointerEvents = this._interactable ? (opacity > 0 ? 'auto' : 'none') : 'none';
         if (this._popup) {
             this._popup._setOpacity(opacity);
         }
@@ -491,7 +494,9 @@ export default class Marker extends Evented<MarkerEvents> {
     _updateDOM() {
         const pos = this._pos;
         const map = this._map;
-        if (!pos || !map) { return; }
+        if (!pos || !map) {
+            return;
+        }
 
         const offset = this._offset.mult(this._scale);
 
@@ -521,9 +526,11 @@ export default class Marker extends Evented<MarkerEvents> {
         const tilt = radToDeg(globeTiltAtLngLat(map.transform, this._lngLat));
         const posFromCenter = pos.sub(globeCenterToScreenPoint(map.transform));
         const manhattanDistance = (Math.abs(posFromCenter.x) + Math.abs(posFromCenter.y));
-        if (manhattanDistance === 0) { return ''; }
+        if (manhattanDistance === 0) {
+            return '';
+        }
 
-        const tiltOverDist =  tilt / manhattanDistance;
+        const tiltOverDist = tilt / manhattanDistance;
         const yTilt = posFromCenter.x * tiltOverDist;
         const xTilt = -posFromCenter.y * tiltOverDist;
         return `rotateX(${xTilt}deg) rotateY(${yTilt}deg)`;
@@ -534,7 +541,9 @@ export default class Marker extends Evented<MarkerEvents> {
 
         const pos = this._pos;
         const map = this._map;
-        if (!map || !pos) { return ''; }
+        if (!map || !pos) {
+            return '';
+        }
 
         let rotation = 0;
         const alignment = this.getRotationAlignment();
@@ -728,7 +737,7 @@ export default class Marker extends Evented<MarkerEvents> {
 
     _onUp() {
         // revert to normal pointer event handling
-        this._element.style.pointerEvents = 'auto';
+        this._element.style.pointerEvents = this._interactable ? 'auto' : 'none';
         this._positionDelta = null;
         this._pointerdownPos = null;
         this._isDragging = false;
@@ -742,14 +751,14 @@ export default class Marker extends Evented<MarkerEvents> {
         // only fire dragend if it was preceded by at least one drag event
         if (this._state === 'active') {
             /**
-            * Fired when the marker is finished being dragged.
-            *
-            * @event dragend
-            * @memberof Marker
-            * @instance
-            * @type {Object}
-            * @property {Marker} marker The object that was dragged.
-            */
+             * Fired when the marker is finished being dragged.
+             *
+             * @event dragend
+             * @memberof Marker
+             * @instance
+             * @type {Object}
+             * @property {Marker} marker The object that was dragged.
+             */
             this.fire(new Event('dragend'));
         }
 
