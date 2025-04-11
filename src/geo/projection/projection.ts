@@ -143,11 +143,6 @@ export default class Projection {
 
         mat4.translate(posMatrix, posMatrix, [scaledX, scaledY, 0]);
 
-        // if(id.projection){
-        //     const offset = getTileOffset(tr, canonical, id.projection);
-        //     mat4.translate(posMatrix, posMatrix, [offset.x, offset.y, 0]);
-        // }
-
         mat4.scale(posMatrix, posMatrix, [scale / EXTENT, scale / EXTENT, 1]);
 
         return posMatrix;
