@@ -3,6 +3,7 @@ import vector from '../source/vector_tile_source';
 import raster from '../source/raster_tile_source';
 import rasterDem from '../source/raster_dem_tile_source';
 import rasterArray from '../source/raster_array_tile_source';
+import rasterWindy from "../../windy-style/source/raster_windy_tile_source";
 import geojson from '../source/geojson_source';
 import video from '../source/video_source';
 import image from '../source/image_source';
@@ -135,6 +136,7 @@ const sourceTypes: Record<Source['type'], Class<ISource>> = {
     raster,
     'raster-dem': rasterDem,
     'raster-array': rasterArray,
+    'raster-windy': rasterWindy,
     geojson,
     video,
     image,

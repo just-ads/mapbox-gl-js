@@ -84,6 +84,8 @@ export default function validateLayer(options: Options): Array<ValidationError> 
                 errors.push(new ValidationError(key, layer, `layer "${layer.id}" specifies a line-gradient, which requires a GeoJSON source with \`lineMetrics\` enabled.`));
             } else if (type === 'raster-particle' && sourceType !== 'raster-array') {
                 errors.push(new ValidationError(key, layer.source, `layer "${layer.id}" requires a \'raster-array\' source.`));
+            } else if (type === 'raster-windy' && sourceType !== 'raster-windy') {
+                errors.push(new ValidationError(key, layer.source, `layer "${layer.id}" requires a \'raster-windy\' source.`));
             }
         }
     }

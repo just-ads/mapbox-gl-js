@@ -1034,6 +1034,42 @@ export type RasterParticleLayout = RasterParticleLayerSpecification['layout'];
  */
 export type RasterParticlePaint = RasterParticleLayerSpecification['paint'];
 
+export type RasterWindyLayerSpecification = {
+    "id": string,
+    "type": "raster-windy",
+    "metadata"?: unknown,
+    "source": string,
+    "source-layer"?: string,
+    "slot"?: string,
+    "minzoom"?: number,
+    "maxzoom"?: number,
+    "filter"?: FilterSpecification,
+    "layout"?: {
+        "visibility"?: "visible" | "none" | ExpressionSpecification
+    },
+    "paint"?: {
+        "raster-windy-gradient": PropertyValueSpecification<string>;
+        "raster-windy-render-mode"?: PropertyValueSpecification<string>;
+        "raster-windy-opacity"?: PropertyValueSpecification<number>;
+        "raster-windy-hue-rotate"?: PropertyValueSpecification<number>;
+        "raster-windy-brightness-min"?: PropertyValueSpecification<number>;
+        "raster-windy-brightness-max"?: PropertyValueSpecification<number>;
+        "raster-windy-saturation?": PropertyValueSpecification<number>;
+        "raster-windy-contrast"?: PropertyValueSpecification<number>;
+        "raster-windy-resampling"?: PropertyValueSpecification<"linear" | "nearest">;
+    }
+}
+
+/**
+ * @deprecated Use `RasterWindyLayerSpecification['layout']` instead.
+ */
+export type RasterWindyLayout = RasterWindyLayerSpecification['layout'];
+
+/**
+ * @deprecated Use `RasterWindyLayerSpecification['paint']` instead.
+ */
+export type RasterWindyPaint = RasterWindyLayerSpecification['paint'];
+
 export type HillshadeLayerSpecification = {
     "id": string,
     "type": "hillshade",
@@ -1255,6 +1291,7 @@ export type LayerSpecification =
     | FillExtrusionLayerSpecification
     | RasterLayerSpecification
     | RasterParticleLayerSpecification
+    | RasterWindyLayerSpecification
     | HillshadeLayerSpecification
     | ModelLayerSpecification
     | BackgroundLayerSpecification

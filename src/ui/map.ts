@@ -40,6 +40,8 @@ import defaultLocale from './default_locale';
 import {TrackedParameters} from '../tracked-parameters/tracked_parameters';
 import {TrackedParametersMock} from '../tracked-parameters/tracked_parameters_base';
 import {InteractionSet} from './interactions';
+import MercatorCoordinate from "../geo/mercator_coordinate";
+import {OverscaledTileID} from "../source/tile_id";
 
 import type Marker from '../ui/marker';
 import type Popup from '../ui/popup';
@@ -104,6 +106,7 @@ export interface IControl {
     readonly getDefaultPosition?: () => ControlPosition;
     readonly _setLanguage?: (language?: string | string[]) => void;
 }
+
 /* eslint-enable no-use-before-define */
 
 // Public API type for the Map#setStyle options
@@ -122,7 +125,7 @@ type Listener<T extends MapEventType> = (event: MapEventOf<T>) => void;
 type DelegatedListener = {
     targets: string[] | TargetDescriptor;
     listener: Listener<MapEventType>;
-    delegates: {[T in MapEventType]?: Listener<T>};
+    delegates: { [T in MapEventType]?: Listener<T> };
 };
 
 export const AVERAGE_ELEVATION_SAMPLING_INTERVAL = 500; // ms
@@ -2120,6 +2123,51 @@ export class Map extends Camera {
         return this.style.querySourceFeatures(sourceId, parameters);
     }
 
+    _getQueryRasterTile(point: MercatorCoordinate, sourceId: string) {
+        const cache = this.style.getSourceCache(sourceId);
+        if (!cache) return null;
+        const source = cache.getSource();
+        if (!source || (source.type !== 'raster' && source.type !== 'raster-windy')) return null;
+        const z = source.maxzoom;
+        const tiles = 1 << z;
+        const wrap = Math.floor(point.x);
+        const px = point.x - wrap;
+        const tileID = new OverscaledTileID(z, wrap, z, Math.floor(px * tiles), Math.floor(point.y * tiles));
+        let tile = cache._tiles[tileID.key];
+        if (!tile) {
+            tile = cache.findLoadedParent(tileID, source.minzoom || 0);
+        }
+        return tile;
+    }
+
+    queryRasterWindyColor(lngLat: LngLatLike, sourceId: string) {
+        const point = MercatorCoordinate.fromLngLat(lngLat);
+        const tile = this._getQueryRasterTile(point, sourceId);
+        // @ts-expect-error
+        const cloud = tile ? tile._cloud : null;
+        if (!cloud) return null;
+        const [i, j] = tile.getIndexAtPoint(point, cloud.width, cloud.height);
+        const index = (i + j * cloud.width) * 4;
+        const source = this.getSource(sourceId);
+        // @ts-expect-error
+        if (source._isSea()) {
+            // @ts-expect-error
+            const island = source._isPngTile() ?
+                () => !(cloud.data[index + 3] && cloud.data[index + 7] && cloud.data[index + 1028 + 3] && cloud.data[index + 1028 + 7]) :
+                () => !!(192 & cloud.data[index + 2] || 192 & cloud.data[index + 6] || 192 & cloud.data[index + 1030] || 192 & cloud.data[index + 1034]);
+            if (island()) {
+                return NaN;
+            }
+        }
+        // @ts-expect-error
+        const pars = tile._headerPars;
+        return {
+            r: cloud.data[index] * pars[0] / 255 + pars[1],
+            g: cloud.data[index + 1] * pars[2] / 255 + pars[3],
+            b: cloud.data[index + 2] * pars[4] / 255 + pars[5]
+        };
+    }
+
     /**
      * Determines if the given point is located on a visible map surface.
      *
@@ -2241,7 +2289,10 @@ export class Map extends Camera {
      * });
      */
     setStyle(style: StyleSpecification | string | null, options?: SetStyleOptions): this {
-        options = extend({}, {localIdeographFontFamily: this._localIdeographFontFamily, localFontFamily: this._localFontFamily}, options);
+        options = extend({}, {
+            localIdeographFontFamily: this._localIdeographFontFamily,
+            localFontFamily: this._localFontFamily
+        }, options);
 
         const diffNeeded =
             options.diff !== false &&

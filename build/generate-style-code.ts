@@ -188,6 +188,11 @@ for (const layer of layers) {
         outputDir = `3d-style/style/style_layer`;
         properties = layerPropertiesJs3Dstyle;
     }
+    if (layer.type === 'raster-windy') {
+        srcDir = '../../../src';
+        styleDir = '../../../src/style';
+        outputDir = `windy-style/style/style_layer`;
+    }
     fs.writeFileSync(`${outputDir}/${layer.type.replace('-', '_')}_style_layer_properties.ts`, properties({layer, srcDir, styleDir}));
 }
 

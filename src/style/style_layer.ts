@@ -39,7 +39,7 @@ type LayerRenderingStats = {
 };
 
 // Symbols are draped only on native and for certain cases only
-const drapedLayers = new Set(['fill', 'line', 'background', 'hillshade', 'raster']);
+const drapedLayers = new Set(['fill', 'line', 'background', 'hillshade', 'raster', 'raster-windy']);
 
 class StyleLayer extends Evented {
     id: string;

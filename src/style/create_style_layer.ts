@@ -9,6 +9,7 @@ import symbol from './style_layer/symbol_style_layer';
 import background from './style_layer/background_style_layer';
 import raster from './style_layer/raster_style_layer';
 import rasterParticle from './style_layer/raster_particle_style_layer';
+import rasterWindy from "../../windy-style/style/style_layer/raster_windy_style_layer";
 import CustomStyleLayer from './style_layer/custom_style_layer';
 import sky from './style_layer/sky_style_layer';
 import slot from './style_layer/slot_style_layer';
@@ -31,6 +32,7 @@ const subclasses = {
     background,
     raster,
     'raster-particle': rasterParticle,
+    'raster-windy': rasterWindy,
     sky,
     slot,
     model,

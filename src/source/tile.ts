@@ -54,6 +54,7 @@ import type Painter from '../render/painter';
 import type {QrfQuery, QueryResult} from '../source/query_features';
 import type {UserManagedTexture, TextureImage} from '../render/texture';
 import type {VectorTileLayer} from '@mapbox/vector-tile';
+import type MercatorCoordinate from '../geo/mercator_coordinate';
 
 const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
 export type TileState = // Tile data is in the process of _loading.
@@ -159,6 +160,8 @@ class Tile {
 
     queryGeometryDebugViz: TileSpaceDebugBuffer | null | undefined;
     queryBoundsDebugViz: TileSpaceDebugBuffer | null | undefined;
+
+    url?: string;
 
     _tileDebugBuffer: VertexBuffer | null | undefined;
     _tileBoundsBuffer: VertexBuffer | null | undefined;
@@ -538,30 +541,14 @@ class Tile {
         }
     }
 
-    queryTextureColor(result: Uint8Array, params: any) {
-        if (this.state !== 'loaded' || !this.texture) return;
-        const {point, padding, gl} = params;
-        // @ts-ignore
-        let [width, height] = this.texture.size;
-        if (padding) {
-            width -= padding[0];
-            height -= padding[1];
-        }
+    getIndexAtPoint(point: MercatorCoordinate, width: number, height: number) {
         const tilesAtTileZoom = 1 << this.tileID.canonical.z;
         const px = point.x - Math.floor(point.x);
         const x = (px * tilesAtTileZoom - this.tileID.canonical.x) * width;
         const y = (point.y * tilesAtTileZoom - this.tileID.canonical.y) * height;
-        let i = Math.floor(x);
-        let j = Math.floor(y);
-        if (padding) {
-            i += padding[0];
-            j += padding[1];
-        }
-        const framebuffer = gl.createFramebuffer();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texture.texture, 0);
-        gl.readPixels(i, j, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, result);
-        gl.deleteFramebuffer(framebuffer);
+        const i = Math.floor(x);
+        const j = Math.floor(y);
+        return [i, j];
     }
 
     hasData(): boolean {

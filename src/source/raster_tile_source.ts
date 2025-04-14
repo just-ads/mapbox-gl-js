@@ -49,7 +49,7 @@ import type {WorkerCoverTilesResult} from "./worker_source";
  * @see [Example: Add a raster tile source](https://docs.mapbox.com/mapbox-gl-js/example/map-tiles/)
  * @see [Example: Add a WMS source](https://docs.mapbox.com/mapbox-gl-js/example/wms/)
  */
-class RasterTileSource<T extends 'raster' | 'raster-dem' | 'raster-array' = 'raster'> extends Evented<SourceEvents> implements ISource {
+class RasterTileSource<T extends 'raster' | 'raster-dem' | 'raster-array' | 'raster-windy' = 'raster'> extends Evented<SourceEvents> implements ISource {
     type: T;
     id: string;
     scope: string;

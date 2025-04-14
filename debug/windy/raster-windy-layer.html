@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+    <title>Title</title>
+    <link rel='stylesheet' href='../../dist/mapbox-gl.css'/>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body, #map {
+            height: 100%;
+        }
+
+        .map-overlay {
+            font: 12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+            position: absolute;
+            width: 200px;
+            top: 0;
+            left: 0;
+            padding: 10px;
+        }
+
+        .map-overlay .map-overlay-inner {
+            background-color: #fff;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            border-radius: 3px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        .map-overlay-inner fieldset {
+            border: none;
+            padding: 0;
+            margin: 0 0 10px;
+        }
+
+        .map-overlay-inner fieldset:last-child {
+            margin: 0;
+        }
+
+        .map-overlay-inner select,
+        .map-overlay-inner input {
+            width: 100%;
+        }
+
+        .map-overlay-inner label {
+            display: block;
+            font-weight: bold;
+            margin: 0 0 5px;
+        }
+
+
+        .picker .picker-lines {
+            position: relative;
+            border-left: 2px solid rgba(68, 65, 65, 0.84);
+            height: 125px;
+            cursor: move;
+        }
+
+        .picker .picker-lines::before {
+            display: block;
+            position: absolute;
+            content: '';
+            left: -10px;
+            right: 0;
+            width: 20px;
+            height: 140px;
+        }
+
+        .picker .picker-lines::after {
+            display: block;
+            position: absolute;
+            left: -5px;
+            top: 120.5px;
+            background-color: white;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            content: '';
+        }
+
+        .picker .picker-content {
+            position: absolute;
+            left: 2px;
+            top: 0;
+            cursor: move;
+            white-space: nowrap;
+            min-height: 22px;
+            color: white;
+            background-color: rgba(68, 65, 65, 0.84);
+            border-top-right-radius: 20px;
+            border-bottom-right-radius: 20px;
+        }
+
+        .picker .picker-content > span {
+            display: inline-block;
+            padding: 0 30px 0 10px;
+        }
+
+        .picker .picker-content .picker-close-button {
+            border: 10px solid transparent;
+            background-clip: padding-box;
+            left: calc(100% + 8px);
+            top: -10px;
+        }
+
+        .picker{
+            font-size: 14px;
+        }
+
+
+    </style>
+</head>
+
+<script src='../../dist/mapbox-gl-dev.js'></script>
+<script src="../../debug/access_token_generated.js"></script>
+<script src="./layerCof.js"></script>
+<script src="./LightGray.js"></script>
+<body>
+<div id="map"></div>
+<div class="map-overlay top">
+    <details open>
+        <summary>菜单</summary>
+        <div class="map-overlay-inner">
+            <fieldset>
+                <label for="layers">图层</label>
+                <select id="layers" name="layers">
+
+                </select>
+            </fieldset>
+            <fieldset>
+                <label for="model">模型</label>
+                <select id="model" name="model"></select>
+            </fieldset>
+            <fieldset>
+                <div id="legend"></div>
+            </fieldset>
+            <fieldset>
+                <label for="terrain">Select terrain</label>
+                <select id="terrain" name="terrain">
+                    <option value="" selected>无</option>
+                    <option value="xinzhi-dem">新知</option>
+                    <option value="mapbox-dem">mapbox</option>
+                </select>
+            </fieldset>
+            <fieldset>
+                <label for="projection">Select projection</label>
+                <select id="projection" name="projection">
+                    <option value="equalEarth">Equal Earth</option>
+                    <option value="equirectangular">Equirectangular</option>
+                    <option value="mercator">Mercator</option>
+                    <option value="globe" selected>Globe</option>
+                    <option value="naturalEarth">Natural Earth</option>
+                    <option value="winkelTripel">Winkel Tripel</option>
+                </select>
+            </fieldset>
+        </div>
+    </details>
+</div>
+</body>
+<script>
+
+    function zeroPadding(s, limit = 2) {
+        s = String(s);
+        while (s.length < limit) {
+            s = '0' + s;
+        }
+        return s
+    }
+
+    function formatDate(time) {
+        const date = time instanceof Date ? time : new Date(time);
+        return `${date.getUTCFullYear()}${zeroPadding(date.getUTCMonth() + 1)}${zeroPadding(date.getUTCDate())}${zeroPadding(date.getUTCHours())}`
+    }
+
+
+    const layersSelect = document.querySelector('#layers');
+    const modelSelect = document.querySelector('#model');
+    const legend = document.querySelector('#legend');
+
+    const terrain = document.querySelector('#terrain');
+    const projectionInput = document.querySelector('#projection');
+
+
+    console.log(layerConfig)
+
+
+    const map = new mapboxgl.Map({
+        container: 'map',
+        style: {
+            // "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+            glyphs: "https://basemaps.arcgis.com/arcgis/rest/services/OpenStreetMap_v2/VectorTileServer/resources/fonts/{fontstack}/{range}.pbf",
+            "version": 8,
+            "layers": [],
+            "sources": {
+                'mapbox-dem': {
+                    type: 'raster-dem',
+                    tileSize: 512,
+                    maxzoom: 14,
+                    minzoom: 5,
+                    tiles: ['https://api.mapbox.com/raster/v1/mapbox.mapbox-terrain-dem-v1/{z}/{x}/{y}.webp?access_token=pk.eyJ1IjoiYWRzMjkzNDk3MDc3OSIsImEiOiJjbDZuZnp6angwMGkwM2pzM2tueXN1NGl0In0.0l_OvoBv3UqIuDuWmbW-sw'],
+                },
+                'xinzhi-dem': {
+                    type: 'raster-dem',
+                    tileSize: 512,
+                    maxzoom: 10,
+                    minzoom: 5,
+                    tiles: ['https://map.xinzhi.space/terrain/srtmv4/{z}/{x}/{y}.png'],
+                    bounds: [71.25, 18, 135.5, 54]
+                },
+                "esri": {
+                    "type": "vector",
+                    "tiles": ["https://basemaps.arcgis.com/arcgis/rest/services/OpenStreetMap_v2/VectorTileServer/tile/{z}/{y}/{x}.pbf"]
+                }
+            },
+        },
+        center: [106.30, 29.36],
+        zoom: 2,
+        useWebGL2: true,
+        hash: true,
+        projection: 'globe',
+        transformRequest: transformRequest
+    });
+
+    const models = {}, modelMinifest = {};
+    let lastLayer, selectModel = {};
+
+    function transformRequest(url) {
+        // console.log(url)
+        // console.log(type)
+        url = url.replace('{directory}', selectModel.directory)
+            .replace('{refTime}', selectModel.refTime)
+            .replace('{level}', 'surface')
+            .replace('{path}', selectModel.now)
+            .replace('{acTime}', 'next3d')
+        return {url}
+    }
+
+    function setLayer(id) {
+        const layer = map.getLayer(id);
+        if (layer) {
+            map.setLayoutProperty(id, 'visibility', 'visible');
+            return;
+        }
+
+        const layerCof = layerConfig.find(l => l.id === id);
+        console.log(layerCof)
+        layerCof.models.forEach(model => {
+            modelSelect.innerHTML += `<option value="${model.directory}">${model.name}</option>`;
+            if (!models[model.name]) {
+                models[model.name] = model;
+            }
+        });
+        selectModel = layerCof.models[0];
+        modelSelect.value = selectModel.directory;
+        if (!modelMinifest[selectModel.name]) {
+            fetch(`https://node.windy.com/${selectModel.url.replace(/^\/?/, '')}`).then(response => response.json()).then(data => {
+                // console.log(data);
+                const refTime = formatDate(data.ref)
+                modelMinifest[selectModel.name] = {
+                    refTime,
+                    dst: data.dst
+                };
+                selectModel.refTime = refTime;
+                selectModel.now = formatDate(new Date());
+                map.addLayer({
+                    id,
+                    type: 'raster-windy',
+                    source: id,
+                    paint: {
+                        'raster-windy-gradient': layerCof.gradient,
+                        'raster-windy-render-mode': layerCof.render || '',
+                    }
+                }, 'wms-test-layer-map')
+            });
+        } else {
+            selectModel.refTime = modelMinifest[selectModel.name].refTime;
+            selectModel.now = formatDate(new Date())
+            map.addLayer({
+                id,
+                type: 'raster-windy',
+                source: id,
+                paint: {
+                    'raster-windy-gradient': layerCof.gradient,
+                    'raster-windy-render-mode': layerCof.render || '',
+                }
+            }, 'wms-test-layer-map')
+        }
+    }
+
+    layersSelect.addEventListener('change', e => {
+        if (lastLayer) {
+            map.setLayoutProperty(lastLayer, 'visibility', 'none');
+        }
+        setLayer(layersSelect.value);
+        lastLayer = layersSelect.value;
+    });
+
+    terrain.addEventListener('change', () => {
+        if (terrain.value) {
+            map.setTerrain({
+                source: terrain.value
+            });
+        } else {
+            map.setTerrain(undefined);
+        }
+    });
+
+    projectionInput.addEventListener('change', (e) => {
+        map.setProjection(e.target.value);
+    });
+
+
+    map.on('load', () => {
+        map.addSource('wms-test-source-map', {
+            'type': 'raster',
+            'tiles': [
+                'https://tiles.windy.com/tiles/v10.0/darkmap-retina/{z}/{x}/{y}.png'
+            ],
+            maxzoom: 11,
+            'tileSize': 256,
+        });
+        map.addLayer({
+            id: 'wms-test-layer-map',
+            type: 'raster',
+            source: 'wms-test-source-map',
+            maxzoom: 10
+        });
+
+        layerConfig.forEach(layer => {
+            layersSelect.innerHTML += `<option value="${layer.id}">${layer.name}</option>`;
+            map.addSource(layer.id, {
+                type: 'raster-windy',
+                tileSize: 256,
+                maxzoom: 3,
+                minzoom: 2,
+                tiles: [layer.templateUrl],
+                isSea: !!layer.sea
+            });
+        });
+
+        setLayer('wind');
+        lastLayer = 'wind';
+    });
+
+    map.on('click',e=>{
+        const data = map.queryRasterWindyColor(e.lngLat,lastLayer)
+        // const data = map.queryCloudColor({lng: 94.59228515625001, lat: 30.240086360983426},lastLayer);
+        console.log(data)
+        if(!data){
+            console.log('无数据')
+            return
+        }
+        console.log(data)
+        const f = format[lastLayer]
+        if(!f){
+            return;
+        }
+        const d = f.convert(data)
+        console.log(d)
+    })
+
+    const format={
+        wind:{
+            convert(e){
+                const o = {
+                    wind: Math.sqrt(e.r* e.r + e.g  * e.g),
+                    dir: 10 * Math.floor(18 + 18 * Math.atan2(e.r, e.g) / Math.PI)
+                }
+                const dirMap=["北", "东北", "东", "东南", "南", "西南", "西", "西北", "北"]
+                const t = Math.floor((+o.dir + 22.5) / 45);
+                return {
+                    speed:Math.round(o.wind)+'m/s',
+                    dir:dirMap[t]
+                }
+            }
+        },
+        gust:{
+            convert(e){
+                return Math.round(e.r)+'m/s'
+            }
+        },
+
+        gustMax:{
+            convert(e){
+                return Math.round(e.r)+'m/s'
+            }
+        },
+
+        rainlogptype2: {
+            convert(e) {
+                return Math.round(e.b) + 'm/s'
+            }
+        },
+
+
+
+        temp:{
+            convert(e){
+                return `${Math.round(e.r - 273.15)}°C`
+            }
+        },
+        dewpoint:{
+            convert(e){
+                return `${Math.round(e.r - 273.15)}°C`
+            }
+        },
+        deg0:{
+            convert(e){
+                return `${Math.round(e.r)}m`
+            }
+        },
+        rh:{
+            convert(e){
+                return `${Math.round(e.r)}%`
+            }
+        },
+
+
+    }
+
+    function createImageFromTexture(gl, texture) {
+        const {width, height} = texture;
+        // Create a framebuffer backed by the texture
+        const framebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+
+        // Read the contents of the framebuffer
+        const data = new Uint8Array(width * height * 4);
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+        gl.deleteFramebuffer(framebuffer);
+
+        // Create a 2D canvas to store the result
+        // eslint-disable-next-line no-undef
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+
+        // Copy the pixels to a 2D canvas
+        const imageData = context.createImageData(width, height);
+        imageData.data.set(data);
+        context.putImageData(imageData, 0, 0);
+        return canvas.toDataURL();
+    }
+
+</script>
+</html>

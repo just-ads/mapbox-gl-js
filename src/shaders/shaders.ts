@@ -97,6 +97,10 @@ import modelDepthFrag from '../../3d-style/shaders/model_depth.fragment.glsl';
 import preludeShadowVert from '../../3d-style/shaders/_prelude_shadow.vertex.glsl';
 import preludeShadowFrag from '../../3d-style/shaders/_prelude_shadow.fragment.glsl';
 
+// windy-style related shaders
+import rasterWindyFrag from '../../windy-style/shaders/windy.fragment.glsl';
+import rasterwindyVert from '../../windy-style/shaders/windy.vertex.glsl';
+
 export let preludeTerrain: Record<string, any> = {};
 export let preludeFog: Record<string, any> = {};
 export let preludeShadow: Record<string, any> = {};
@@ -161,6 +165,7 @@ export default {
     rasterParticleDraw: compile(rasterParticleDrawFrag, rasterParticleDrawVert),
     rasterParticleTexture: compile(rasterParticleTextureFrag, rasterParticleTextureVert),
     rasterParticleUpdate: compile(rasterParticleUpdateFrag, rasterParticleUpdateVert),
+    rasterWindy: compile(rasterWindyFrag, rasterwindyVert),
     symbol: compile(symbolFrag, symbolVert),
     terrainRaster: compile(terrainRasterFrag, terrainRasterVert),
     terrainDepth: compile(terrainDepthFrag, terrainDepthVert),

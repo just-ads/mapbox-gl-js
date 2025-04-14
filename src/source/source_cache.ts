@@ -9,6 +9,7 @@ import browser from '../util/browser';
 import {OverscaledTileID} from './tile_id';
 import SourceFeatureState from './source_state';
 import {mercatorXfromLng} from '../geo/mercator_coordinate';
+import {RasterWindyTile} from "../../windy-style/source/raster_windy_tile";
 
 import type {CanonicalTileID} from './tile_id';
 import type Context from '../gl/context';
@@ -108,7 +109,7 @@ class SourceCache extends Evented {
         this._state = new SourceFeatureState();
         this._isRaster =
             this._source.type === 'raster' ||
-            this._source.type === 'raster-dem' || this._source.type === 'raster-array' ||
+            this._source.type === 'raster-dem' || this._source.type === 'raster-array' || this._source.type === 'raster-windy' ||
             // @ts-expect-error - TS2339 - Property '_dataType' does not exist on type 'VideoSource | ImageSource | CanvasSource | CustomSource<ImageBitmap | HTMLCanvasElement | HTMLImageElement | ImageData>'.
             (this._source.type === 'custom' && this._source._dataType === 'raster');
     }
@@ -414,10 +415,12 @@ class SourceCache extends Evented {
     findLoadedParent(tileID: OverscaledTileID, minCoveringZoom: number): Tile | null | undefined {
         if (tileID.key in this._loadedParentTiles) {
             const parent = this._loadedParentTiles[tileID.key];
-            if (parent && parent.tileID.overscaledZ >= minCoveringZoom) {
-                return parent;
-            } else {
-                return null;
+            if (parent) {
+                if (parent.tileID.overscaledZ >= minCoveringZoom) {
+                    return parent;
+                } else {
+                    return null;
+                }
             }
         }
         for (let z = tileID.overscaledZ - 1; z >= minCoveringZoom; z--) {
@@ -861,10 +864,13 @@ class SourceCache extends Evented {
             const painter = this.map ? this.map.painter : null;
             const size = this._source.tileSize * tileID.overscaleFactor();
             const isRasterArray = this._source.type === 'raster-array';
+            const isRasterWindy = this._source.type === 'raster-windy';
 
             tile = isRasterArray ?
                 new RasterArrayTile(tileID, size, this.transform.tileZoom, painter, this._isRaster) :
-                new Tile(tileID, size, this.transform.tileZoom, painter, this._isRaster);
+                isRasterWindy ?
+                    new RasterWindyTile(tileID, size, this.transform.tileZoom, painter, this._isRaster) :
+                    new Tile(tileID, size, this.transform.tileZoom, painter, this._isRaster);
 
             this._loadTile(tile, this._tileLoaded.bind(this, tile, tileID.key, tile.state));
         }
@@ -1211,7 +1217,7 @@ function compareTileId(a: OverscaledTileID, b: OverscaledTileID): number {
 }
 
 function isRasterType(type: string): boolean {
-    return type === 'raster' || type === 'image' || type === 'video' || type === 'custom';
+    return type === 'raster' || type === 'image' || type === 'video' || type === 'custom' || type === 'raster-windy';
 }
 
 function tileBoundsX(id: CanonicalTileID, wrap: number): [number, number] {

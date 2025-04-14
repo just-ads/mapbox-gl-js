@@ -9,12 +9,14 @@ import type CanvasSource from '../source/canvas_source';
 import type ModelSource from '../../3d-style/source/model_source';
 import type Tiled3DModelSource from '../../3d-style/source/tiled_3d_model_source';
 import type CustomSource from '../source/custom_source';
+import type RasterWindyTileSource from "../../windy-style/source/raster_windy_tile_source";
 
 export type Source =
   | VectorTileSource
   | RasterTileSource
   | RasterDemTileSource
   | RasterArrayTileSource
+  | RasterWindyTileSource
   | GeoJSONSource
   | VideoSource
   | ImageSource
@@ -28,6 +30,7 @@ export type {
     RasterTileSource,
     RasterDemTileSource,
     RasterArrayTileSource,
+    RasterWindyTileSource,
     GeoJSONSource,
     VideoSource,
     ImageSource,

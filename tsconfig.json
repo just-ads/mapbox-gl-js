@@ -32,6 +32,7 @@
   },
   "include": [
     "./src/**/*",
+    "./windy-style/**/*",
     "./test/unit/**/*",
     "./test/usvg/**/*",
     "./test/util/**/*",

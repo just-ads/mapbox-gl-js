@@ -55,7 +55,7 @@ export const plugins = ({mode, minified, production, test, bench, keepClassNames
             'process.env.UPDATE': JSON.stringify(process.env.UPDATE)
         }
     }) : false,
-    glsl(['./src/shaders/*.glsl', './3d-style/shaders/*.glsl'], production),
+    glsl(['./src/shaders/*.glsl', './3d-style/shaders/*.glsl', './windy-style/shaders/*.glsl'], production),
     minified ? terser({
         ecma: 2020,
         module: true,

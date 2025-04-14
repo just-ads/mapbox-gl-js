@@ -20,7 +20,7 @@ import type ResolvedImage from '../../style-spec/expression/types/resolved_image
 import type {StylePropertySpecification} from '../../style-spec/style-spec';
 
 export type LayoutProps = {
-    "symbol-placement": DataConstantProperty<"point" | "line" | "line-center" | "vertex" | "first-vertex" | "last-vertex" | "first-last-vertex" | "middle-vertex" | "except-first-vertex" | "except-last-vertex">;
+    "symbol-placement": DataConstantProperty<"point" | "line" | "line-center" | "vertex" | "first-vertex" | "except-first-vertex" | "last-vertex" | "except-last-vertex" | "first-last-vertex" | "middle-vertex">;
     "symbol-spacing": DataConstantProperty<number>;
     "symbol-avoid-edges": DataConstantProperty<boolean>;
     "symbol-sort-key": DataDrivenProperty<number>;
@@ -54,7 +54,7 @@ export type LayoutProps = {
     "text-justify": DataDrivenProperty<"auto" | "left" | "center" | "right">;
     "text-radial-offset": DataDrivenProperty<number>;
     "text-variable-anchor": DataConstantProperty<Array<"center" | "left" | "right" | "top" | "bottom" | "top-left" | "top-right" | "bottom-left" | "bottom-right">>;
-    "text-anchor": DataDrivenProperty<"center" | "left" | "right" | "top" | "bottom" | "top-left" | "top-right" | "bottom-left" | "bottom-right">;
+    "text-anchor": DataDrivenProperty<"center" | "left" | "right" | "top" | "bottom" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "image-top" | "image-bottom" | "image-right" | "image-left">;
     "text-max-angle": DataConstantProperty<number>;
     "text-writing-mode": DataConstantProperty<Array<"horizontal" | "vertical">>;
     "text-rotate": DataDrivenProperty<number>;

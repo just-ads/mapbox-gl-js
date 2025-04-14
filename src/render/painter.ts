@@ -29,6 +29,7 @@ import fillExtrusion from './draw_fill_extrusion';
 import hillshade from './draw_hillshade';
 import raster, {prepare as prepareRaster} from './draw_raster';
 import rasterParticle, {prepare as prepareRasterParticle} from './draw_raster_particle';
+import rasterWindy from '../../windy-style/render/draw_raster_windy';
 import background from './draw_background';
 import debug, {drawDebugPadding, drawDebugQueryGeometry} from './draw_debug';
 import custom from './draw_custom';
@@ -128,6 +129,7 @@ const draw = {
     hillshade,
     raster,
     'raster-particle': rasterParticle,
+    'raster-windy': rasterWindy,
     background,
     sky,
     debug,
@@ -278,12 +280,11 @@ class Painter {
             forceEnablePrecipitation: false,
             showTerrainProxyTiles: false,
             fpsWindow: 30,
-            continousRedraw:false,
-            enabledLayers: {
-            }
+            continousRedraw: false,
+            enabledLayers: {}
         };
 
-        const layerTypes = ["fill", "line", "symbol", "circle", "heatmap", "fill-extrusion", "raster", "raster-particle", "hillshade", "model", "background", "sky"];
+        const layerTypes = ["fill", "line", "symbol", "circle", "heatmap", "fill-extrusion", "raster", "raster-particle", "raster-windy", "hillshade", "model", "background", "sky"];
 
         for (const layerType of layerTypes) {
             this._debugParams.enabledLayers[layerType] = true;
@@ -297,17 +298,17 @@ class Painter {
 
         tp.registerParameter(this._debugParams, ["FPS"], "fpsWindow", {min: 1, max: 100, step: 1});
         tp.registerBinding(this._debugParams, ["FPS"], 'continousRedraw', {
-            readonly:true,
+            readonly: true,
             label: "continuous redraw"
         });
         tp.registerBinding(this, ["FPS"], '_averageFPS', {
-            readonly:true,
+            readonly: true,
             label: "value"
         });
         tp.registerBinding(this, ["FPS"], '_averageFPS', {
-            readonly:true,
+            readonly: true,
             label: "graph",
-            view:'graph',
+            view: 'graph',
             min: 0,
             max: 200
         });
@@ -583,11 +584,11 @@ class Painter {
 
             // @ts-expect-error - TS2554 - Expected 12-16 arguments, but got 11.
             program.draw(this, gl.TRIANGLES, DepthMode.disabled,
-            // Tests will always pass, and ref value will be written to stencil buffer.
-            new StencilMode({func: gl.ALWAYS, mask: 0}, id, 0xFF, gl.KEEP, gl.KEEP, gl.REPLACE),
-            ColorMode.disabled, CullFaceMode.disabled, clippingMaskUniformValues(tileID.projMatrix),
-            '$clipping', tileBoundsBuffer,
-            tileBoundsIndexBuffer, tileBoundsSegments);
+                // Tests will always pass, and ref value will be written to stencil buffer.
+                new StencilMode({func: gl.ALWAYS, mask: 0}, id, 0xFF, gl.KEEP, gl.KEEP, gl.REPLACE),
+                ColorMode.disabled, CullFaceMode.disabled, clippingMaskUniformValues(tileID.projMatrix),
+                '$clipping', tileBoundsBuffer,
+                tileBoundsIndexBuffer, tileBoundsSegments);
         }
     }
 
@@ -606,7 +607,10 @@ class Painter {
     stencilModeForClipping(tileID: OverscaledTileID): Readonly<StencilMode> {
         if (this.terrain) return this.terrain.stencilModeForRTTOverlap(tileID);
         const gl = this.context.gl;
-        return new StencilMode({func: gl.EQUAL, mask: 0xFF}, this._tileClippingMaskIDs[tileID.key], 0x00, gl.KEEP, gl.KEEP, gl.REPLACE);
+        return new StencilMode({
+            func: gl.EQUAL,
+            mask: 0xFF
+        }, this._tileClippingMaskIDs[tileID.key], 0x00, gl.KEEP, gl.KEEP, gl.REPLACE);
     }
 
     /*
@@ -633,7 +637,10 @@ class Painter {
             }
             const zToStencilMode: Record<string, any> = {};
             for (let i = 0; i < stencilValues; i++) {
-                zToStencilMode[i + minTileZ] = new StencilMode({func: gl.GEQUAL, mask: 0xFF}, i + this.nextStencilID, 0xFF, gl.KEEP, gl.KEEP, gl.REPLACE);
+                zToStencilMode[i + minTileZ] = new StencilMode({
+                    func: gl.GEQUAL,
+                    mask: 0xFF
+                }, i + this.nextStencilID, 0xFF, gl.KEEP, gl.KEEP, gl.REPLACE);
             }
             this.nextStencilID += stencilValues;
             return [zToStencilMode, coords];
@@ -713,7 +720,11 @@ class Painter {
             if (depthWidth !== 0 && depthHeight !== 0) {
                 this.depthFBO = new Framebuffer(this.context, depthWidth, depthHeight, false, 'texture');
 
-                this.depthTexture = new Texture(this.context, {width: depthWidth, height: depthHeight, data: null}, gl.DEPTH24_STENCIL8);
+                this.depthTexture = new Texture(this.context, {
+                    width: depthWidth,
+                    height: depthHeight,
+                    data: null
+                }, gl.DEPTH24_STENCIL8);
                 this.depthFBO.depthAttachment.set(this.depthTexture.texture);
             }
         }
@@ -737,7 +748,9 @@ class Painter {
             this._fpsHistory.splice(0, this._fpsHistory.length - this._debugParams.fpsWindow);
         }
 
-        this._averageFPS = Math.round(this._fpsHistory.reduce((accum: number, current: number) => { return accum + current / this._fpsHistory.length; }, 0));
+        this._averageFPS = Math.round(this._fpsHistory.reduce((accum: number, current: number) => {
+            return accum + current / this._fpsHistory.length;
+        }, 0));
     }
 
     render(style: Style, options: PainterOptions) {
@@ -746,7 +759,9 @@ class Painter {
         this._dt = curTime - this._timeStamp;
         this._timeStamp = curTime;
 
-        Debug.run(() => { this.updateAverageFPS(); });
+        Debug.run(() => {
+            this.updateAverageFPS();
+        });
 
         // Update debug cache, i.e. clear all unused buffers
         this._wireframeDebugCache.update(this.frameCounter);
@@ -1384,7 +1399,7 @@ class Painter {
 
     renderLayer(painter: Painter, sourceCache: SourceCache | undefined, layer: StyleLayer, coords?: Array<OverscaledTileID>) {
         if (layer.isHidden(this.transform.zoom)) return;
-        if (layer.type !== 'background' && layer.type !== 'sky' && layer.type !== 'custom' && layer.type !== 'model' && layer.type !== 'raster' && layer.type !== 'raster-particle' && !(coords && coords.length)) return;
+        if (layer.type !== 'background' && layer.type !== 'sky' && layer.type !== 'custom' && layer.type !== 'model' && layer.type !== 'raster' && layer.type !== 'raster-particle' && layer.type !== 'raster-windy' && !(coords && coords.length)) return;
 
         this.id = layer.id;
 
@@ -1770,7 +1785,7 @@ class Painter {
 
     getBackgroundTiles(): {
         [key: number]: Tile;
-        } {
+    } {
         const oldTiles = this._backgroundTiles;
         const newTiles = this._backgroundTiles = {};
 

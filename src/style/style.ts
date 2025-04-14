@@ -2960,9 +2960,10 @@ class Style extends Evented<MapEvents> {
         const sourceCache = this.getLayerSourceCache(layer);
         const fqid = makeFQID(layer.source, layer.scope);
         const sourceCacheUpdates = this._changes.getUpdatedSourceCaches();
+        const type = sourceCache && sourceCache.getSource().type;
         if (layer.source && !sourceCacheUpdates[fqid] &&
             // Skip for raster layers (https://github.com/mapbox/mapbox-gl-js/issues/7865)
-            sourceCache && sourceCache.getSource().type !== 'raster') {
+            type !== 'raster' && type !== 'raster-windy') {
             this._changes.updateSourceCache(fqid, 'reload');
             sourceCache.pause();
         }
