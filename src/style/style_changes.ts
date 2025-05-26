@@ -1,4 +1,7 @@
+import {ImageId} from '../style-spec/expression/types/image_id';
+
 import type StyleLayer from './style_layer';
+import type {StringifiedImageId} from '../style-spec/expression/types/image_id';
 
 /**
  * Class for tracking style changes by scope, shared between all style instances.
@@ -14,7 +17,9 @@ class StyleChanges {
         };
     };
     _updatedPaintProps: Set<string>;
-    _updatedImages: Set<string>;
+    _updatedImages: {
+        [_: string]: Set<StringifiedImageId>;
+    };
     _updatedSourceCaches: {
         [_: string]: 'clear' | 'reload';
     };
@@ -28,7 +33,7 @@ class StyleChanges {
         this._updatedSourceCaches = {};
         this._updatedPaintProps = new Set();
 
-        this._updatedImages = new Set();
+        this._updatedImages = {};
     }
 
     isDirty(): boolean {
@@ -121,6 +126,7 @@ class StyleChanges {
             removedIds?: Array<string>;
         };
         } {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const updatesByScope: Record<string, any> = {};
 
         for (const scope in this._updatedLayers) {
@@ -149,21 +155,24 @@ class StyleChanges {
         this.setDirty();
     }
 
-    getUpdatedImages(): Array<string> {
-        return Array.from(this._updatedImages.values());
+    getUpdatedImages(scope: string): StringifiedImageId[] {
+        return this._updatedImages[scope] ? Array.from(this._updatedImages[scope].values()) : [];
     }
 
     /**
      * Mark an image as having changes.
-     * @param {string} id
+     * @param {ImageId} id
      */
-    updateImage(id: string) {
-        this._updatedImages.add(id);
+    updateImage(id: ImageId, scope: string) {
+        this._updatedImages[scope] = this._updatedImages[scope] || new Set();
+        this._updatedImages[scope].add(ImageId.toString(id));
         this.setDirty();
     }
 
-    resetUpdatedImages() {
-        this._updatedImages.clear();
+    resetUpdatedImages(scope: string) {
+        if (this._updatedImages[scope]) {
+            this._updatedImages[scope].clear();
+        }
     }
 
     /**
@@ -178,7 +187,7 @@ class StyleChanges {
         this._updatedSourceCaches = {};
         this._updatedPaintProps.clear();
 
-        this._updatedImages.clear();
+        this._updatedImages = {};
     }
 }
 

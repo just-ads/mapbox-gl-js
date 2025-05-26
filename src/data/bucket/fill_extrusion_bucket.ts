@@ -26,7 +26,7 @@ import EvaluationParameters from '../../style/evaluation_parameters';
 import Point from '@mapbox/point-geometry';
 import {number as interpolate} from '../../style-spec/util/interpolate';
 import {lngFromMercatorX, latFromMercatorY, mercatorYfromLat, tileToMeter} from '../../geo/mercator_coordinate';
-import {subdividePolygons} from '../../util/polygon_clipping';
+import {gridSubdivision} from '../../util/polygon_clipping';
 import {regionsEquals, footprintTrianglesIntersect} from '../../../3d-style/source/replacement_source';
 import {clamp, warnOnce} from '../../util/util';
 import {earthRadius} from '../../geo/lng_lat';
@@ -60,6 +60,7 @@ import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {TileFootprint} from '../../../3d-style/util/conflation';
 import type {WallGeometry} from '../../geo/line_geometry';
 import type {TypedStyleLayer} from '../../style/style_layer/typed_style_layer';
+import type {ImageId} from '../../style-spec/expression/types/image_id';
 
 export const fillExtrusionDefaultDataDrivenProperties: Array<string> = [
     'fill-extrusion-base',
@@ -405,6 +406,7 @@ export class GroundEffect {
         this.regionSegments[4] = new SegmentVector();
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     getDefaultSegment(): any {
         return this.regionSegments[4];
     }
@@ -517,6 +519,7 @@ export class GroundEffect {
                         segmentVector = this.regionSegments[k] = new SegmentVector();
                     }
 
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const nSegment: any = {
                         vertexOffset: segment.vertexOffset,
                         primitiveOffset: segment.primitiveOffset + regionTriCountOffset,
@@ -537,13 +540,13 @@ export class GroundEffect {
         }
 
         // Free up memory as we no longer need these.
-        this._segmentToGroundQuads = (null as any);
-        this._segmentToRegionTriCounts = (null as any);
+        this._segmentToGroundQuads = null;
+        this._segmentToRegionTriCounts = null;
         this._segments.destroy();
-        this._segments = (null as any);
+        this._segments = null;
     }
 
-    addPaintPropertiesData(feature: Feature, index: number, imagePositions: SpritePositions, availableImages: Array<string>, canonical: CanonicalTileID, brightness?: number | null) {
+    addPaintPropertiesData(feature: Feature, index: number, imagePositions: SpritePositions, availableImages: ImageId[], canonical: CanonicalTileID, brightness?: number | null) {
         if (!this.hasData()) return;
         this.programConfigurations.populatePaintArrays(this.vertexArray.length, feature, index, imagePositions, availableImages, canonical, brightness);
     }
@@ -559,7 +562,8 @@ export class GroundEffect {
         this.programConfigurations.upload(context);
     }
 
-    update(states: FeatureStates, vtLayer: VectorTileLayer, layers: any, availableImages: Array<string>, imagePositions: SpritePositions, isBrightnessChanged: boolean, brightness?: number | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    update(states: FeatureStates, vtLayer: VectorTileLayer, layers: any, availableImages: ImageId[], imagePositions: SpritePositions, isBrightnessChanged: boolean, brightness?: number | null) {
         if (!this.hasData()) return;
         this.programConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness);
     }
@@ -782,7 +786,7 @@ class FillExtrusionBucket implements Bucket {
         this.polygonSegments.length = 0;
     }
 
-    addFeatures(options: PopulateParameters, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: Array<string>, tileTransform: TileTransform, brightness?: number | null) {
+    addFeatures(options: PopulateParameters, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: ImageId[], tileTransform: TileTransform, brightness?: number | null) {
         for (const feature of this.features) {
             const featureIsPolygon = vectorTileFeatureTypes[feature.type] === 'Polygon';
             const {geometry} = feature;
@@ -802,7 +806,7 @@ class FillExtrusionBucket implements Bucket {
         }
     }
 
-    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: Array<string>, imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
+    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: ImageId[], imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
         this.programConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness);
         this.groundEffect.update(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness);
     }
@@ -861,7 +865,7 @@ class FillExtrusionBucket implements Bucket {
         this.segments.destroy();
     }
 
-    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: Array<string>, tileTransform: TileTransform, brightness?: number | null) {
+    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: ImageId[], tileTransform: TileTransform, brightness?: number | null) {
 
         const floodLightRadius = this.layers[0].paint.get('fill-extrusion-flood-light-ground-radius').evaluate(feature, {});
         const maxRadius = floodLightRadius / this.tileToMeter;
@@ -1037,6 +1041,7 @@ class FillExtrusionBucket implements Bucket {
                         flattened.push(p1.x, p1.y);
 
                         if (isGlobe) {
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             const array: any = this.layoutVertexExtArray;
                             const projectedP = projection.projectTilePoint(q.x, q.y, canonical);
                             const n = projection.upVector(canonical, q.x, q.y);
@@ -1222,6 +1227,7 @@ class FillExtrusionBucket implements Bucket {
                     }
 
                     if (isGlobe) {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const array: any = this.layoutVertexExtArray;
 
                         const projectedP0 = projection.projectTilePoint(p0.x, p0.y, canonical);
@@ -1269,8 +1275,8 @@ class FillExtrusionBucket implements Bucket {
             assert(borderCentroidData.centroidDataIndex === this.centroidData.length - 1);
             this.featuresOnBorder.push(borderCentroidData);
             const borderIndex = this.featuresOnBorder.length - 1;
-            for (let i = 0; i < (borderCentroidData.borders as any).length; i++) {
-                if ((borderCentroidData.borders as any)[i][0] !== Number.MAX_VALUE) {
+            for (let i = 0; i < borderCentroidData.borders.length; i++) {
+                if (borderCentroidData.borders[i][0] !== Number.MAX_VALUE) {
                     this.borderFeatureIndices[i].push(borderIndex);
                 }
             }
@@ -1285,7 +1291,7 @@ class FillExtrusionBucket implements Bucket {
     sortBorders() {
         for (let i = 0; i < this.borderFeatureIndices.length; i++) {
             const borders = this.borderFeatureIndices[i];
-            borders.sort((a, b) => (this.featuresOnBorder[a].borders as any)[i][0] - (this.featuresOnBorder[b].borders as any)[i][0]);
+            borders.sort((a, b) => this.featuresOnBorder[a].borders[i][0] - this.featuresOnBorder[b].borders[i][0]);
         }
     }
 
@@ -1799,7 +1805,7 @@ export function resampleFillExtrusionPolygonsForGlobe(polygons: Point[][][], til
         }
     };
 
-    return subdividePolygons(polygons, tileBounds, cellCountOnXAxis, cellCountOnYAxis, 1.0, splitFn);
+    return gridSubdivision(polygons, tileBounds, cellCountOnXAxis, cellCountOnYAxis, 1.0, splitFn);
 }
 
 function transformFootprintVertices(vertices: PosArray, offset: number, count: number, footprintId: CanonicalTileID, centroidId: CanonicalTileID, out: Array<Point>) {

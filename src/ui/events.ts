@@ -4,9 +4,16 @@ import Point from '@mapbox/point-geometry';
 import {extend} from '../util/util';
 
 import type Tile from '../source/tile';
-import type {Map} from './map';
 import type LngLat from '../geo/lng_lat';
+import type BoxZoomHandler from './handler/box_zoom';
+import type DragPanHandler from './handler/shim/drag_pan';
+import type DragRotateHandler from './handler/shim/drag_rotate';
+import type ScrollZoomHandler from './handler/scroll_zoom';
+import type DoubleClickZoomHandler from './handler/shim/dblclick_zoom';
+import type TouchZoomRotateHandler from './handler/shim/touch_zoom_rotate';
+import type {Map} from './map';
 import type {GeoJSONFeature} from '../util/vectortile_to_geojson';
+import type {OverscaledTileID} from '../source/tile_id';
 import type {EventData, EventOf} from '../util/evented';
 import type {SourceSpecification} from '../style-spec/types';
 
@@ -422,6 +429,7 @@ export type MapSourceDataEvent = {
     sourceDataType?: 'metadata' | 'content' | 'visibility' | 'error';
     tile?: Tile;
     coord?: Tile['tileID'];
+    resourceTiming?: PerformanceResourceTiming[]
 };
 
 export type MapSourceTileLoadFailEvent = {
@@ -445,7 +453,7 @@ export type MapSourceTileLoadFailEvent = {
  * that internal data has been received or changed. Possible values are `metadata`, `content` and `visibility`, and `error`.
  * @property {Object} [tile] The tile being loaded or changed, if the event has a `dataType` of `source` and
  * the event is related to _loading of a tile.
- * @property {Coordinate} [coord] The coordinate of the tile if the event has a `dataType` of `source` and
+ * @property {OverscaledTileID} [coord] The coordinate of the tile if the event has a `dataType` of `source` and
  * the event is related to _loading of a tile.
  * @example
  * // Example of a MapDataEvent of type "sourcedata"
@@ -474,11 +482,7 @@ export type MapDataEvent = MapStyleDataEvent | MapSourceDataEvent
 export type MapContextEvent = MapEventOf<'webglcontextlost' | 'webglcontextrestored'>
 
 export type MapEvents = {
-    /** @section {Interaction}
-     * @event
-     * @instance
-     * @memberof Map
-     */
+    /** @section Interaction */
 
     /**
      * Fired when a pointing device (usually a mouse) is pressed within the map.
@@ -853,10 +857,7 @@ export type MapEvents = {
      */
     'touchcancel': MapTouchEvent;
 
-    /** @section {Movement}
-     * @event
-     * @instance
-     * @memberof Map */
+    /** @section Movement */
 
     /**
      * Fired just before the map begins a transition from one view to another, as the result of either user interaction or methods such as {@link Map#jumpTo}.
@@ -1215,10 +1216,7 @@ export type MapEvents = {
      */
     'resize': object | void;
 
-    /** @section {Lifecycle}
-     * @event
-     * @instance
-     * @memberof Map */
+    /** @section Lifecycle */
 
     /**
      * Fired immediately after all necessary resources have been downloaded
@@ -1377,10 +1375,7 @@ export type MapEvents = {
      */
     'webglcontextrestored': {originalEvent?: WebGLContextEvent};
 
-    /** @section {Data _loading}
-     * @event
-     * @instance
-     * @memberof Map */
+    /** @section Data loading */
 
     /**
      * Fired when any map data loads or changes. See {@link MapDataEvent}
@@ -1566,6 +1561,7 @@ export type MapEvents = {
      */
     'style.load': void;
 
+    /* eslint-disable jsdoc/valid-types */
     /**
      * Fired immediately after imported style resources have been downloaded
      * and the first visually complete rendering of the base style extended with the imported style has occurred.
@@ -1583,6 +1579,7 @@ export type MapEvents = {
      * });
      */
     'style.import.load': void;
+    /* eslint-enable jsdoc/valid-types */
 
     /**
      * Fired after speed index calculation is completed if `speedIndexTiming` option has been set to `true`.

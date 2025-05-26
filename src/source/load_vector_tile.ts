@@ -5,12 +5,14 @@ import {getArrayBuffer} from '../util/ajax';
 import type {DedupedRequest} from './deduped_request';
 
 import type {Callback} from '../types/callback';
-import type {RequestedTileParameters} from './worker_source';
+import type {WorkerSourceVectorTileRequest} from './worker_source';
 
 export type LoadVectorTileResult = {
     rawData: ArrayBuffer;
     vectorTile?: VectorTile;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expires?: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     cacheControl?: any;
     resourceTiming?: Array<PerformanceResourceTiming>;
 };
@@ -24,13 +26,13 @@ export type LoadVectorTileResult = {
 export type LoadVectorDataCallback = Callback<LoadVectorTileResult | null | undefined>;
 
 export type AbortVectorData = () => void;
-export type LoadVectorData = (params: RequestedTileParameters, callback: LoadVectorDataCallback) => AbortVectorData | undefined;
+export type LoadVectorData = (params: WorkerSourceVectorTileRequest, callback: LoadVectorDataCallback) => AbortVectorData | undefined;
 
 /**
  * @private
  */
 export function loadVectorTile(
-    params: RequestedTileParameters & {vtOptions: any},
+    params: WorkerSourceVectorTileRequest & {vtOptions: any},
     callback: LoadVectorDataCallback,
     skipParse?: boolean,
 ): () => void {

@@ -140,6 +140,18 @@
         }
       }
     },
+    "iconsets": {
+      "experimental": true,
+      "type": "iconsets",
+      "doc": "A collection of icon sets",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.11.0",
+          "android": "11.11.0",
+          "ios": "11.11.0"
+        }
+      }
+    },
     "schema": {
       "type": "schema",
       "doc": "Definition of the schema for configuration options.",
@@ -729,6 +741,51 @@
       }
     }
   },
+  "iconsets": {
+    "*": {
+      "type": "iconset",
+      "doc": "Specification of an icon set. For sprite icon set, a URL must be provided. For `raster-array` source icon set, a source name must be provided."
+    }
+  },
+  "iconset": [
+    "iconset_sprite",
+    "iconset_source"
+  ],
+  "iconset_sprite": {
+    "type": {
+      "required": true,
+      "type": "enum",
+      "values": {
+        "sprite": {
+          "doc": "A sprite icon set."
+        }
+      },
+      "doc": "The type of the icon set."
+    },
+    "url": {
+      "required": true,
+      "type": "string",
+      "doc": "A base URL for retrieving the icon set and metadata. The extension `.pbf` will be automatically appended. The URL must be absolute, containing the [scheme, authority and path components](https://en.wikipedia.org/wiki/URL#Syntax).",
+      "example": "mapbox://sprites/mapbox/bright"
+    }
+  },
+  "iconset_source": {
+    "type": {
+      "required": true,
+      "type": "enum",
+      "values": {
+        "source": {
+          "doc": "A source icon set."
+        }
+      },
+      "doc": "The type of the icon set."
+    },
+    "source": {
+      "required": true,
+      "type": "string",
+      "doc": "Name of a source of `raster-array` type to be used for the icon set."
+    }
+  },
   "sources": {
     "*": {
       "type": "source",
@@ -776,6 +833,16 @@
         85.051129
       ],
       "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`. When this property is included in a source, no tiles outside of the given bounds are requested by Mapbox GL."
+    },
+    "extra_bounds": {
+      "type": "array",
+      "value": {
+        "type": "array",
+        "value": "number",
+        "length": 4,
+        "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`."
+      },
+      "doc": "An array of additional discrete geographic regions where tiles are available. When used alongside the `bounds` property, these regions act as an additional filter - Mapbox GL will only request tiles that are both within the `bounds` and any of the regions defined in `extra_bounds`. When used independently (without `bounds`), Mapbox GL will request tiles that fall within any of the regions in `extra_bounds`. This allows for more fine-grained control over tile requests, particularly when dealing with sparse data coverage."
     },
     "scheme": {
       "type": "enum",
@@ -855,6 +922,16 @@
         85.051129
       ],
       "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`. When this property is included in a source, no tiles outside of the given bounds are requested by Mapbox GL."
+    },
+    "extra_bounds": {
+      "type": "array",
+      "value": {
+        "type": "array",
+        "value": "number",
+        "length": 4,
+        "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`."
+      },
+      "doc": "An array of additional discrete geographic regions where tiles are available. When used alongside the `bounds` property, these regions act as an additional filter - Mapbox GL will only request tiles that are both within the `bounds` and any of the regions defined in `extra_bounds`. When used independently (without `bounds`), Mapbox GL will request tiles that fall within any of the regions in `extra_bounds`. This allows for more fine-grained control over tile requests, particularly when dealing with sparse data coverage."
     },
     "minzoom": {
       "type": "number",
@@ -937,6 +1014,16 @@
       ],
       "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`. When this property is included in a source, no tiles outside of the given bounds are requested by Mapbox GL."
     },
+    "extra_bounds": {
+      "type": "array",
+      "value": {
+        "type": "array",
+        "value": "number",
+        "length": 4,
+        "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`."
+      },
+      "doc": "An array of additional discrete geographic regions where tiles are available. When used alongside the `bounds` property, these regions act as an additional filter - Mapbox GL will only request tiles that are both within the `bounds` and any of the regions defined in `extra_bounds`. When used independently (without `bounds`), Mapbox GL will request tiles that fall within any of the regions in `extra_bounds`. This allows for more fine-grained control over tile requests, particularly when dealing with sparse data coverage."
+    },
     "minzoom": {
       "type": "number",
       "default": 0,
@@ -1018,6 +1105,16 @@
         85.051129
       ],
       "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`. When this property is included in a source, no tiles outside of the given bounds are requested by Mapbox GL."
+    },
+    "extra_bounds": {
+      "type": "array",
+      "value": {
+        "type": "array",
+        "value": "number",
+        "length": 4,
+        "doc": "An array containing the longitude and latitude of the southwest and northeast corners of the source's bounding box in the following order: `[sw.lng, sw.lat, ne.lng, ne.lat]`."
+      },
+      "doc": "An array of additional discrete geographic regions where tiles are available. When used alongside the `bounds` property, these regions act as an additional filter - Mapbox GL will only request tiles that are both within the `bounds` and any of the regions defined in `extra_bounds`. When used independently (without `bounds`), Mapbox GL will request tiles that fall within any of the regions in `extra_bounds`. This allows for more fine-grained control over tile requests, particularly when dealing with sparse data coverage."
     },
     "minzoom": {
       "type": "number",
@@ -1310,6 +1407,13 @@
             }
           }
         },
+        "building": {
+          "doc": "A procedural 3D building.",
+          "sdk-support": {
+          },
+          "experimental": true,
+          "private": true
+        },
         "raster": {
           "doc": "Raster map textures such as satellite imagery.",
           "sdk-support": {
@@ -1451,6 +1555,7 @@
     "layout_circle",
     "layout_heatmap",
     "layout_fill-extrusion",
+    "layout_building",
     "layout_symbol",
     "layout_raster",
     "layout_raster-particle",
@@ -1706,6 +1811,32 @@
         "interpolated": false
       },
       "property-type": "data-constant"
+    },
+    "fill-construct-bridge-guard-rail": {
+      "type": "boolean",
+      "doc": "Determines whether bridge guard rails are added for elevated roads.",
+      "default": "true",
+      "transition": false,
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+            "android": "11.11.0",
+            "ios": "11.11.0"
+        },
+        "data-driven styling": {
+          "android": "11.11.0",
+          "ios": "11.11.0"
+        }
+      },
+      "expression": {
+        "interpolated": false,
+        "parameters": [
+          "zoom",
+          "feature"
+        ]
+      },
+      "property-type": "data-driven"
     }
   },
   "layout_circle": {
@@ -1872,6 +2003,115 @@
         "interpolated": false
       },
       "property-type": "constant"
+    }
+  },
+  "layout_building": {
+    "visibility": {
+      "type": "enum",
+      "values": {
+        "visible": {
+          "doc": "The layer is shown."
+        },
+        "none": {
+          "doc": "The layer is not shown."
+        }
+      },
+      "default": "visible",
+      "doc": "Whether this layer is displayed.",
+      "sdk-support": {
+        "basic functionality": {
+        }
+      },
+      "expression": {
+        "interpolated": false
+      },
+      "property-type": "constant"
+    },
+    "building-roof-shape": {
+      "type": "enum",
+      "values": {
+        "flat": {
+          "doc": "Use regular extruded buildings with flat roofs."
+        },
+        "hipped": {
+          "doc": "Use hipped roof for the procedurally generated buildings."
+        },
+        "gabled": {
+          "doc": "Use gabled roof for the procedurally generated buildings."
+        },
+        "parapet": {
+          "doc": "Use parapet roof for the procedurally generated buildings."
+        },
+        "mansard": {
+          "doc": "Use mansard roof for the procedurally generated buildings."
+        },
+        "skillion": {
+          "doc": "Use skillion roof for the procedurally generated buildings."
+        },
+        "pyramidal": {
+          "doc": "Use pyramidal roof for the procedurally generated buildings."
+        }
+      },
+      "default": "flat",
+      "doc": "Roof type to use for the procedural buildings.",
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+        },
+        "data-driven styling": {
+        }
+      },
+      "expression": {
+        "interpolated": false,
+        "parameters": [
+          "feature"
+        ]
+      },
+      "property-type": "data-driven"
+    },
+    "building-height": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "units": "meters",
+      "doc": "The height of the procedural buildings.",
+      "transition": true,
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+        },
+        "data-driven styling": {
+        }
+      },
+      "expression": {
+        "interpolated": false
+      },
+      "property-type": "data-driven"
+    },
+    "building-base": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "units": "meters",
+      "doc": "The height with which to extrude the base of this layer. Must be less than or equal to `building-height`.",
+      "transition": true,
+      "requires": [
+        "building-height"
+      ],
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+        },
+        "data-driven styling": {
+        }
+      },
+      "expression": {
+        "interpolated": false
+      },
+      "property-type": "data-driven"
     }
   },
   "layout_line": {
@@ -3875,6 +4115,17 @@
       "parameters": ["zoom", "feature"]
     }
   },
+  "filter_building": {
+    "type": "boolean",
+    "doc": "Expression which determines whether or not to display a Polygon. Building layer does NOT support dynamic filtering, meaning this expression can NOT use the `[\"pitch\"]` and `[\"distance-from-center\"]` expressions to reference the current state of the view.",
+    "default": false,
+    "transition": false,
+    "property-type": "data-driven",
+    "expression": {
+      "interpolated": false,
+      "parameters": ["zoom", "feature"]
+    }
+  },
   "filter_heatmap": {
     "type": "boolean",
     "doc": "Expression used to determine whether a point is being displayed or not. Heatmap layer does NOT support dynamic filtering, meaning this expression can NOT use the `[\"pitch\"]` and `[\"distance-from-center\"]` expressions to reference the current state of the view.",
@@ -4052,7 +4303,7 @@
         }
       },
       "config": {
-        "doc": "Retrieves the configuration value for the given option.",
+        "doc": "Retrieves the configuration value for the given option. Returns null if the requested option is missing.",
         "group": "Lookup",
         "sdk-support": {
           "basic functionality": {
@@ -4092,6 +4343,17 @@
             "js": "0.41.0",
             "android": "6.0.0",
             "ios": "4.0.0"
+          }
+        }
+      },
+      "at-interpolated": {
+        "doc": "Retrieves an item from an array. If the array contains numeric values and the provided index is non-integer, the expression returns an interpolated value between adjacent items.",
+        "group": "Lookup",
+        "sdk-support": {
+          "basic functionality": {
+            "js": "3.11.0",
+            "android": "11.12.0",
+            "ios": "11.12.0"
           }
         }
       },
@@ -6186,6 +6448,7 @@
     "paint_circle",
     "paint_heatmap",
     "paint_fill-extrusion",
+    "paint_building",
     "paint_symbol",
     "paint_raster",
     "paint_raster-particle",
@@ -6393,6 +6656,30 @@
       },
       "property-type": "data-driven"
     },
+    "fill-pattern-cross-fade": {
+      "type": "number",
+      "property-type": "data-constant",
+      "default": 0.0,
+      "minimum": 0,
+      "maximum": 1,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "measure-light"
+        ]
+      },
+      "requires": [
+        "line-pattern"
+      ],
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.12.0"
+        }
+      },
+      "doc": "Controls the transition progress between the image variants of fill-pattern. Zero means the first variant is used, one is the second, and in between they are blended together.",
+      "transition": true
+    },
     "fill-emissive-strength": {
       "type": "number",
       "default": 0,
@@ -6438,6 +6725,60 @@
         "interpolated": true,
         "parameters": [
           "zoom",
+          "feature"
+        ]
+      },
+      "property-type": "data-driven"
+    },
+    "fill-bridge-guard-rail-color": {
+      "type": "color",
+      "default": "rgba(241, 236, 225, 255)",
+      "doc": "The color of bridge guard rail.",
+      "experimental": true,
+      "private": true,
+      "transition": true,
+      "sdk-support": {
+        "basic functionality": {
+          "android": "11.11.0",
+          "ios": "11.11.0"
+        },
+        "data-driven styling": {
+          "android": "11.11.0",
+          "ios": "11.11.0"
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "measure-light",
+          "feature"
+        ]
+      },
+      "property-type": "data-driven"
+    },
+    "fill-tunnel-structure-color": {
+      "type": "color",
+      "default": "rgba(241, 236, 225, 255)",
+      "doc": "The color of tunnel structures (tunnel entrance and tunnel walls).",
+      "transition": true,
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+          "android": "11.11.0",
+          "ios": "11.11.0"
+        },
+        "data-driven styling": {
+          "android": "11.11.0",
+          "ios": "11.11.0"
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "measure-light",
           "feature"
         ]
       },
@@ -6580,6 +6921,30 @@
         ]
       },
       "property-type": "data-driven"
+    },
+    "fill-extrusion-pattern-cross-fade": {
+      "type": "number",
+      "property-type": "data-constant",
+      "default": 0.0,
+      "minimum": 0,
+      "maximum": 1,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "measure-light"
+        ]
+      },
+      "requires": [
+        "line-pattern"
+      ],
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.12.0"
+        }
+      },
+      "doc": "Controls the transition progress between the image variants of fill-extrusion-pattern. Zero means the first variant is used, one is the second, and in between they are blended together.",
+      "transition": true
     },
     "fill-extrusion-height": {
       "type": "number",
@@ -7120,6 +7485,189 @@
       "property-type": "data-constant"
     }
   },
+  "paint_building": {
+    "building-opacity": {
+      "type": "number",
+      "default": 1,
+      "minimum": 0,
+      "maximum": 1,
+      "doc": "The opacity of the entire procedural buildings layer. This is rendered on a per-layer, not per-feature, basis, and data-driven styling is not available.",
+      "transition": true,
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "property-type": "data-constant"
+    },
+    "building-ambient-occlusion-wall-intensity": {
+      "property-type": "data-constant",
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1,
+      "experimental": true,
+      "private": true,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "transition": true,
+      "doc": "Controls the intensity of shading concave angles between walls and building elements, such as facades and rooftop.",
+      "sdk-support": {
+        "basic functionality": {
+        }
+      }
+    },
+    "building-ambient-occlusion-ground-intensity": {
+      "property-type": "data-constant",
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1,
+      "experimental": true,
+      "private": true,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "transition": true,
+      "doc": "Controls the intensity of shading near ground",
+      "sdk-support": {
+        "basic functionality": {
+        }
+      }
+    },
+    "building-ambient-occlusion-ground-radius": {
+      "property-type": "data-constant",
+      "type": "number",
+      "experimental": true,
+      "private": true,
+      "default": 3.0,
+      "minimum": 0,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "transition": true,
+      "doc": "The extent of the ambient occlusion effect on the ground beneath the procedural buildings in meters.",
+      "sdk-support": {
+        "basic functionality": {
+        }
+      }
+    },
+    "building-ambient-occlusion-ground-attenuation": {
+      "property-type": "data-constant",
+      "type": "number",
+      "experimental": true,
+      "private": true,
+      "default": 0.69,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "doc": "Provides a control to further fine-tune the look of the ambient occlusion on the ground beneath the procedural buildings. Lower values give the effect a more solid look while higher values make it smoother.",
+      "transition": true,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "sdk-support": {
+        "basic functionality": {
+        }
+      }
+    },
+    "building-vertical-scale": {
+      "property-type": "data-constant",
+      "type": "number",
+      "experimental": true,
+      "private": true,
+      "default": 1.0,
+      "minimum": 0.0,
+      "doc": "A global multiplier that can be used to scale base and height of the procedural buildings.",
+      "transition": true,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "sdk-support": {
+        "basic functionality": {
+        }
+      }
+    },
+    "building-cast-shadows": {
+      "type": "boolean",
+      "default": true,
+      "doc": "Enable/Disable shadow casting for this layer",
+      "transition": false,
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+          "basic functionality": {
+        }
+      },
+      "property-type": "data-constant"
+    },
+    "building-color": {
+      "type": "color",
+      "default": "rgba(193, 154, 127, 1)",
+      "doc": "Color buildings. This can be styled using different building parts (e.g. windows, wall, roof, etc.). This won't be used if `building-roof-shape` has a value `flat`.",
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+        },
+        "data-driven styling": {
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "feature",
+          "feature-state"
+        ]
+      },
+      "property-type": "data-driven"
+    },
+    "building-emissive-strength": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "doc": "Controls the intensity of light emitted on the source features.",
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+        },
+        "data-driven styling": {
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "feature",
+          "feature-state",
+          "measure-light"
+        ]
+      },
+      "property-type": "data-driven"
+    }
+  },
   "paint_line": {
     "line-opacity": {
       "type": "number",
@@ -7415,6 +7963,30 @@
         ]
       },
       "property-type": "data-driven"
+    },
+    "line-pattern-cross-fade": {
+      "type": "number",
+      "property-type": "data-constant",
+      "default": 0.0,
+      "minimum": 0,
+      "maximum": 1,
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "measure-light"
+        ]
+      },
+      "requires": [
+        "line-pattern"
+      ],
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.12.0"
+        }
+      },
+      "doc": "Controls the transition progress between the image variants of line-pattern. Zero means the first variant is used, one is the second, and in between they are blended together.",
+      "transition": true
     },
     "line-gradient": {
       "type": "color",
@@ -8470,7 +9042,7 @@
     },
     "icon-image-cross-fade": {
       "type": "number",
-      "property-type": "data-driven",
+      "property-type": "data-constant",
       "default": 0.0,
       "minimum": 0,
       "maximum": 1,
@@ -8478,8 +9050,6 @@
         "interpolated": true,
         "parameters": [
           "zoom",
-          "feature",
-          "feature-state",
           "measure-light"
         ]
       },
@@ -8488,11 +9058,6 @@
       ],
       "sdk-support": {
         "basic functionality": {
-          "js": "3.0.0",
-          "android": "11.0.0",
-          "ios": "11.0.0"
-        },
-        "data-driven styling": {
           "js": "3.0.0",
           "android": "11.0.0",
           "ios": "11.0.0"

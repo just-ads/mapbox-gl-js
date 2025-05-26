@@ -32,6 +32,7 @@ import type {vec3} from 'gl-matrix';
 import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {TileFootprint} from '../../../3d-style/util/conflation';
 import type {TypedStyleLayer} from '../../style/style_layer/typed_style_layer';
+import type {ImageId} from '../../style-spec/expression/types/image_id';
 
 function addCircleVertex(layoutVertexArray: CircleLayoutArray, x: number, y: number, extrudeX: number, extrudeY: number) {
     layoutVertexArray.emplaceBack(
@@ -57,7 +58,7 @@ function addGlobeExtVertex(vertexArray: CircleGlobeExtArray, pos: {
  * vector that is where it points.
  * @private
  */
-class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer> implements Bucket {
+class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleStyleLayer | HeatmapStyleLayer> implements Bucket {
     index: number;
     zoom: number;
     overscaling: number;
@@ -159,7 +160,7 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer> implement
         }
     }
 
-    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: Array<string>, imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
+    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: ImageId[], imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
         this.programConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness);
     }
 
@@ -195,7 +196,7 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer> implement
         }
     }
 
-    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, availableImages: Array<string>, canonical: CanonicalTileID, projection?: Projection | null, brightness?: number | null) {
+    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, availableImages: ImageId[], canonical: CanonicalTileID, projection?: Projection | null, brightness?: number | null) {
         for (const ring of geometry) {
             for (const point of ring) {
                 const x = point.x;
@@ -216,6 +217,7 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer> implement
                 if (projection) {
                     const projectedPoint = projection.projectTilePoint(x, y, canonical);
                     const normal = projection.upVector(canonical, x, y);
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const array: any = this.globeExtVertexArray;
 
                     addGlobeExtVertex(array, projectedPoint, normal);

@@ -230,7 +230,7 @@ export class RequestManager {
 
     canonicalizeTileset(tileJSON: TileJSON, sourceURL?: string): Array<string> {
         const removeAccessToken = sourceURL ? isMapboxURL(sourceURL) : false;
-        const canonical = [];
+        const canonical: string[] = [];
         for (const url of tileJSON.tiles || []) {
             if (isMapboxHTTPURL(url)) {
                 canonical.push(this.canonicalizeTileURL(url, removeAccessToken));
@@ -304,7 +304,7 @@ function formatUrl(obj: UrlObject): string {
 
 const telemEventKey = 'mapbox.eventData';
 
-function parseAccessToken(accessToken?: string | null) {
+function parseAccessToken(accessToken?: string | null): {u?: string} | null {
     if (!accessToken) {
         return null;
     }
@@ -315,9 +315,9 @@ function parseAccessToken(accessToken?: string | null) {
     }
 
     try {
-        const jsonData = JSON.parse(b64DecodeUnicode(parts[1]));
+        const jsonData: {u?: string} = JSON.parse(b64DecodeUnicode(parts[1]));
         return jsonData;
-    } catch (e: any) {
+    } catch (e) {
         return null;
     }
 }
@@ -325,8 +325,10 @@ function parseAccessToken(accessToken?: string | null) {
 type TelemetryEventType = 'appUserTurnstile' | 'map.load' | 'map.auth' | 'gljs.performance' | 'style.load';
 
 class TelemetryEvent {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     eventData: any;
     anonId: string | null | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queue: Array<any>;
     type: TelemetryEventType;
     pendingRequest: Cancelable | null | undefined;
@@ -368,7 +370,7 @@ class TelemetryEvent {
 
                 const uuid = localStorage.getItem(uuidKey);
                 if (uuid) this.anonId = uuid;
-            } catch (e: any) {
+            } catch (e) {
                 warnOnce('Unable to read from LocalStorage');
             }
         }
@@ -385,7 +387,7 @@ class TelemetryEvent {
                 if (Object.keys(this.eventData).length >= 1) {
                     localStorage.setItem(storageKey, JSON.stringify(this.eventData));
                 }
-            } catch (e: any) {
+            } catch (e) {
                 warnOnce('Unable to write to LocalStorage');
             }
         }
@@ -400,14 +402,12 @@ class TelemetryEvent {
     * to the values that should be saved. For this reason, the callback should be invoked prior to the call
     * to TelemetryEvent#saveData
     */
-    postEvent(timestamp: number, additionalPayload: {
-        [_: string]: any;
-    }, callback: EventCallback, customAccessToken?: string | null) {
+    postEvent(timestamp: number, additionalPayload: Record<string, unknown>, callback: EventCallback, customAccessToken?: string | null) {
         if (!config.EVENTS_URL) return;
         const eventsUrlObject: UrlObject = parseUrl(config.EVENTS_URL);
         eventsUrlObject.params.push(`access_token=${customAccessToken || config.ACCESS_TOKEN || ''}`);
 
-        const payload: any = {
+        const payload = {
             event: this.type,
             created: new Date(timestamp).toISOString()
         };
@@ -429,7 +429,7 @@ class TelemetryEvent {
         });
     }
 
-    queueRequest(event: any, customAccessToken?: string | null) {
+    queueRequest(event: unknown, customAccessToken?: string | null) {
         this.queue.push(event);
         this.processRequests(customAccessToken);
     }

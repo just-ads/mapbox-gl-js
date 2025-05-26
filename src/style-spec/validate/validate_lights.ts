@@ -4,6 +4,7 @@ import validate from './validate';
 import {unbundle} from '../util/unbundle_jsonlint';
 
 import type {ValidationOptions} from './validate';
+import type {LightsSpecification} from '../types';
 
 type Options = ValidationOptions & {
     arrayIndex: number;
@@ -14,12 +15,14 @@ export default function validateLights(options: Options): Array<ValidationError>
     let errors = [];
 
     if (!light) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return errors;
     }
 
     const type = getType(light);
     if (type !== 'object') {
         errors = errors.concat([new ValidationError('light-3d', light, `object expected, ${type} found`)]);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return errors;
     }
 
@@ -32,6 +35,7 @@ export default function validateLights(options: Options): Array<ValidationError>
     for (const key of ['type', 'id']) {
         if (!(key in light)) {
             errors = errors.concat([new ValidationError('light-3d', light, `missing property ${key} on light`)]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
             return errors;
         }
     }
@@ -39,9 +43,9 @@ export default function validateLights(options: Options): Array<ValidationError>
     if (light.type && lights) {
         for (let i = 0; i < options.arrayIndex; i++) {
             const lightType = unbundle(light.type);
-            const otherLight = lights[i];
+            // const otherLight = lights[i];
+            const otherLight = lights[i] as LightsSpecification & { id: { __line__: number } };
             if (unbundle(otherLight.type) === lightType) {
-                // @ts-expect-error - TS2339 - Property '__line__' does not exist on type 'string'.
                 errors.push(new ValidationError(key, light.id, `duplicate light type "${light.type}", previously defined at line ${otherLight.id.__line__}`));
             }
         }
@@ -50,6 +54,7 @@ export default function validateLights(options: Options): Array<ValidationError>
     const lightType = `properties_light_${light['type']}`;
     if (!(lightType in styleSpec)) {
         errors = errors.concat([new ValidationError('light-3d', light, `Invalid light type ${light['type']}`)]);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return errors;
     }
 
@@ -61,6 +66,7 @@ export default function validateLights(options: Options): Array<ValidationError>
             const propertiesType = getType(properties);
             if (propertiesType !== 'object') {
                 errors = errors.concat([new ValidationError('properties', properties, `object expected, ${propertiesType} found`)]);
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 return errors;
             }
             for (const propertyKey in properties) {
@@ -84,7 +90,7 @@ export default function validateLights(options: Options): Array<ValidationError>
                 errors = errors.concat(validate({
                     key,
                     value: light[key],
-                    valueSpec: {type:'string'},
+                    valueSpec: {type: 'string'},
                     style,
                     styleSpec
                 }));
@@ -110,5 +116,6 @@ export default function validateLights(options: Options): Array<ValidationError>
         }
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return errors;
 }
