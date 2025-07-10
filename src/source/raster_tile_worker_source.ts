@@ -7,30 +7,13 @@ import {Evented} from "../util/evented";
 
 import type {TileState} from "./tile";
 import type {Callback} from "../types/callback";
-import type {RequestParameters} from "../util/ajax";
 import type {
-    TileParameters,
+    WorkerCoverTilesRequest,
     WorkerCoverTilesResult,
-    WorkerSource
+    WorkerSource, WorkerSourceRasterTileRequest, WorkerSourceTileRequest
 } from "./worker_source";
 import type {Cancelable} from "../types/cancelable";
 import type {LoadRasterTile} from "./load_raster_tile";
-import type {CanonicalTileID} from "./tile_id";
-import type {RasterProjection} from "../style-spec/types";
-
-type Request = {
-    request: RequestParameters,
-    tile: CanonicalTileID,
-    x: number,
-    y: number
-}
-
-type WorkerTileParameters = {
-    tileID: CanonicalTileID,
-    requests: Request[],
-    offset: number[],
-    extent: number[],
-}
 
 type LoadingTile = {
     status: TileState,
@@ -39,7 +22,6 @@ type LoadingTile = {
 }
 
 export default class RasterTileWorkerSource extends Evented implements WorkerSource {
-    availableImages: Array<string>;
     _loading: { [_: number]: LoadingTile };
     _subLoading: { [_: number]: ImageBitmap };
     deduped: DedupedRequest;
@@ -53,27 +35,19 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
         this.loadRasterTile = loadRasterTile.bind(this);
     }
 
-    getCoverTiles(params: {
-        projection: RasterProjection,
-        tile: CanonicalTileID,
-        zoom: number
-    }, callback: Callback<WorkerCoverTilesResult>) {
+    getCoverTiles(params: WorkerCoverTilesRequest, callback: Callback<WorkerCoverTilesResult>) {
         return callback(null, this.reprojectedTile(params));
     }
 
-    reprojectedTile(params: {
-        projection: RasterProjection,
-        tile: CanonicalTileID,
-        zoom: number
-    }): WorkerCoverTilesResult {
-        const {tile, projection, zoom} = params;
-
-        const actualZ = zoom || tile.z;
+    reprojectedTile(params: WorkerCoverTilesRequest): WorkerCoverTilesResult {
+        const {tileID, projection} = params;
+        const canonical = tileID.canonical;
+        const actualZ = canonical.z;
         const worldSize = 1 << actualZ;
 
         const {direction, fullExtent, transformExtent} = getTileSystem(projection);
 
-        const bound = tile.toLngLatBounds();
+        const bound = canonical.toLngLatBounds();
 
         if (fullExtent) {
             if (!fullExtent.contains(bound.getNorthWest()) && !fullExtent.contains(bound.getSouthEast())) {
@@ -84,7 +58,7 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
         if (transformExtent) {
             if (!transformExtent.contains(bound.getNorthWest()) && !transformExtent.contains(bound.getSouthEast())) {
                 return {
-                    coverTiles: [{x: tile.x, y: tile.y, z: tile.z, dx: 0, dy: 0}],
+                    coverTiles: [{x: canonical.x, y: canonical.y, z: canonical.z, dx: 0, dy: 0}],
                     ltPixel: {x: 0, y: 0},
                     rbPixel: {x: 256, y: 256}
                 };
@@ -136,8 +110,7 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
         };
     }
 
-    // @ts-ignore
-    loadTile(params: WorkerTileParameters & WorkerCoverTilesResult, callback) {
+    loadTile(params: WorkerSourceRasterTileRequest, callback: Callback<ImageBitmap | HTMLCanvasElement>) {
         const key = params.tileID.key;
         const loading = this._loading[key] = this._loading[key] || {status: 'loading'};
         loading.request = this.loadRasterTile(params, (error, result) => {
@@ -158,7 +131,7 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
         }
     }
 
-    abortTile(params: TileParameters & { tileID: CanonicalTileID }) {
+    abortTile(params: WorkerSourceTileRequest) {
         const {tileID} = params;
         const loading = this._loading[tileID.key];
         if (loading && loading.request) {
@@ -167,8 +140,12 @@ export default class RasterTileWorkerSource extends Evented implements WorkerSou
         }
     }
 
-    removeTile(params: TileParameters & { tileID: CanonicalTileID }) {
+    removeTile(params: WorkerSourceTileRequest) {
         this.abortTile(params);
+    }
+
+    reloadTile(params: WorkerSourceRasterTileRequest, callback: Callback<ImageBitmap | HTMLCanvasElement>) {
+        this.loadTile(params, callback);
     }
 
 }

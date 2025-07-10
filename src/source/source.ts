@@ -25,7 +25,7 @@ import type {CustomSourceInterface} from '../source/custom_source';
 
 export type {Source};
 
-export type SourceEvents = Pick<MapEvents, 'data' | 'dataloading' | 'error' | 'sourcetileloadfail'>;
+export type SourceEvents = Pick<MapEvents, 'data' | 'dataloading' | 'error' | 'tileloadfail' | 'progress'>;
 
 export type SourceRasterLayer = {
     id: string;

@@ -394,7 +394,8 @@ function drawLayerSymbols(
         };
 
         const getIconState = () => {
-            const alongLine = iconRotateWithMap && layer.layout.get('symbol-placement') !== 'point';
+            const symbolPlacement = layer.layout.get('symbol-placement');
+            const alongLine = iconRotateWithMap && (symbolPlacement === 'line' || symbolPlacement === 'line-center');
 
             const baseDefines: DynamicDefinesType[] = [];
 
@@ -503,7 +504,8 @@ function drawLayerSymbols(
         };
 
         const getTextState = () => {
-            const alongLine = textRotateWithMap && layer.layout.get('symbol-placement') !== 'point';
+            const symbolPlacement = layer.layout.get('symbol-placement');
+            const alongLine = iconRotateWithMap && (symbolPlacement === 'line' || symbolPlacement === 'line-center');
             const baseDefines: DynamicDefinesType[] = [];
             const projectedPosOnLabelSpace = alongLine || variablePlacement || updateTextFitIcon;
 

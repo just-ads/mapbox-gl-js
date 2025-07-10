@@ -13,11 +13,11 @@ import {makeFQID} from "../util/fqid";
 import {loadRasterTile} from "./load_raster_tile";
 import Texture from '../render/texture';
 
+import type Tile from './tile';
 import type {ISource, SourceEvents, SourceRasterLayer} from './source';
 import type {OverscaledTileID} from './tile_id';
 import type {Map} from '../ui/map';
 import type Dispatcher from '../util/dispatcher';
-import type Tile from './tile';
 import type {Callback} from '../types/callback';
 import type {Cancelable} from '../types/cancelable';
 import type {
@@ -26,7 +26,7 @@ import type {
     RasterArraySourceSpecification, RasterProjection, CustomTags
 } from '../style-spec/types';
 import type Actor from '../util/actor';
-import type {WorkerCoverTilesResult} from "./worker_source";
+import type {WorkerSourceRasterTileRequest} from "./worker_source";
 
 /**
  * A source containing raster tiles.
@@ -251,10 +251,8 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
             this.loadOtherProjectionTile(tile, imageLoaded);
         } else {
             const url = this.map._requestManager.normalizeTileURL(tile.tileID.canonical.url(this.tiles, this.scheme), use2x, this.tileSize);
-            // @ts-ignore
             const request = this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, tile.tileID.canonical);
-            // @ts-ignore
-            tile._url = request.url;
+            tile.url = request.url;
             tile.request = getImage(request, imageLoaded);
         }
     }
@@ -265,13 +263,14 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
             tile.actor = this.dispatcher.getActor();
         }
         // 计算覆盖的瓦片
-        tile.actor.send(`${this.type}.getCoverTiles`, {
-            tile: tile.tileID.canonical,
+        tile.actor.send(`raster.getCoverTiles`, {
+            uid: tile.uid,
+            tileID: tile.tileID,
             projection: this.projection,
             source: this.id,
-            type: this.type,
+            type: 'raster',
             scope: this.scope
-        }, (err, data: WorkerCoverTilesResult) => {
+        }, (err, data) => {
             if (tile.state === 'unloaded') return callback(null);
             if (!data) return callback(err);
             const coverTiles = data.coverTiles;
@@ -279,25 +278,25 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
                 const ti = new CanonicalTileID(item.z, item.x, item.y);
                 const url = this.map._requestManager.normalizeTileURL(ti.url(this.tiles, this.scheme), use2x, this.tileSize);
                 return {
-                    // @ts-ignore
                     request: this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, ti),
                     tile: ti,
                     x: item.dx,
                     y: item.dy
                 };
             });
-            const params = {
+            const params: WorkerSourceRasterTileRequest = {
+                uid: tile.uid,
+                source: this.id,
+                type: 'raster',
+                scope: this.scope,
                 requests,
                 ltPixel: data.ltPixel,
                 rbPixel: data.rbPixel,
-                tileID: tile.tileID.canonical,
-                source: this.id,
-                type: this.type,
-                scope: this.scope
+                tileID: tile.tileID,
             };
 
             if (offscreenCanvasSupported()) {
-                tile.actor.send('loadTile', params, callback);
+                tile.actor.send('raster.loadTile', params, callback);
             } else {
                 tile.request = loadRasterTile.call(this, params, callback);
                 this.limitedStorage();
@@ -325,8 +324,8 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         if (tile.actor && this.type === 'raster') {
             tile.actor.send('abortTile', {
                 uid: tile.uid,
-                tileID: tile.tileID.canonical,
-                type: this.type,
+                tileID: tile.tileID,
+                type: 'raster',
                 source: this.id,
                 scope: this.scope
             });
@@ -353,8 +352,8 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         if (tile.actor && this.type === 'raster') {
             tile.actor.send('removeTile', {
                 uid: tile.uid,
-                tileID: tile.tileID.canonical,
-                type: this.type,
+                tileID: tile.tileID,
+                type: 'raster',
                 source: this.id,
                 scope: this.scope
             });

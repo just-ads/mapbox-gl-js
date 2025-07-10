@@ -1,4 +1,3 @@
-// @flow
 import {arrayBufferToImage, getImage} from "../util/ajax";
 import offscreenCanvasSupported from "../util/offscreen_canvas_supported";
 import {asyncAll, isWorker} from "../util/util";
@@ -6,7 +5,7 @@ import {asyncAll, isWorker} from "../util/util";
 import type {Callback} from "../types/callback";
 import type {Cancelable} from "../types/cancelable";
 import type {RequestParameters} from "../util/ajax";
-import type {WorkerCoverTilesResult, WorkerRasterTileParameters} from "./worker_source";
+import type {WorkerSourceRasterTileRequest} from "./worker_source";
 
 const supportImageBitmap = typeof createImageBitmap === 'function';
 
@@ -23,19 +22,24 @@ function canvasToImage(canvas: HTMLCanvasElement | OffscreenCanvas, callback: Ca
         // console.log(canvas.toDataURL())
         createImageBitmap(canvas).then(imageBitmap => {
             callback(null, imageBitmap);
+        }).catch(error => {
+            callback(error);
         });
     } else {
         callback(null, canvas as HTMLCanvasElement);
     }
 }
 
-export type LoadRasterTile = (params: WorkerCoverTilesResult, callback: Callback<ImageBitmap | HTMLCanvasElement>) => Cancelable;
+export type LoadRasterTile = (params: WorkerSourceRasterTileRequest, callback: Callback<ImageBitmap | HTMLCanvasElement>) => Cancelable;
 
-export function loadRasterTile(params: WorkerRasterTileParameters, callback: Callback<ImageBitmap | HTMLCanvasElement>): Cancelable {
+/**
+ * @private
+ */
+export function loadRasterTile(params: WorkerSourceRasterTileRequest, callback: Callback<ImageBitmap | HTMLCanvasElement>): Cancelable {
     const {requests, ltPixel, rbPixel} = params;
 
     const makeRequest = (requestParam: RequestParameters, cb: Callback<undefined>) => {
-        // @ts-ignore
+        // @ts-expect-error Property returnArraybuffer does not exist on type RequestParameters
         requestParam.returnArraybuffer = true;
         const request = getImage(requestParam, cb);
         return () => {
@@ -63,7 +67,6 @@ export function loadRasterTile(params: WorkerRasterTileParameters, callback: Cal
             const size = Math.max(rbPixel.x - ltPixel.x, rbPixel.y - ltPixel.y) * scale;
             canvas.width = size;
             canvas.height = size;
-            // @ts-ignore
             ctx = canvas.getContext('2d', {willReadFrequently: true});
         }
     };
@@ -71,7 +74,7 @@ export function loadRasterTile(params: WorkerRasterTileParameters, callback: Cal
         ctx.drawImage(data, x * tileSize + dx, y * tileSize + dy, data.width, data.height);
     };
 
-    const cancels = [];
+    const cancels: (() => void)[] = [];
     // console.log(params);
     asyncAll(requests, (item, cb) => {
         const key = item.tile.key;
@@ -84,7 +87,7 @@ export function loadRasterTile(params: WorkerRasterTileParameters, callback: Cal
                 cb(null);
             });
         } else {
-            const cancel = this.deduped.request(item.tile.key, null, makeRequest.bind(this, item.request), (error: any, data: any) => {
+            const cancel = this.deduped.request(item.tile.key, null, makeRequest.bind(this, item.request), (error, data) => {
                 if (error) {
                     delete this._subLoading[key];
                     return cb(null);

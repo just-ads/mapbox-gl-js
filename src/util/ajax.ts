@@ -131,7 +131,8 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
     let complete = false;
     let aborted = false;
 
-    const cacheIgnoringSearch = cacheUrl || hasCacheDefeatingSku(request.url);
+    const cacheSearch = cacheUrl || hasCacheDefeatingSku(request.url);
+    const cacheIgnoringSave = request.url.indexOf('ignoring=save') > 0;
 
     if (requestParameters.type === 'json') {
         request.headers.set('Accept', 'application/json');
@@ -152,19 +153,18 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
             return finishRequest(cachedResponse);
         }
 
-        if (cachedResponse) {
-            // We can't do revalidation with 'If-None-Match' because then the
-            // request doesn't have simple cors headers.
-        }
-
         const requestTime = Date.now();
 
         fetch(request).then(response => {
             if (response.ok) {
-                const cacheableResponse = cacheIgnoringSearch ? response.clone() : null;
+                const cacheableResponse = cacheSearch && !cacheIgnoringSave ? response.clone() : null;
                 return finishRequest(response, cacheableResponse, requestTime);
             } else {
-                return callback(new AJAXError(response.statusText, response.status, requestParameters.url));
+                return response.json().then(json => {
+                    return callback(new AJAXError(json.message, response.status, requestParameters.url));
+                }).catch(() => {
+                    return callback(new AJAXError(response.statusText, response.status, requestParameters.url));
+                });
             }
         }).catch(error => {
             if (error.name === 'AbortError') {
@@ -188,7 +188,7 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
                 // reading the body can cause the cache insertion to error. We could catch this error
                 // in most browsers but in Firefox it seems to sometimes crash the tab. Adding
                 // it to the cache here avoids that error.
-                // eslint-disable-next-line no-unused-expressions,@typescript-eslint/no-unused-expressions
+                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                 cacheUrl && request.headers.set('CacheUrl', cacheUrl);
                 cachePut(request, cacheableResponse, requestTime);
             }
@@ -199,18 +199,20 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
         });
     };
 
-    if (cacheIgnoringSearch) {
-        // eslint-disable-next-line no-unused-expressions,@typescript-eslint/no-unused-expressions
+    if (cacheSearch) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
         cacheUrl && request.headers.set('CacheUrl', cacheUrl);
         cacheGet(request, validateOrFetch);
     } else {
         validateOrFetch(null, null);
     }
 
-    return {cancel: () => {
-        aborted = true;
-        if (!complete) controller.abort();
-    }};
+    return {
+        cancel: () => {
+            aborted = true;
+            if (!complete) controller.abort();
+        }
+    };
 }
 
 function makeXMLHttpRequest(requestParameters: RequestParameters, callback: ResponseCallback<unknown>): Cancelable {
@@ -243,7 +245,11 @@ function makeXMLHttpRequest(requestParameters: RequestParameters, callback: Resp
             }
             callback(null, data, xhr.getResponseHeader('Cache-Control'), xhr.getResponseHeader('Expires'));
         } else {
-            callback(new AJAXError(xhr.statusText, xhr.status, requestParameters.url));
+            let message = xhr.statusText;
+            try {
+                message = JSON.parse(xhr.response).message;
+            } catch (e) { /* empty */ }
+            callback(new AJAXError(message, xhr.status, requestParameters.url));
         }
     };
     xhr.send(requestParameters.body);
@@ -378,11 +384,11 @@ export const getImage = function (
         } else if (data) {
             if (self.createImageBitmap) {
                 arrayBufferToImageBitmap(data, (err, imgBitmap) => callback(err, imgBitmap, cacheControl, expires));
-                //@ts-ignore
+                //@ts-expect-error 111
             } else if (Image && !requestParameters.returnArraybuffer) {
                 arrayBufferToImage(data, (err, img) => callback(err, img, cacheControl, expires));
             } else {
-                // @ts-ignore
+                // @ts-expect-error 1111
                 callback(err, data, cacheControl, expires);
             }
         }

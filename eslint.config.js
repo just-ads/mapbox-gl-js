@@ -222,6 +222,7 @@ export default tseslint.config(
             '@stylistic/js/arrow-parens': 'off',
             '@stylistic/js/indent': 'off',
             '@stylistic/js/quotes': 'off',
+            '@stylistic/js/linebreak-style': 'off',
         }
     },
 

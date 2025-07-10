@@ -419,7 +419,10 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
             } else {
                 // although GeoJSON sources contain no metadata, we fire this event at first
                 // to let the SourceCache know its ok to start requesting tiles.
-                const data: MapSourceDataEvent = {dataType: 'source', sourceDataType: this._metadataFired ? 'content' : 'metadata'};
+                const data: MapSourceDataEvent = {
+                    dataType: 'source',
+                    sourceDataType: this._metadataFired ? 'content' : 'metadata'
+                };
                 if (this._collectResourceTiming && result && result.resourceTiming && result.resourceTiming[this.id]) {
                     data.resourceTiming = result.resourceTiming[this.id];
                 }
@@ -476,13 +479,11 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         tile.requestTime = requestTime;
         tile.request = this.actor.send(message, params, (err, data: WorkerSourceVectorTileResult) => {
             delete tile.request;
-            if (tile.requestTime > requestTime) return;
-
-            // if (partial && !data) {
-            //     // if we did a partial reload and the tile didn't change, do nothing and treat the tile as loaded
-            //     tile.state = 'loaded';
-            //     return callback(null);
-            // }
+            if ((tile.requestTime > requestTime) || (partial && !data)) {
+                // if we did a partial reload and the tile didn't change, do nothing and treat the tile as loaded
+                tile.state = 'loaded';
+                return callback(null);
+            }
             tile.destroy();
             if (tile.aborted) {
                 return callback(null);

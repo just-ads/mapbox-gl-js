@@ -11,7 +11,7 @@ export type ResolvedImageSpecification = string;
 
 export type PromoteIdSpecification = {[_: string]: string | ExpressionSpecification} | string | ExpressionSpecification;
 
-export type CustomTagFun = (canonical: CanonicalTileID) => string | (() => string);
+export type CustomTagFun = (canonical?: CanonicalTileID) => string;
 
 export type CustomTags = Record<string, CustomTagFun | (string | number)[]>
 
@@ -399,6 +399,7 @@ export type VectorSourceSpecification = {
     "maxzoom"?: number,
     "attribution"?: string,
     "promoteId"?: PromoteIdSpecification,
+    "vtOptions": { encrypt: '1' | '2'},
     "volatile"?: boolean,
     [_: string]: unknown
 }

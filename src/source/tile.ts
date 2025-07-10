@@ -106,6 +106,7 @@ function getPixelPosMatrix(transform: Transform, tileID: OverscaledTileID) {
  */
 class Tile {
     tileID: OverscaledTileID;
+    url?: string;
     uid: number;
     uses: number;
     tileSize: number;

@@ -110,6 +110,7 @@ class SymbolStyleLayer extends StyleLayer {
         }
 
         const writingModes = this.layout.get('text-writing-mode');
+        const symbolPlacement = this.layout.get('symbol-placement');
         if (writingModes) {
             // remove duplicates, preserving order
             const deduped = [];
@@ -118,12 +119,12 @@ class SymbolStyleLayer extends StyleLayer {
                 if (deduped.indexOf(m) < 0) deduped.push(m);
             }
             this.layout._values['text-writing-mode'] = deduped;
-        } else if (this.layout.get('symbol-placement') === 'point') {
-            // default value for 'point' placement symbols
-            this.layout._values['text-writing-mode'] = ['horizontal'];
-        } else {
+        } else if (symbolPlacement === 'line' || symbolPlacement === 'line-center') {
             // default value for 'line' placement symbols
             this.layout._values['text-writing-mode'] = ['horizontal', 'vertical'];
+        } else {
+            // default value for 'point' placement symbols
+            this.layout._values['text-writing-mode'] = ['horizontal'];
         }
 
         this._setPaintOverrides();

@@ -12,7 +12,13 @@ import type {RequestParameters} from './ajax';
 import type {StyleImageMap} from '../style/style_image';
 import type {TDecodingResult, TProcessingBatch} from '../data/mrt/types';
 import type {WorkerPerformanceMetrics} from './performance';
-import type {WorkerSourceRequest, WorkerSourceTileRequest} from '../source/worker_source';
+import type {
+    WorkerCoverTilesRequest,
+    WorkerCoverTilesResult,
+    WorkerSourceRasterTileRequest,
+    WorkerSourceRequest,
+    WorkerSourceTileRequest
+} from '../source/worker_source';
 import type {StyleModelMap} from '../style/style_mode';
 
 /**
@@ -35,7 +41,7 @@ export type ActorMessages = {
     };
 
     'decodeRasterArray': {
-        params: WorkerSourceTileRequest & {buffer: ArrayBuffer; task: TProcessingBatch};
+        params: WorkerSourceTileRequest & { buffer: ArrayBuffer; task: TProcessingBatch };
         callback: ActorCallback<TDecodingResult[]>;
     };
 
@@ -45,17 +51,17 @@ export type ActorMessages = {
     };
 
     'geojson.getClusterChildren': {
-        params: {clusterId: number; source: string; scope: string;};
+        params: { clusterId: number; source: string; scope: string; };
         callback: ActorCallback<GeoJSON.Feature[]>;
     };
 
     'geojson.getClusterExpansionZoom': {
-        params: {clusterId: number; source: string; scope: string;};
+        params: { clusterId: number; source: string; scope: string; };
         callback: ActorCallback<number>;
     };
 
     'geojson.getClusterLeaves': {
-        params: {source: string; scope: string; clusterId: number; limit: number; offset: number;};
+        params: { source: string; scope: string; clusterId: number; limit: number; offset: number; };
         callback: ActorCallback<GeoJSON.Feature[]>;
     };
 
@@ -65,12 +71,18 @@ export type ActorMessages = {
     };
 
     'getGlyphs': {
-        params: {scope: string; stacks: FontStacks; uid?: number};
+        params: { scope: string; stacks: FontStacks; uid?: number };
         callback: ActorCallback<GlyphMap>;
     };
 
     'getImages': {
-        params: {images: ImageId[]; scope: string; source: string; tileID: OverscaledTileID; type: 'icons' | 'patterns'};
+        params: {
+            images: ImageId[];
+            scope: string;
+            source: string;
+            tileID: OverscaledTileID;
+            type: 'icons' | 'patterns'
+        };
         callback: ActorCallback<StyleImageMap<StringifiedImageId>>;
     };
 
@@ -90,17 +102,17 @@ export type ActorMessages = {
     };
 
     'loadWorkerSource': {
-        params: {name: string; url: string;};
+        params: { name: string; url: string; };
         callback: ActorCallback<void>;
     };
 
     'rasterizeImages': {
-        params: {scope: string; tasks: ImageRasterizationTasks};
+        params: { scope: string; tasks: ImageRasterizationTasks };
         callback: ActorCallback<RasterizedImageMap>;
     };
 
     'rasterizeImagesWorker': {
-        params: {scope: string; tasks: ImageRasterizationWorkerTasks};
+        params: { scope: string; tasks: ImageRasterizationWorkerTasks };
         callback: ActorCallback<RasterizedImageMap>;
     };
 
@@ -110,7 +122,7 @@ export type ActorMessages = {
     };
 
     'removeRasterizedImages': {
-        params: {scope: string; imageIds: ImageId[]};
+        params: { scope: string; imageIds: ImageId[] };
         callback: ActorCallback<void>;
     };
 
@@ -135,17 +147,17 @@ export type ActorMessages = {
     };
 
     'setImages': {
-        params: {images: ImageId[]; scope: string;};
+        params: { images: ImageId[]; scope: string; };
         callback: ActorCallback<void>;
     };
 
     'setLayers': {
-        params: {layers: LayerSpecification[]; scope: string; options: ConfigOptions};
+        params: { layers: LayerSpecification[]; scope: string; options: ConfigOptions };
         callback: ActorCallback<void>;
     };
 
     'setModels': {
-        params: {models: StyleModelMap; scope: string;};
+        params: { models: StyleModelMap; scope: string; };
         callback: ActorCallback<void>;
     };
 
@@ -165,7 +177,7 @@ export type ActorMessages = {
     };
 
     'spriteLoaded': {
-        params: {scope: string; isLoaded: boolean};
+        params: { scope: string; isLoaded: boolean };
         callback: void;
     };
 
@@ -175,9 +187,19 @@ export type ActorMessages = {
     };
 
     'updateLayers': {
-        params: {layers: LayerSpecification[]; removedIds: string[]; scope: string; options: ConfigOptions};
+        params: { layers: LayerSpecification[]; removedIds: string[]; scope: string; options: ConfigOptions };
         callback: ActorCallback<void>;
     };
+
+    'raster.getCoverTiles': {
+        params: WorkerCoverTilesRequest,
+        callback: ActorCallback<WorkerCoverTilesResult>;
+    }
+
+    'raster.loadTile': {
+        params: WorkerSourceRasterTileRequest,
+        callback: ActorCallback<ImageBitmap | HTMLCanvasElement>;
+    }
 };
 
 export type ActorMessage = keyof ActorMessages;

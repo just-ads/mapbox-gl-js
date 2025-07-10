@@ -3,7 +3,6 @@ import Protobuf from 'pbf';
 import {getArrayBuffer} from '../util/ajax';
 
 import type {DedupedRequest} from './deduped_request';
-
 import type {Callback} from '../types/callback';
 import type {WorkerSourceVectorTileRequest} from './worker_source';
 
@@ -32,7 +31,7 @@ export type LoadVectorData = (params: WorkerSourceVectorTileRequest, callback: L
  * @private
  */
 export function loadVectorTile(
-    params: WorkerSourceVectorTileRequest & {vtOptions: any},
+    params: WorkerSourceVectorTileRequest,
     callback: LoadVectorDataCallback,
     skipParse?: boolean,
 ): () => void {
@@ -44,7 +43,7 @@ export function loadVectorTile(
                 callback(err);
             } else if (data) {
                 callback(null, {
-                    // @ts-ignore
+                    // @ts-expect-error TS2554: Expected 1 arguments, but got 3
                     vectorTile: skipParse ? undefined : new VectorTile(new Protobuf(data), undefined, params.vtOptions),
                     rawData: data,
                     cacheControl,

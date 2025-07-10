@@ -1290,18 +1290,19 @@ class Style extends Evented<MapEvents> {
      * @fires Map.event:data Fires `data` with `{dataType: 'style'}` to indicate that sprite loading is complete.
      */
     _loadSprite(url: string) {
-        const requests = [];
+        const requests: Cancelable[] = [];
         this._spriteRequest = {
             cancel: () => requests.forEach(request => request.cancel())
         };
 
         const urls = url.split(',');
+        const styleImageMap: StyleImageMap<ImageId> = new Map();
 
         asyncAll(urls, (url, callback) => {
             const request = loadSprite(url, this.map._requestManager, (err, images) => {
                 if (images) {
                     for (const id in images) {
-                        this.imageManager.addImage(id, this.scope, images[id]);
+                        styleImageMap.set(ImageId.from(id), images[id]);
                     }
                 }
                 callback(err);
@@ -1312,6 +1313,7 @@ class Style extends Evented<MapEvents> {
             if (err) {
                 this.fire(new ErrorEvent(err));
             }
+            this.addImages(styleImageMap);
             this.imageManager.setLoaded(true, this.scope);
             this.dispatcher.broadcast('spriteLoaded', {scope: this.scope, isLoaded: true});
             this.fire(new Event('data', {dataType: 'style'}));

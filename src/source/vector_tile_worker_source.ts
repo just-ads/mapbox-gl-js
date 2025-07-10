@@ -101,20 +101,18 @@ class VectorTileWorkerSource extends Evented implements WorkerSource {
 
             // response.vectorTile will be present in the GeoJSON worker case (which inherits from this class)
             // because we stub the vector tile interface around JSON data instead of parsing it directly
-            // @ts-ignore
+            // @ts-expect-error TS2554: Expected 1 arguments, but got 3
             workerTile.vectorTile = response.vectorTile || new VectorTile(new Protobuf(rawTileData), undefined, params.vtOptions);
             const parseTile = () => {
                 const WorkerSourceVectorTileCallback = (err?: Error | null, result?: WorkerSourceVectorTileResult | null) => {
-                    // -------------------
                     const reloadCallback = workerTile.reloadCallback;
                     if (reloadCallback) {
                         delete workerTile.reloadCallback;
-                        workerTile.parse(workerTile.vectorTile, this.layerIndex, this.availableImages, this.actor, (err, data) => {
+                        workerTile.parse(workerTile.vectorTile, this.layerIndex, this.availableImages, this.availableModels, this.actor, (err, data) => {
                             if (data) data = extend({rawTileData: rawTileData.slice(0)}, data);
                             reloadCallback(err, data);
                         });
                     }
-                    // ------------------
                     if (err || !result) return callback(err);
 
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any

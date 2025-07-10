@@ -5,17 +5,11 @@ import {extend} from '../util/util';
 
 import type Tile from '../source/tile';
 import type LngLat from '../geo/lng_lat';
-import type BoxZoomHandler from './handler/box_zoom';
-import type DragPanHandler from './handler/shim/drag_pan';
-import type DragRotateHandler from './handler/shim/drag_rotate';
-import type ScrollZoomHandler from './handler/scroll_zoom';
-import type DoubleClickZoomHandler from './handler/shim/dblclick_zoom';
-import type TouchZoomRotateHandler from './handler/shim/touch_zoom_rotate';
 import type {Map} from './map';
 import type {GeoJSONFeature} from '../util/vectortile_to_geojson';
-import type {OverscaledTileID} from '../source/tile_id';
 import type {EventData, EventOf} from '../util/evented';
 import type {SourceSpecification} from '../style-spec/types';
+import type {AJAXError} from "../util/ajax";
 
 export type MapMouseEventType =
     | 'mousedown'
@@ -433,11 +427,16 @@ export type MapSourceDataEvent = {
 };
 
 export type MapSourceTileLoadFailEvent = {
-    error: any,
+    error: AJAXError,
     sourceId: string;
-    tile: Tile & {retryCount?: number, _url: string};
+    tile: Tile & {retryCount?: number};
     reloadTile: () => void
 };
+
+export type MapSourceTileProgressEvent = {
+    totals: number,
+    loaded: number
+}
 
 /**
  * `MapDataEvent` is a type of events related to _loading data, styles, and sources.
@@ -1501,7 +1500,7 @@ export type MapEvents = {
     /**
      * Fired when any source tile load fail.
      *
-     * @event tileloadfail
+     * @event sourcetileloadfail
      * @memberof Map
      * @instance
      * @type {MapSourceTileLoadFailEvent}
@@ -1515,7 +1514,26 @@ export type MapEvents = {
      *     console.log('A tileloadfail event occurred.');
      * });
      */
-    'sourcetileloadfail': MapSourceTileLoadFailEvent
+    'tileloadfail': MapSourceTileLoadFailEvent
+
+    /**
+     * Fired when any source tile loaded.
+     *
+     * @event progress
+     * @memberof Map
+     * @instance
+     * @type {MapSourceTileProgressEvent}
+     * @example
+     * // Initialize the map
+     * const map = new mapboxgl.Map({});
+     * // Set an event listener that fires
+     * // when the map's sources begin _loading or
+     * // changing asynchronously.
+     * map.on('progress', () => {
+     *     console.log('A progress event occurred.');
+     * });
+     */
+    'progress': MapSourceTileProgressEvent
 
     /**
      * Fired when an icon or pattern needed by the style is missing. The missing image can

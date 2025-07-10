@@ -5,7 +5,7 @@ import type {AlphaImage} from '../util/image';
 import type {GlyphPositions} from '../render/glyph_atlas';
 import type ImageAtlas from '../render/image_atlas';
 import type LineAtlas from '../render/line_atlas';
-import type {CanonicalTileID, OverscaledTileID} from './tile_id';
+import type {OverscaledTileID} from './tile_id';
 import type {Bucket} from '../data/bucket';
 import type FeatureIndex from '../data/feature_index';
 import type {CollisionBoxArray} from '../data/array_types';
@@ -13,7 +13,7 @@ import type DEMData from '../data/dem_data';
 import type {DEMSourceEncoding} from '../data/dem_data';
 import type {GlyphMap} from '../render/glyph_manager';
 import type {StyleImageMap} from '../style/style_image';
-import type {PromoteIdSpecification} from '../style-spec/types';
+import type {PromoteIdSpecification, RasterProjection} from '../style-spec/types';
 import type Projection from '../geo/projection/projection';
 import type {LUT} from '../util/lut';
 import type {Callback} from '../types/callback';
@@ -23,6 +23,30 @@ import type {RasterizedImageMap} from '../render/image_manager';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {StringifiedImageVariant} from '../style-spec/expression/types/image_variant';
 import type {StyleModelMap} from '../style/style_mode';
+
+export type WorkerSourceVectorOptions = {
+
+}
+
+export type WorkerCoverTilesRequest = WorkerSourceRequest & {
+    tileID: OverscaledTileID,
+    projection: RasterProjection
+}
+
+export type CoverTiles = { x: number, y: number, z: number, dx: number, dy: number }
+
+export type WorkerCoverTilesResult = {
+    coverTiles: CoverTiles[],
+    ltPixel: { x: number, y: number },
+    rbPixel: { x: number, y: number }
+}
+
+export type WorkerSourceRasterTileRequest = WorkerSourceRequest & {
+    tileID: OverscaledTileID,
+    requests: { request: RequestParameters, tile: OverscaledTileID['canonical'], x: number, y: number }[],
+    ltPixel: WorkerCoverTilesResult['ltPixel'],
+    rbPixel: WorkerCoverTilesResult['rbPixel'],
+}
 
 /**
  * The parameters passed to the {@link MapWorker#getWorkerSource}.
@@ -71,6 +95,7 @@ export type WorkerSourceVectorTileRequest = WorkerSourceTileRequest & {
     partial?: boolean;
     tessellationStep?: number // test purpose only;
     worldview?: string | null;
+    vtOptions?: any;
     localizableLayerIds?: Set<string>;
 };
 
@@ -98,7 +123,6 @@ export type WorkerSourceTiled3dModelRequest = WorkerSourceTileRequest & {
     partial?: boolean;
     request?: RequestParameters;
     tessellationStep?: number // test purpose only;
-    vtOptions: any
     worldview?: string | null;
     localizableLayerIds?: Set<string>;
 };
@@ -192,7 +216,7 @@ export interface WorkerSource {
      * The foreground Source is responsible for ensuring that 'removeSource' is
      * the last message sent to the WorkerSource.
      */
-    removeSource?: (params: {source: string}, callback: Callback<void>) => void;
+    removeSource?: (params: { source: string }, callback: Callback<void>) => void;
 }
 
 export interface WorkerSourceConstructor {
@@ -202,7 +226,7 @@ export interface WorkerSourceConstructor {
         availableImages?: ImageId[],
         availableModels?: StyleModelMap,
         isSpriteLoaded?: boolean,
-        loadData?: (params: {source: string; scope: string}, callback: Callback<unknown>) => () => void | undefined,
+        loadData?: (params: { source: string; scope: string }, callback: Callback<unknown>) => () => void | undefined,
         brightness?: number
     ): WorkerSource;
 }

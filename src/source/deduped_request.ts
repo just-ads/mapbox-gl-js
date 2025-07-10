@@ -1,8 +1,9 @@
 import type Scheduler from "../util/scheduler";
-import type {LoadVectorDataCallback} from "./load_vector_tile";
+import type {Callback} from "../types/callback";
 
 export class DedupedRequest {
     entries: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         [key: string]: any;
     };
     scheduler: Scheduler | null | undefined;
@@ -12,7 +13,8 @@ export class DedupedRequest {
         this.scheduler = scheduler;
     }
 
-    request(key: string, metadata: any, request: any, callback: LoadVectorDataCallback): () => void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request(key: string, metadata: any, request: any, callback: Callback<any>): () => void {
         const entry = this.entries[key] = this.entries[key] || {callbacks: []};
 
         if (entry.result) {

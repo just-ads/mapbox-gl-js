@@ -263,12 +263,11 @@ class SourceCache extends Evented {
             tile.state = 'errored';
             if (err.status !== 404) {
                 this._source.fire(new ErrorEvent(err, {tile}));
-                this._source.fire(new Event('sourcetileloadfail', {
+                this._source.fire(new Event('tileloadfail', {
                     error: err,
                     sourceId: this._source.id,
-                    // @ts-ignore
                     tile,
-                    reloadTile: () => this._reloadTile(id, 'reloading')
+                    reloadTile: () => this._reloadTile(id, 'expired')
                 }));
             } else {
                 // If the requested tile is missing, try to load the parent tile
@@ -290,16 +289,25 @@ class SourceCache extends Evented {
                     this.update(this.transform);
                 }
             }
-            return;
+        } else {
+            tile.timeAdded = browser.now();
+            if (previousState === 'expired') tile.refreshedUponExpiration = true;
+            this._setTileReloadTimer(id, tile);
+            if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
+            this._state.initializeTileState(tile, this.map ? this.map.painter : null);
+
+            this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id}));
         }
 
-        tile.timeAdded = browser.now();
-        if (previousState === 'expired') tile.refreshedUponExpiration = true;
-        this._setTileReloadTimer(id, tile);
-        if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
-        this._state.initializeTileState(tile, this.map ? this.map.painter : null);
-
-        this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id}));
+        if (this._source.listens('progress')) {
+            let totals = 0;
+            let loaded = 0;
+            for (const tilesKey in this._tiles) {
+                totals++;
+                if (this._tiles[tilesKey].loaded()) loaded++;
+            }
+            this._source.fire(new Event('progress', {totals, loaded}));
+        }
     }
 
     /**
@@ -678,9 +686,10 @@ class SourceCache extends Evented {
         }
 
         for (const retainedId in retain) {
+            const tile = this._tiles[retainedId];
             // Make sure retained tiles always clear any existing fade holds
             // so that if they're removed again their fade timer starts fresh.
-            this._tiles[retainedId].clearFadeHold();
+            if (tile) tile.clearFadeHold();
         }
 
         // Remove the tiles we don't need anymore.
@@ -765,12 +774,21 @@ class SourceCache extends Evented {
                     retain[children[3].key]) continue; // tile is covered by children
             }
 
-            // We couldn't find child tiles that entirely cover the ideal tile; look for parents now.
+            for (let overscaledZ = tileID.overscaledZ - 1; overscaledZ >= minCoveringZoom; --overscaledZ) {
+                const parentId = tileID.scaledTo(overscaledZ);
+                // Break parent tile ascent if this route has been previously checked by another child.
+                if (checked[parentId.key]) break;
+                checked[parentId.key] = true;
 
-            // As we ascend up the tile pyramid of the ideal tile, we check whether the parent
-            // tile has been previously requested (and errored because we only loop over tiles with no data)
-            // in order to determine if we need to request its parent.
-            let parentWasRequested = tile.wasRequested();
+                tile = this.getTile(parentId) || this._cache.get(parentId);
+                if (!tile) {
+                    tile = this._addTile(parentId);
+                }
+                retain[parentId.key] = parentId;
+                if (tile.hasData()) break;
+            }
+
+            /*let parentWasRequested = tile.wasRequested();
 
             for (let overscaledZ = tileID.overscaledZ - 1; overscaledZ >= minCoveringZoom; --overscaledZ) {
                 const parentId = tileID.scaledTo(overscaledZ);
@@ -790,7 +808,7 @@ class SourceCache extends Evented {
                     parentWasRequested = tile.wasRequested();
                     if (tile.hasData()) break;
                 }
-            }
+            }*/
         }
 
         return retain;

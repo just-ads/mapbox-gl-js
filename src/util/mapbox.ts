@@ -1,15 +1,15 @@
 /***** START WARNING REMOVAL OR MODIFICATION OF THE
-* FOLLOWING CODE VIOLATES THE MAPBOX TERMS OF SERVICE  ******
-* The following code is used to access Mapbox's APIs. Removal or modification
-* of this code can result in higher fees and/or
-* termination of your account with Mapbox.
-*
-* Under the Mapbox Terms of Service, you may not use this code to access Mapbox
-* Mapping APIs other than through Mapbox SDKs.
-*
-* The Mapping APIs documentation is available at https://docs.mapbox.com/api/maps/#maps
-* and the Mapbox Terms of Service are available at https://www.mapbox.com/tos/
-******************************************************************************/
+ * FOLLOWING CODE VIOLATES THE MAPBOX TERMS OF SERVICE  ******
+ * The following code is used to access Mapbox's APIs. Removal or modification
+ * of this code can result in higher fees and/or
+ * termination of your account with Mapbox.
+ *
+ * Under the Mapbox Terms of Service, you may not use this code to access Mapbox
+ * Mapping APIs other than through Mapbox SDKs.
+ *
+ * The Mapping APIs documentation is available at https://docs.mapbox.com/api/maps/#maps
+ * and the Mapbox Terms of Service are available at https://www.mapbox.com/tos/
+ ******************************************************************************/
 
 import assert from 'assert';
 import config from './config';
@@ -69,26 +69,27 @@ export class RequestManager {
     }
 
     transformRequest(url: string, type: ResourceType, tags?: CustomTags, tileID?: CanonicalTileID): RequestParameters {
+        let request: RequestParameters = {url};
         if (typeof tags === 'object') {
-            url = url.replace(/\{ *([\w_]+) *}/g, (str, key) => {
-                let value = tags[key] as any;
-                if (value === undefined) {
+            request.url = request.url.replace(/\{ *([\w_]+) *}/g, (str, key) => {
+                const tag = tags[key];
+                let value = '';
+                if (tag === undefined) {
                     throw new Error(`No value provided for variable ${str}`);
-                } else if (Array.isArray(value)) {
-                    const len = value.length;
+                } else if (Array.isArray(tag)) {
+                    const len = tag.length;
                     const index = tileID ? (tileID.x + tileID.y) % len : Math.floor(Math.random() * len);
-                    value = value[index];
-                } else if (typeof value === 'function') {
-                    value = value(tileID);
+                    value = tag[index] as string;
+                } else if (typeof tag === 'function') {
+                    value = tag(tileID);
                 }
                 return value;
             });
         }
         if (this._transformRequestFn) {
-            return this._transformRequestFn(url, type) || {url};
+            request = this._transformRequestFn(request.url, type) || request;
         }
-
-        return {url};
+        return request;
     }
 
     normalizeStyleURL(url: string, accessToken?: string): string {
@@ -304,7 +305,7 @@ function formatUrl(obj: UrlObject): string {
 
 const telemEventKey = 'mapbox.eventData';
 
-function parseAccessToken(accessToken?: string | null): {u?: string} | null {
+function parseAccessToken(accessToken?: string | null): { u?: string } | null {
     if (!accessToken) {
         return null;
     }
@@ -315,7 +316,7 @@ function parseAccessToken(accessToken?: string | null): {u?: string} | null {
     }
 
     try {
-        const jsonData: {u?: string} = JSON.parse(b64DecodeUnicode(parts[1]));
+        const jsonData: { u?: string } = JSON.parse(b64DecodeUnicode(parts[1]));
         return jsonData;
     } catch (e) {
         return null;
