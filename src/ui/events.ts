@@ -435,7 +435,8 @@ export type MapSourceTileLoadFailEvent = {
 
 export type MapSourceTileProgressEvent = {
     totals: number,
-    loaded: number
+    loaded: number,
+    fails: number
 }
 
 /**

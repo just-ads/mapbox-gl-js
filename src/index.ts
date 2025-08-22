@@ -22,7 +22,7 @@ import {setRTLTextPlugin, getRTLTextPluginStatus} from './source/rtl_text_plugin
 import WorkerPool from './util/worker_pool';
 import WorkerClass from './util/worker_class';
 import {prewarm, clearPrewarmedResources} from './util/worker_pool_factory';
-import {clearTileCache} from './util/tile_request_cache';
+import {clearTileCache, getCacheContainer} from './util/tile_request_cache';
 import {WorkerPerformanceUtils} from './util/worker_performance_utils';
 import {FreeCameraOptions} from './ui/free_camera';
 import {getDracoUrl, setDracoUrl, setMeshoptUrl, getMeshoptUrl} from '../3d-style/util/loaders';
@@ -203,6 +203,10 @@ const exported = {
 
     set maxParallelImageRequests(numRequests: number) {
         config.MAX_PARALLEL_IMAGE_REQUESTS = numRequests;
+    },
+
+    getStorage() {
+        return getCacheContainer();
     },
 
     /**

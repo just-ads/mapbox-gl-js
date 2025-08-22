@@ -22,6 +22,17 @@ export function getQueryParameter(url: string, paramName: string): string | null
     return searchParams.get(paramName);
 }
 
+export function getQueryParameters<T extends string = string>(url: string, paramNames: T[]): { [key in T]: string | null } {
+    const paramStart = url.indexOf('?');
+    if (paramStart < 0) return {} as { [key in T]: string; };
+    const searchParams = new URLSearchParams(url.slice(paramStart));
+    const params = {} as { [key in T]: string; };
+    paramNames.forEach(paramName => {
+        params[paramName] = searchParams.get(paramName);
+    });
+    return params;
+}
+
 export function removeQueryParameters(url: string, params: string[]) {
     const paramStart = url.indexOf('?');
     if (paramStart < 0) return url;

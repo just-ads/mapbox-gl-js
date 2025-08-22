@@ -298,15 +298,23 @@ class SourceCache extends Evented {
 
             this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id}));
         }
+        this._progress();
+    }
 
+    _progress() {
         if (this._source.listens('progress')) {
             let totals = 0;
+            let fails = 0;
             let loaded = 0;
             for (const tilesKey in this._tiles) {
+                const tile = this._tiles[tilesKey];
                 totals++;
-                if (this._tiles[tilesKey].loaded()) loaded++;
+                if (tile.state !== 'loading' && tile.state !== 'reloading') {
+                    loaded++;
+                    if (tile.state === 'errored') fails++;
+                }
             }
-            this._source.fire(new Event('progress', {totals, loaded}));
+            this._source.fire(new Event('progress', {totals, loaded, fails}));
         }
     }
 
@@ -894,7 +902,7 @@ class SourceCache extends Evented {
         tile.uses++;
         this._tiles[tileID.key] = tile;
         if (!cached) this._source.fire(new Event('dataloading', {tile, coord: tile.tileID, dataType: 'source'}));
-
+        if (cached) this._progress();
         return tile;
     }
 
@@ -941,6 +949,7 @@ class SourceCache extends Evented {
             this._abortTile(tile);
             this._unloadTile(tile);
         }
+        this._progress();
     }
 
     /**

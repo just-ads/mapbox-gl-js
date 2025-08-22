@@ -1,6 +1,6 @@
 import {warnOnce, parseCacheControl} from './util';
 import {stripQueryParameters, setQueryParameters} from './url';
-import {cacheGetFromDB, cachePutToDB, clearDB, enforceDBCacheSizeLimit} from "./tile_db_cache";
+import {cacheGetFromDB, cachePutToDB, clearDB, enforceDBCacheSizeLimit, getCacheDB} from "./tile_db_cache";
 
 import type Dispatcher from './dispatcher';
 
@@ -82,7 +82,6 @@ function isNullBodyStatus(status: Response["status"]): boolean {
 export function cachePut(request: Request, response: Response, requestTime: number) {
     cacheOpen();
     const url = request.headers.get('CacheUrl') || request.url;
-    request.headers.delete('CacheUrl');
     if (sharedCache == null) {
         cachePutToDB(url, response);
         return;
@@ -137,34 +136,49 @@ export function cacheGet(
 ): void {
     cacheOpen();
     const url = request.headers.get('CacheUrl') || request.url;
+    const secondUrl = request.headers.get('SecondCacheUrl');
     request.headers.delete('CacheUrl');
-    if (sharedCache == null) return cacheGetFromDB(url, callback);
+    request.headers.delete('Persistence');
+    request.headers.delete('CacheGroup');
+    request.headers.delete('SecondCacheUrl');
 
-    sharedCache
-        .then(cache => {
-            let strippedURL = stripQueryParameters(url, {persistentParams: PERSISTENT_PARAMS});
+    const getCache = (url: string, callback: (error?: Error, response?: Response, fresh?: boolean) => void) => {
+        if (sharedCache == null) return cacheGetFromDB(url, callback);
 
-            const range = request.headers.get('Range');
-            if (range) strippedURL = setQueryParameters(strippedURL, {range});
+        sharedCache
+            .then(cache => {
+                let strippedURL = stripQueryParameters(url, {persistentParams: PERSISTENT_PARAMS});
 
-            // manually strip URL instead of `ignoreSearch: true` because of a known
-            // performance issue in Chrome https://github.com/mapbox/mapbox-gl-js/issues/8431
-            cache.match(strippedURL)
-                .then(response => {
-                    const fresh = isFresh(response);
+                const range = request.headers.get('Range');
+                if (range) strippedURL = setQueryParameters(strippedURL, {range});
 
-                    // Reinsert into cache so that order of keys in the cache is the order of access.
-                    // This line makes the cache a LRU instead of a FIFO cache.
-                    cache.delete(strippedURL).catch(callback);
-                    if (fresh) {
-                        cache.put(strippedURL, response.clone()).catch(callback);
-                    }
+                // manually strip URL instead of `ignoreSearch: true` because of a known
+                // performance issue in Chrome https://github.com/mapbox/mapbox-gl-js/issues/8431
+                cache.match(strippedURL)
+                    .then(response => {
+                        const fresh = isFresh(response);
 
-                    callback(null, response, fresh);
-                })
-                .catch(callback);
-        })
-        .catch(callback);
+                        // Reinsert into cache so that order of keys in the cache is the order of access.
+                        // This line makes the cache a LRU instead of a FIFO cache.
+                        cache.delete(strippedURL).catch(callback);
+                        if (fresh) {
+                            cache.put(strippedURL, response.clone()).catch(callback);
+                        }
+
+                        callback(null, response, fresh);
+                    })
+                    .catch(callback);
+            })
+            .catch(callback);
+    };
+
+    getCache(secondUrl, (error, response, fresh) => {
+        if (!response) {
+            getCache(url, callback);
+        } else {
+            callback(error, response, fresh);
+        }
+    });
 }
 
 function isFresh(response: Response) {
@@ -203,6 +217,7 @@ export function enforceCacheSizeLimit(limit: number) {
         .then(cache => {
             cache.keys().then(keys => {
                 for (let i = 0; i < keys.length - limit; i++) {
+                    if (keys[i].headers.get('Persistence')) continue;
                     cache.delete(keys[i]).catch(e => warnOnce(e.message));
                 }
             }).catch(e => warnOnce(e.message));
@@ -226,4 +241,15 @@ export function clearTileCache(callback?: (err?: Error | null) => void) {
 export function setCacheLimits(limit: number, checkThreshold: number) {
     cacheLimit = limit;
     cacheCheckThreshold = checkThreshold;
+}
+
+export function getCacheContainer(): Promise<Cache | {
+    db: IDBDatabase
+    getStore: (mode?: IDBTransactionMode, options?: IDBTransactionOptions) => IDBObjectStore
+}> {
+    return new Promise((resolve, reject) => {
+        cacheOpen();
+        const cachePromise = sharedCache !== null ? sharedCache : getCacheDB();
+        cachePromise.then(resolve).catch(reject);
+    });
 }

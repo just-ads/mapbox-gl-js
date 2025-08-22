@@ -206,6 +206,16 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         return this;
     }
 
+    setMinMaxZoom(minZoom: number, maxZoom: number): this {
+        this.minzoom = minZoom;
+        this.maxzoom = maxZoom;
+        this._options.minzoom = minZoom;
+        this._options.maxzoom = maxZoom;
+        this.reload();
+
+        return this;
+    }
+
     onRemove(_: Map) {
         this.cancelTileJSONRequest();
     }

@@ -4,7 +4,7 @@ import config from './config';
 import assert from 'assert';
 import {cacheGet, cachePut} from './tile_request_cache';
 import webpSupported from './webp_supported';
-import {getQueryParameter, removeQueryParameters} from "./url";
+import {getQueryParameter, getQueryParameters, removeQueryParameters} from "./url";
 
 import type {Callback} from '../types/callback';
 import type {Cancelable} from '../types/cancelable';
@@ -112,12 +112,22 @@ export const getReferrer: () => string = isWorker() ?
 // via a file:// URL.
 const isFileURL = (url: string) => /^file:/.test(url) || (/^file:/.test(getReferrer()) && !/^\w+:/.test(url));
 const CACHE_KEY = 'xzcacheurl';
+const SECOND_CACHE_KEY = 'xzsecondcacheurl';
+const PERS_CACHE_KEY = 'xzpersistence';
+const CACHE_GROUP = 'tilecachegroup';
 
 function makeFetchRequest(requestParameters: RequestParameters, callback: ResponseCallback<unknown>): Cancelable {
     const controller = new AbortController();
 
-    const cacheUrl = getQueryParameter(requestParameters.url, CACHE_KEY);
-    requestParameters.url = removeQueryParameters(requestParameters.url, [CACHE_KEY]);
+    const queryParameters = getQueryParameters(requestParameters.url, [CACHE_KEY, SECOND_CACHE_KEY, PERS_CACHE_KEY, CACHE_GROUP]);
+    const {
+        xzcacheurl: cacheUrl,
+        xzsecondcacheurl: secondCacheUrl,
+        xzpersistence: persistence,
+        tilecachegroup: cacheGroup
+    } = queryParameters || {};
+
+    requestParameters.url = removeQueryParameters(requestParameters.url, [CACHE_KEY, SECOND_CACHE_KEY, PERS_CACHE_KEY, CACHE_GROUP]);
 
     const request = new Request(requestParameters.url, {
         method: requestParameters.method || 'GET',
@@ -131,7 +141,7 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
     let complete = false;
     let aborted = false;
 
-    const cacheSearch = cacheUrl || hasCacheDefeatingSku(request.url);
+    const cacheSearch = (queryParameters && (queryParameters[CACHE_KEY] || queryParameters[SECOND_CACHE_KEY])) || hasCacheDefeatingSku(request.url);
     const cacheIgnoringSave = request.url.indexOf('ignoring=save') > 0;
 
     if (requestParameters.type === 'json') {
@@ -189,6 +199,10 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
                 // in most browsers but in Firefox it seems to sometimes crash the tab. Adding
                 // it to the cache here avoids that error.
                 // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                persistence && request.headers.set('Persistence', 'true');
+                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                cacheGroup && request.headers.set('CacheGroup', cacheGroup);
+                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                 cacheUrl && request.headers.set('CacheUrl', cacheUrl);
                 cachePut(request, cacheableResponse, requestTime);
             }
@@ -202,6 +216,12 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
     if (cacheSearch) {
         // eslint-disable-next-line @typescript-eslint/no-unused-expressions
         cacheUrl && request.headers.set('CacheUrl', cacheUrl);
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        cacheGroup && request.headers.set('CacheGroup', cacheGroup);
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        persistence && request.headers.set('Persistence', 'true');
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        secondCacheUrl && request.headers.set('SecondCacheUrl', secondCacheUrl);
         cacheGet(request, validateOrFetch);
     } else {
         validateOrFetch(null, null);
