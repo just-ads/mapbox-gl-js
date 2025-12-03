@@ -2,9 +2,9 @@
 <html>
 <head>
     <title>Mapbox GL JS debug page</title>
-    <meta charset='utf-8'>
+    <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <link rel='stylesheet' href='../dist/mapbox-gl.css' />
+    <link rel="stylesheet" href="../dist/mapbox-gl.css" />
     <style>
         body { margin: 0; padding: 0 }
         html, body, #map { height: 100%; }
@@ -19,8 +19,8 @@
 </head>
 
 <body>
-<div id='map'></div>
-<div id='checkboxes'>
+<div id="map"></div>
+<div id="checkboxes">
     <label><input id='terrain-checkbox' type='checkbox' checked> terrain</label><br />
     <label><input id='globe-checkbox' type='checkbox' checked> globe</label><br />
     <label><input id='satellite-checkbox' type='checkbox'> satellite</label><br />
@@ -31,51 +31,21 @@
     <label><input id='custom-checkbox' type='checkbox'> add a custom layer</label><br />
 </div>
 
-<script src='../dist/mapbox-gl-dev.js'></script>
-<script src='access_token_generated.js'></script>
-<script src='layers_config.js'></script>
-<script>
+<script src="../dist/mapbox-gl-dev.js"></script>
+<script type="module">
+import {getAccessToken} from './access_token_generated.js';
 
+mapboxgl.accessToken = getAccessToken();
 
 var map = window.map = new mapboxgl.Map({
     container: 'map',
     devtools: true,
     zoom: 13.5,
     center: [-122.45814, 37.76159],
-    style: {
-        version: 8,
-        light: {
-            "anchor": "viewport",
-            "color": "white",
-            "intensity": 0.4
-        },
-        fog: {
-            'horizon-blend': 0.3,
-            'color': '#f8f0e3',
-            'high-color': '#add8e6',
-            'space-color': '#d8f2ff',
-            'star-intensity': 0.0
-        },
-        sources: {
-            terrain: {
-                type: 'raster-dem',
-                tileSize: 512,
-                maxzoom: 10,
-                minzoom: 5,
-                tiles: ['https://map.xinzhi.space/terrain/srtmv4/{z}/{x}/{y}.png'],
-                bounds: [71.25, 18, 135.5, 54]
-            },
-        },
-        layers: [{
-            id: "background", type: "background", "layout": {}, paint: {
-                "background-color": "hsl(0,0%,30%)"
-            }, zIndex: -10
-        }]
-    },
+    style: 'mapbox://styles/mapbox/streets-v11',
     // style: 'mapbox://styles/claretrainor/ck2pc4ljf1jbe1codiy7oxzjg', // Style with additional traffic vector source.
     hash: true,
     projection: 'globe',
-    useWebGL2: true
 });
 
 map.addControl(new mapboxgl.NavigationControl());
@@ -97,15 +67,70 @@ let buildingsLayerId = '3d-buildings';
 const hillshadeId = 'mapbox-dem-hillshade';
 
 map.on('style.load', function() {
-    map.setLight({
-        intensity: 0.26
+    map.addSource('mapbox-dem', {
+        "type": "raster-dem",
+        "url": "mapbox://mapbox.mapbox-terrain-dem-v1",
+        "tileSize": 514,
+        "maxzoom": 14
     });
-    // const buildingExtrusions = map.style._order.find((id) => map.style.getLayer(id).type === 'fill-extrusion');
-    // if (buildingExtrusions) {
-    //     buildingsLayerId = buildingExtrusions;
-    // } else {
-    //
-    // }
+    map.addSource('ethnicity', {
+        type: 'vector',
+        url: 'mapbox://examples.8fgz4egr',
+        maxzoom: 16
+    });
+
+    map.addSource("satellite", {
+        "type": "raster",
+        "url": "mapbox://mapbox.satellite",
+        "tileSize": 512
+    });
+
+    map.addLayer({
+        "id": "satellite-background",
+        "type": "background",
+        "layout": {
+            "visibility": "none"
+        },
+        "paint": {
+            "background-color": "rgb(128,128,128)",
+            "background-opacity": 0.01
+        }
+    });
+    map.addLayer({
+        "id": "satellite",
+        "type": "raster",
+        "source": "satellite",
+        "layout": {
+            "visibility": "none"
+        }
+    });
+    map.setLights([
+        {
+            'type': 'flat',
+            'id': 'flat',
+            'properties': {
+                'intensity': 0.26
+            }
+        }
+    ]);
+    const buildingExtrusions = map.style._order.find((id) => map.style.getLayer(id).type === 'fill-extrusion');
+    if (buildingExtrusions) {
+        buildingsLayerId = buildingExtrusions;
+    } else {
+        map.addLayer({
+            'id': buildingsLayerId,
+            'source': 'composite',
+            'source-layer': 'building',
+            'filter': ['==', 'extrude', 'true'],
+            'type': 'fill-extrusion',
+            'minzoom': 14,
+            'paint': {
+                'fill-extrusion-color': 'white',
+                'fill-extrusion-height': ["get", "height"],
+                'fill-extrusion-base': ["get", "min_height"]
+            }
+        }, 'waterway-label');
+    }
 
     map.addLayer({
         'id': 'sky',
@@ -256,7 +281,7 @@ document.getElementById('terrain-checkbox').onclick = function() {
 };
 
 document.getElementById('satellite-checkbox').onclick = function() {
-    for (const layerId in layersConfig) {
+    for (const layerId in map.style._layers) {
         if (layerId.startsWith('satellite') || layerId === buildingsLayerId) continue;
         map.setLayoutProperty(layerId, 'visibility', !this.checked ? 'visible' : 'none');
     }

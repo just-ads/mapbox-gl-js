@@ -23,10 +23,7 @@ import type {RasterizedImageMap} from '../render/image_manager';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {StringifiedImageVariant} from '../style-spec/expression/types/image_variant';
 import type {StyleModelMap} from '../style/style_mode';
-
-export type WorkerSourceVectorOptions = {
-
-}
+import type {IndoorTileOptions} from '../style/indoor_data.js';
 
 export type WorkerCoverTilesRequest = WorkerSourceRequest & {
     tileID: OverscaledTileID,
@@ -89,7 +86,11 @@ export type WorkerSourceVectorTileRequest = WorkerSourceTileRequest & {
     tileSize: number;
     tileZoom: number;
     zoom: number;
-    data?: unknown;
+    data?: {
+        rawData: ArrayBuffer;
+        expires?: string;
+        cacheControl?: string;
+    };
     extraShadowCaster?: boolean;
     isSymbolTile?: boolean | null;
     partial?: boolean;
@@ -97,6 +98,7 @@ export type WorkerSourceVectorTileRequest = WorkerSourceTileRequest & {
     worldview?: string | null;
     vtOptions?: any;
     localizableLayerIds?: Set<string>;
+    indoor?: IndoorTileOptions | null;
 };
 
 /**
@@ -141,6 +143,7 @@ export type WorkerSourceVectorTileResult = {
     rawTileData?: ArrayBuffer;
     resourceTiming?: Array<PerformanceResourceTiming>;
     brightness: number;
+    responseHeaders?: Map<string, string>;
     // Only used for benchmarking:
     glyphMap?: GlyphMap;
     iconMap?: StyleImageMap<StringifiedImageVariant>;
@@ -227,6 +230,7 @@ export interface WorkerSourceConstructor {
         availableModels?: StyleModelMap,
         isSpriteLoaded?: boolean,
         loadData?: (params: { source: string; scope: string }, callback: Callback<unknown>) => () => void | undefined,
-        brightness?: number
+        brightness?: number,
+        worldview?: string
     ): WorkerSource;
 }

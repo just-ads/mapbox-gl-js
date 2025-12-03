@@ -1,26 +1,33 @@
 import {default as ValidationError, ValidationWarning} from '../error/validation_error';
 import validate from './validate';
-import getType from '../util/get_type';
+import {getType, isObject} from '../util/get_type';
 
-import type {ValidationOptions} from './validate';
+import type {StyleReference} from '../reference/latest';
+import type {StyleSpecification} from '../types';
+import type {StylePropertySpecification} from '../style-spec';
 
-export default function validateSnow(options: ValidationOptions): Array<ValidationError> {
+type SnowValidatorOptions = {
+    key: string;
+    value: unknown;
+    style: Partial<StyleSpecification>;
+    styleSpec: StyleReference;
+};
+
+export default function validateSnow(options: SnowValidatorOptions): ValidationError[] {
     const snow = options.value;
     const style = options.style;
     const styleSpec = options.styleSpec;
-    const snowSpec = styleSpec.snow;
-    let errors = [];
+    const snowSpec = styleSpec.snow as Record<PropertyKey, StylePropertySpecification>;
 
-    const rootType = getType(snow);
     if (snow === undefined) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return errors;
-    } else if (rootType !== 'object') {
-        errors = errors.concat([new ValidationError('snow', snow, `object expected, ${rootType} found`)]);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return errors;
+        return [];
     }
 
+    if (!isObject(snow)) {
+        return [new ValidationError('snow', snow, `object expected, ${getType(snow)} found`)];
+    }
+
+    let errors: ValidationError[] = [];
     for (const key in snow) {
         const transitionMatch = key.match(/^(.*)-transition$/);
 
@@ -28,6 +35,7 @@ export default function validateSnow(options: ValidationOptions): Array<Validati
             errors = errors.concat(validate({
                 key,
                 value: snow[key],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 valueSpec: styleSpec.transition,
                 style,
                 styleSpec
@@ -36,6 +44,7 @@ export default function validateSnow(options: ValidationOptions): Array<Validati
             errors = errors.concat(validate({
                 key,
                 value: snow[key],
+
                 valueSpec: snowSpec[key],
                 style,
                 styleSpec
@@ -45,6 +54,5 @@ export default function validateSnow(options: ValidationOptions): Array<Validati
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return errors;
 }

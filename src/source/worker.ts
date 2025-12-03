@@ -7,7 +7,7 @@ import GeoJSONWorkerSource from './geojson_worker_source';
 import Tiled3dModelWorkerSource from '../../3d-style/source/tiled_3d_model_worker_source';
 import RasterTileWorkerSource from "./raster_tile_worker_source";
 import assert from 'assert';
-import {plugin as globalRTLTextPlugin} from './rtl_text_plugin';
+import {plugin as globalRTLTextPlugin, rtlPluginStatus} from './rtl_text_plugin';
 import {enforceCacheSizeLimit} from '../util/tile_request_cache';
 import {PerformanceUtils} from '../util/performance';
 import {Event} from '../util/evented';
@@ -23,6 +23,7 @@ import type {RasterizedImageMap} from '../render/image_manager';
 import type {ActorMessage, ActorMessages} from '../util/actor_messages';
 import type {WorkerSource, WorkerSourceConstructor} from './worker_source';
 import type {StyleModelMap} from '../style/style_mode';
+import type {Callback} from '../types/callback';
 
 /**
  * Source types that can instantiate a {@link WorkerSource} in {@link MapWorker}.
@@ -61,8 +62,11 @@ export default class MapWorker {
     isSpriteLoaded: WorkerScopeRegistry<boolean>;
     referrer: string | null | undefined;
     dracoUrl: string | null | undefined;
+    meshoptUrl: string | null | undefined;
     brightness: number | null | undefined;
     imageRasterizer: ImageRasterizer;
+    worldview: string | undefined;
+    rtlPluginParsingListeners: Array<Callback<boolean>>;
 
     constructor(self: Worker) {
         PerformanceUtils.measure('workerEvaluateScript');
@@ -74,6 +78,7 @@ export default class MapWorker {
         this.availableModels = {};
         this.isSpriteLoaded = {};
         this.imageRasterizer = new ImageRasterizer();
+        this.rtlPluginParsingListeners = [];
 
         this.projections = {};
         this.defaultProjection = getProjection({name: 'mercator'});
@@ -103,9 +108,19 @@ export default class MapWorker {
             if (globalRTLTextPlugin.isParsed()) {
                 throw new Error('RTL text plugin already registered.');
             }
+
+            globalRTLTextPlugin.setState({
+                pluginStatus: rtlPluginStatus.parsed,
+                pluginURL: globalRTLTextPlugin.getPluginURL()
+            });
             globalRTLTextPlugin['applyArabicShaping'] = rtlTextPlugin.applyArabicShaping;
             globalRTLTextPlugin['processBidirectionalText'] = rtlTextPlugin.processBidirectionalText;
             globalRTLTextPlugin['processStyledBidirectionalText'] = rtlTextPlugin.processStyledBidirectionalText;
+
+            for (const callback of this.rtlPluginParsingListeners) {
+                callback(null, true);
+            }
+            this.rtlPluginParsingListeners = [];
         };
     }
 
@@ -203,6 +218,11 @@ export default class MapWorker {
         callback();
     }
 
+    setWorldview(mapId: number, worldview: ActorMessages['setWorldview']['params'], callback: ActorMessages['setWorldview']['callback']) {
+        this.worldview = worldview;
+        callback();
+    }
+
     setLayers(mapId: number, params: ActorMessages['setLayers']['params'], callback: ActorMessages['setLayers']['callback']) {
         this.getLayerIndex(mapId, params.scope).replace(params.layers, params.options);
         callback();
@@ -272,26 +292,42 @@ export default class MapWorker {
             this.self.importScripts(params.url);
             callback();
         } catch (e) {
-            callback(e.toString());
+            callback(e as Error);
         }
     }
 
     syncRTLPluginState(mapId: number, state: ActorMessages['syncRTLPluginState']['params'], callback: ActorMessages['syncRTLPluginState']['callback']) {
+        if (globalRTLTextPlugin.isParsed()) {
+            callback(null, true);
+            return;
+        }
+        if (globalRTLTextPlugin.isParsing()) {
+            this.rtlPluginParsingListeners.push(callback);
+            return;
+        }
         try {
             globalRTLTextPlugin.setState(state);
             const pluginURL = globalRTLTextPlugin.getPluginURL();
             if (
                 globalRTLTextPlugin.isLoaded() &&
                 !globalRTLTextPlugin.isParsed() &&
+                !globalRTLTextPlugin.isParsing() &&
                 pluginURL != null // Not possible when `isLoaded` is true, but keeps flow happy
             ) {
+                globalRTLTextPlugin.setState({
+                    pluginStatus: rtlPluginStatus.parsing,
+                    pluginURL: globalRTLTextPlugin.getPluginURL()
+                });
                 this.self.importScripts(pluginURL);
-                const complete = globalRTLTextPlugin.isParsed();
-                const error = complete ? undefined : new Error(`RTL Text Plugin failed to import scripts from ${pluginURL}`);
-                callback(error, complete);
+
+                if (globalRTLTextPlugin.isParsed()) {
+                    callback(null, true);
+                } else {
+                    this.rtlPluginParsingListeners.push(callback);
+                }
             }
         } catch (e) {
-            callback(e.toString());
+            callback(e as Error);
         }
     }
 
@@ -365,6 +401,7 @@ export default class MapWorker {
                 scheduler: this.actor.scheduler
             } as Actor;
 
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
             workerSources[mapId][scope][type][source] = new this.workerSourceTypes[type](
                 actor,
                 this.getLayerIndex(mapId, scope),
@@ -372,7 +409,8 @@ export default class MapWorker {
                 this.getAvailableModels(mapId, scope),
                 this.isSpriteLoaded[mapId][scope],
                 undefined,
-                this.brightness
+                this.brightness,
+                this.worldview
             );
         }
 

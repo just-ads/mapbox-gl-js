@@ -25,6 +25,7 @@ import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {SpritePositions} from '../../util/image';
 import type {TypedStyleLayer} from '../../style/style_layer/typed_style_layer';
 import type {ImageId} from '../../style-spec/expression/types/image_id';
+import type {GlobalProperties} from '../../style-spec/expression';
 
 class ClipBucket implements Bucket {
     index: number;
@@ -37,6 +38,9 @@ class ClipBucket implements Bucket {
 
     footprints: Array<Footprint>;
 
+    worldview: string;
+    hasAppearances: boolean | null;
+
     constructor(options: BucketParameters<ClipStyleLayer>) {
         this.zoom = options.zoom;
         this.layers = options.layers;
@@ -46,6 +50,9 @@ class ClipBucket implements Bucket {
 
         this.stateDependentLayerIds = this.layers.filter((l) => l.isStateDependent()).map((l) => l.id);
         this.footprints = [];
+
+        this.worldview = options.worldview;
+        this.hasAppearances = null;
     }
 
     updateFootprints(id: UnwrappedTileID, footprints: Array<TileFootprint>) {
@@ -57,14 +64,17 @@ class ClipBucket implements Bucket {
         }
     }
 
+    updateAppearances(_canonical?: CanonicalTileID, _featureState?: FeatureStates, _availableImages?: Array<ImageId>, _globalProperties?: GlobalProperties) {
+    }
+
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
-        const bucketFeatures = [];
+        const bucketFeatures: BucketFeature[] = [];
 
         for (const {feature, id, index, sourceLayerIndex} of features) {
             const needGeometry = this.layers[0]._featureFilter.needGeometry;
             const evaluationFeature = toEvaluationFeature(feature, needGeometry);
 
-            if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom), evaluationFeature, canonical))
+            if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom, {worldview: this.worldview, activeFloors: options.activeFloors}), evaluationFeature, canonical))
                 continue;
 
             const bucketFeature: BucketFeature = {
@@ -100,7 +110,7 @@ class ClipBucket implements Bucket {
     upload(_context: Context) {
     }
 
-    update(_states: FeatureStates, _vtLayer: VectorTileLayer, _availableImages: ImageId[], _imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
+    update(_states: FeatureStates, _vtLayer: VectorTileLayer, _availableImages: ImageId[], _imagePositions: SpritePositions, _layers: ReadonlyArray<TypedStyleLayer>, _isBrightnessChanged: boolean, _brightness?: number | null) {
     }
 
     destroy() {
@@ -136,7 +146,9 @@ class ClipBucket implements Bucket {
                 }
             }
 
-            const indices = earcut(flattened, holeIndices);
+            // earcut library lacks proper type definitions
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            const indices = earcut(flattened, holeIndices) as number[];
             assert(indices.length % 3 === 0);
 
             const grid = new TriangleGridIndex(points, indices, 8, 256);
@@ -145,7 +157,7 @@ class ClipBucket implements Bucket {
                 indices,
                 grid,
                 min,
-                max
+                max,
             });
         }
     }

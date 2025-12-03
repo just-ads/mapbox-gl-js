@@ -16,6 +16,7 @@ function calculateSignedArea(ring: Ring): number {
     for (let i = 0, len = ring.length, j = len - 1, p1, p2; i < len; j = i++) {
         p1 = ring[i];
         p2 = ring[j];
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         sum += (p2.x - p1.x) * (p1.y + p2.y);
     }
     return sum;
@@ -31,7 +32,7 @@ export function classifyRings(rings: Array<Ring>, maxRings: number): Array<Array
 
     if (len <= 1) return [rings];
 
-    const polygons = [];
+    const polygons: Array<Array<Ring>> = [];
     let polygon,
         ccw;
 
@@ -44,13 +45,16 @@ export function classifyRings(rings: Array<Ring>, maxRings: number): Array<Array
         if (ccw === undefined) ccw = area < 0;
 
         if (ccw === area < 0) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             if (polygon) polygons.push(polygon);
             polygon = [rings[i]];
 
         } else {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             (polygon).push(rings[i]);
         }
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     if (polygon) polygons.push(polygon);
 
     // Earcut performance degrades with the # of rings in a polygon. For this
@@ -63,7 +67,6 @@ export function classifyRings(rings: Array<Ring>, maxRings: number): Array<Array
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return polygons;
 }
 

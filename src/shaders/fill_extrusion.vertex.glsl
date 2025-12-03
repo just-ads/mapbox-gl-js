@@ -2,6 +2,7 @@
 #include "_prelude_terrain.vertex.glsl"
 #include "_prelude_shadow.vertex.glsl"
 #include "_prelude_lighting.glsl"
+#include "_prelude_material_table.vertex.glsl"
 
 uniform mat4 u_matrix;
 uniform vec3 u_lightcolor;
@@ -87,6 +88,9 @@ vec3 sRGBToLinear(vec3 srgbIn) {
 #pragma mapbox: define highp float emissive_strength
 
 void main() {
+
+    DECLARE_MATERIAL_TABLE_INFO
+
     #pragma mapbox: initialize highp float base
     #pragma mapbox: initialize highp float height
     #pragma mapbox: initialize highp vec4 color
@@ -158,7 +162,11 @@ void main() {
     vec3 centroid_random = vec3(centroid_pos.xy, centroid_pos.x + centroid_pos.y + 1.0);
     vec3 ground_pos = centroid_pos.x == 0.0 ? pos.xyz : (centroid_random / 8.0);
     vec4 ground = u_matrix * vec4(ground_pos.xy, ele, 1.0);
+#ifdef CLIP_ZERO_TO_ONE
+    cutoff = cutoff_opacity(u_cutoff_params, ground.z * 2.0 - ground.w);
+#else
     cutoff = cutoff_opacity(u_cutoff_params, ground.z);
+#endif
     if (centroid_pos.y != 0.0 && centroid_pos.x != 0.0) {
         vec3 g = floor(ground_pos);
         vec3 mod_ = centroid_random - g * 8.0;

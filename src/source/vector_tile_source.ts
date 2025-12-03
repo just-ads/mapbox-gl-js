@@ -1,9 +1,9 @@
 import {Event, ErrorEvent, Evented} from '../util/evented';
-import {extend, pick} from '../util/util';
+import {getExpiryDataFromHeaders, pick} from '../util/util';
 import loadTileJSON from './load_tilejson';
 import {postTurnstileEvent} from '../util/mapbox';
 import TileBounds from './tile_bounds';
-import {ResourceType} from '../util/ajax';
+import {AJAXError, ResourceType} from '../util/ajax';
 import browser from '../util/browser';
 import {cacheEntryPossiblyAdded} from '../util/tile_request_cache';
 import {loadVectorTile} from './load_vector_tile';
@@ -22,7 +22,6 @@ import type {VectorSourceSpecification, PromoteIdSpecification, CustomTags} from
 import type Actor from '../util/actor';
 import type {LoadVectorTileResult} from './load_vector_tile';
 import type {WorkerSourceVectorTileRequest, WorkerSourceVectorTileResult} from './worker_source';
-import type {AJAXError} from '../util/ajax';
 
 /**
  * A source containing vector tiles in [Mapbox Vector Tile format](https://docs.mapbox.com/vector-tiles/reference/).
@@ -114,8 +113,8 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
         this.isTileClipped = true;
         this._loaded = false;
 
-        extend(this, pick(options, ['url', 'scheme', 'tileSize', 'promoteId', 'vtOptions']));
-        this._options = extend({type: 'vector'}, options);
+        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize', 'promoteId', 'vtOptions']));
+        this._options = Object.assign({type: 'vector'}, options);
 
         this._collectResourceTiming = !!options.collectResourceTiming;
         this.customTags = options.customTags;
@@ -144,7 +143,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
 
                 this.fire(new ErrorEvent(err));
             } else if (tileJSON) {
-                extend(this, tileJSON);
+                Object.assign(this, tileJSON);
 
                 this.hasWorldviews = !!tileJSON.worldview_options;
                 if (tileJSON.worldview_default) {
@@ -253,10 +252,10 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
     }
 
     serialize(): VectorSourceSpecification {
-        return extend({}, this._options);
+        return Object.assign({}, this._options);
     }
 
-    loadTile(tile: Tile, callback: Callback<undefined>) {
+    loadTile(tile: Tile, callback: Callback<WorkerSourceVectorTileResult>) {
         const tileUrl = tile.tileID.canonical.url(this.tiles, this.scheme);
         const url = this.map._requestManager.normalizeTileURL(tileUrl);
         const request = this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, tile.tileID.canonical);
@@ -285,13 +284,14 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
             extraShadowCaster: tile.isExtraShadowCaster,
             tessellationStep: this.map._tessellationStep,
             scaleFactor: this.map.getScaleFactor(),
+            worldview: this.map.getWorldview() || this.worldviewDefault,
+            indoor: this.map.indoor ? this.map.indoor.getIndoorTileOptions(this.id, this.scope) : null
         };
 
         // If we request a Mapbox URL, use the `worldview` param in the WorkerTile
         // to filter out features in the localizable layers
         // that are not visible in the current worldview.
         if (this.hasWorldviews && isMapboxURL(tileUrl)) {
-            params.worldview = this.map.getWorldview() || this.worldviewDefault;
             params.localizableLayerIds = this.localizableLayerIds;
         }
 
@@ -303,22 +303,27 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
             // if workers are not ready to receive messages yet, use the idle time to preemptively
             // load tiles on the main thread and pass the result instead of requesting a worker to do so
             if (!this.dispatcher.ready) {
+
                 const cancel = loadVectorTile.call({deduped: this._deduped}, params, (err?: Error | null, data?: LoadVectorTileResult | null) => {
                     if (err || !data) {
                         done.call(this, err);
                     } else {
+                        const expiryData = getExpiryDataFromHeaders(data.responseHeaders);
                         // the worker will skip the network request if the data is already there
                         params.data = {
-                            cacheControl: data.cacheControl,
-                            expires: data.expires,
-                            rawData: data.rawData.slice(0)
+                            rawData: data.rawData.slice(0),
+                            expires: expiryData.expires,
+                            cacheControl: expiryData.cacheControl,
                         };
+
                         if (tile.actor) tile.actor.send('loadTile', params, done.bind(this), undefined, true);
                     }
                 }, true);
+
                 tile.request = {cancel};
 
             } else {
+
                 tile.request = tile.actor.send('loadTile', params, done.bind(this), undefined, true);
             }
 
@@ -327,16 +332,17 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
             tile.reloadCallback = callback;
 
         } else {
+
             tile.request = tile.actor.send('reloadTile', params, done.bind(this));
         }
 
-        function done(err?: AJAXError | null, data?: WorkerSourceVectorTileResult | null) {
+        function done(this: VectorTileSource, err?: Error | null, data?: WorkerSourceVectorTileResult | null) {
             delete tile.request;
 
             if (tile.aborted)
                 return callback(null);
 
-            if (err && err.status !== 404) {
+            if (err && err instanceof AJAXError && err.status !== 404) {
                 return callback(err);
             }
 
@@ -345,10 +351,9 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
 
             if (this.map._refreshExpiredTiles && data) tile.setExpiryData(data);
             tile.loadVectorData(data, this.map.painter);
-
             cacheEntryPossiblyAdded(this.dispatcher);
 
-            callback(null);
+            callback(null, data);
 
             if (tile.reloadCallback) {
                 this.loadTile(tile, tile.reloadCallback);

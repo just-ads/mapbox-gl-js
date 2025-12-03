@@ -23,6 +23,7 @@ import type {Callback} from '../types/callback';
 import type {FeatureState} from '../style-spec/expression/index';
 import type {QueryGeometry, TilespaceQueryGeometry} from '../style/query_geometry';
 import type {StringifiedImageId} from '../style-spec/expression/types/image_id';
+import type {LoadVectorTileResult} from './load_vector_tile';
 
 /**
  * `SourceCache` is responsible for
@@ -73,7 +74,7 @@ class SourceCache extends Evented {
         this.id = id;
         this._onlySymbols = onlySymbols;
 
-        source.on('data', (e) => {
+        source.on('data', (e: {dataType?: string; sourceDataType?: string}) => {
             // this._sourceLoaded signifies that the TileJSON is loaded if applicable.
             // if the source type does not come with a TileJSON, the flag signifies the
             // source data has loaded (in other words, GeoJSON has been tiled on the worker and is ready)
@@ -95,6 +96,7 @@ class SourceCache extends Evented {
 
         this._source = source;
         this._tiles = {};
+
         this._cache = new TileCache(0, this._unloadTile.bind(this));
         this._timers = {};
         this._cacheTimers = {};
@@ -182,7 +184,7 @@ class SourceCache extends Evented {
 
         for (const i in this._tiles) {
             const tile = this._tiles[i];
-            tile.upload(context);
+            tile.upload(context, this.map ? this.map.painter : undefined);
             tile.prepare(this.map.style.imageManager, this.map ? this.map.painter : null, this._source.scope);
         }
     }
@@ -258,7 +260,7 @@ class SourceCache extends Evented {
         this._loadTile(tile, this._tileLoaded.bind(this, tile, id, state));
     }
 
-    _tileLoaded(tile: Tile, id: number, previousState: TileState, err?: AJAXError | null) {
+    _tileLoaded(tile: Tile, id: number, previousState: TileState, err?: AJAXError | null, data?: LoadVectorTileResult | null) {
         if (err) {
             tile.state = 'errored';
             if (err.status !== 404) {
@@ -295,8 +297,10 @@ class SourceCache extends Evented {
             this._setTileReloadTimer(id, tile);
             if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
             this._state.initializeTileState(tile, this.map ? this.map.painter : null);
+        let responseHeaders: Map<string, string> = new Map();
+        if (data && data.responseHeaders) responseHeaders = data.responseHeaders;
 
-            this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id}));
+            this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id, responseHeaders}));
         }
         this._progress();
     }
@@ -604,7 +608,9 @@ class SourceCache extends Evented {
             });
 
             if (this._source.hasTile) {
+
                 const hasTile = this._source.hasTile.bind(this._source);
+
                 idealTileIDs = idealTileIDs.filter((coord) => hasTile(coord));
             }
         }
@@ -624,13 +630,17 @@ class SourceCache extends Evented {
                     idealTileIDs.push(id);
                 }
             } else if (elevatedLayers) {
-                const batchedModelTileIDs = transform.extendTileCover(idealTileIDs, idealZoom, this.transform._camera.forward());
-                for (const id of batchedModelTileIDs) {
+                const elevatedTileIDs = transform.extendTileCoverToNearPlane(idealTileIDs, this.transform.getFrustum(idealZoom), idealZoom);
+                for (const id of elevatedTileIDs) {
                     idealTileIDs.push(id);
                 }
             } else if (this.castsShadows && directionalLight) {
                 // find shadowCasterTiles
-                const shadowCasterTileIDs = transform.extendTileCover(idealTileIDs, idealZoom, directionalLight);
+                // Start adding shadow caster extra tiles on zoom 16 to reduce the number of tiles in zoom 15.
+                // With this we eliminate extra shadows requests on zoom 15 at the price of a small (tiny)
+                // visual deffect.
+                const SHADOWS_MIN_ZOOM_EXTRA_TILES = 16.0;
+                const shadowCasterTileIDs = transform.extendTileCover(idealTileIDs, idealZoom, directionalLight, SHADOWS_MIN_ZOOM_EXTRA_TILES);
                 for (const id of shadowCasterTileIDs) {
                     this._shadowCasterTiles[id.key] = true;
                     idealTileIDs.push(id);
@@ -826,7 +836,7 @@ class SourceCache extends Evented {
         this._loadedParentTiles = {};
 
         for (const tileKey in this._tiles) {
-            const path = [];
+            const path: number[] = [];
             let parentTile: Tile | null | undefined;
             let currentId = this._tiles[tileKey].tileID;
 
@@ -894,7 +904,7 @@ class SourceCache extends Evented {
 
             tile = isRasterArray ?
                 new RasterArrayTile(tileID, size, this.transform.tileZoom, painter, this._isRaster) :
-                new Tile(tileID, size, this.transform.tileZoom, painter, this._isRaster);
+                new Tile(tileID, size, this.transform.tileZoom, painter, this._isRaster, this._source.worldview);
 
             this._loadTile(tile, this._tileLoaded.bind(this, tile, tileID.key, tile.state));
         }
@@ -998,10 +1008,9 @@ class SourceCache extends Evented {
         use3DQuery: boolean,
         visualizeQueryGeometry: boolean,
     ): TilespaceQueryGeometry[] {
-        const tileResults = [];
+        const tileResults: TilespaceQueryGeometry[] = [];
 
         const transform = this.transform;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         if (!transform) return tileResults;
 
         const isGlobe = transform.projection.name === 'globe';
@@ -1048,13 +1057,13 @@ class SourceCache extends Evented {
             }
 
             for (const wrap of tilesToCheck) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 const tileResult = queryGeometry.containsTile(tile, transform, use3DQuery, wrap);
                 if (tileResult) {
                     tileResults.push(tileResult);
                 }
             }
         }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return tileResults;
     }
 
@@ -1219,7 +1228,7 @@ class SourceCache extends Evented {
         const tileIDs = Array.from(coveringTilesIDs.values());
 
         asyncAll(tileIDs, (tileID, done) => {
-            const tile = new Tile(tileID, this._source.tileSize * tileID.overscaleFactor(), this.transform.tileZoom, this.map.painter, this._isRaster);
+            const tile = new Tile(tileID, this._source.tileSize * tileID.overscaleFactor(), this.transform.tileZoom, this.map.painter, this._isRaster, this._source.worldview);
             this._loadTile(tile, (err) => {
                 if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
                 done(err, tile);

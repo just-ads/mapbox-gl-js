@@ -1,4 +1,4 @@
-import Color from '../style-spec/util/color';
+import Color, {type NonPremultipliedRenderColor} from '../style-spec/util/color';
 import assert from 'assert';
 
 import type Context from './context';
@@ -56,12 +56,12 @@ class BaseValue<T> implements Value<T> {
     }
 }
 
-export class ClearColor extends BaseValue<Color> {
-    override getDefault(): Color {
-        return Color.transparent;
+export class ClearColor extends BaseValue<NonPremultipliedRenderColor> {
+    override getDefault(): NonPremultipliedRenderColor {
+        return Color.transparent.toNonPremultipliedRenderColor(null);
     }
 
-    override set(v: Color) {
+    override set(v: NonPremultipliedRenderColor) {
         const c = this.current;
         if (v.r === c.r && v.g === c.g && v.b === c.b && v.a === c.a && !this.dirty) return;
         this.gl.clearColor(v.r, v.g, v.b, v.a);
@@ -268,12 +268,12 @@ export class BlendFunc extends BaseValue<BlendFuncType> {
     }
 }
 
-export class BlendColor extends BaseValue<Color> {
-    override getDefault(): Color {
-        return Color.transparent;
+export class BlendColor extends BaseValue<NonPremultipliedRenderColor> {
+    override getDefault(): NonPremultipliedRenderColor {
+        return Color.transparent.toNonPremultipliedRenderColor(null);
     }
 
-    override set(v: Color) {
+    override set(v: NonPremultipliedRenderColor) {
         const c = this.current;
         if (v.r === c.r && v.g === c.g && v.b === c.b && v.a === c.a && !this.dirty) return;
         this.gl.blendColor(v.r, v.g, v.b, v.a);
@@ -450,15 +450,12 @@ export class BindElementBuffer extends BaseValue<WebGLBuffer | null | undefined>
     }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export class BindVertexArrayOES extends BaseValue<any> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    override getDefault(): any {
+export class BindVertexArrayOES extends BaseValue<WebGLVertexArrayObject | null> {
+    override getDefault(): WebGLVertexArrayObject | null {
         return null;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    override set(v: any) {
+    override set(v: WebGLVertexArrayObject | null) {
         if (!this.gl || (v === this.current && !this.dirty)) return;
         this.gl.bindVertexArray(v);
         this.current = v;
@@ -523,6 +520,13 @@ class FramebufferAttachment<T> extends BaseValue<T | null | undefined> {
 }
 
 export class ColorAttachment extends FramebufferAttachment<WebGLTexture> {
+    attachmentPoint: number;
+
+    constructor(context: Context, parent: WebGLFramebuffer, attachmentIndex: number = 0) {
+        super(context, parent);
+        this.attachmentPoint = context.gl.COLOR_ATTACHMENT0 + attachmentIndex;
+    }
+
     setDirty() {
         this.dirty = true;
     }
@@ -533,7 +537,7 @@ export class ColorAttachment extends FramebufferAttachment<WebGLTexture> {
         // note: it's possible to attach a renderbuffer to the color
         // attachment point, but thus far MBGL only uses textures for color
         const gl = this.gl;
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, v, 0);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, this.attachmentPoint, gl.TEXTURE_2D, v, 0);
         this.current = v;
         this.dirty = false;
     }

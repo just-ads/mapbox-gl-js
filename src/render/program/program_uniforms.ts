@@ -1,8 +1,8 @@
 import {fillExtrusionDepthUniforms, fillExtrusionUniforms, fillExtrusionPatternUniforms, fillExtrusionGroundEffectUniforms} from './fill_extrusion_program';
 import {fillUniforms, fillPatternUniforms, fillOutlineUniforms, fillOutlinePatternUniforms, elevatedStructuresDepthUniforms, elevatedStructuresUniforms, elevatedStructuresDepthReconstructUniforms} from './fill_program';
-import {buildingUniforms, buildingDepthUniforms} from '../../../3d-style/render/program/building_program';
+import {buildingUniforms, buildingBloomUniforms, buildingDepthUniforms, type BuildingDefinesType} from '../../../3d-style/render/program/building_program';
 import {circleUniforms} from './circle_program';
-import {collisionUniforms, collisionCircleUniforms} from './collision_program';
+import {collisionUniforms, collisionCircleUniforms, type CollisionDebugDefinesType} from './collision_program';
 import {debugUniforms} from './debug_program';
 import {clippingMaskUniforms} from './clipping_mask_program';
 import {heatmapUniforms, heatmapTextureUniforms} from './heatmap_program';
@@ -59,6 +59,7 @@ export type DynamicDefinesType =
     | GlobalDefinesType
     | CircleDefinesType
     | SymbolDefinesType
+    | CollisionDebugDefinesType
     | LineDefinesType
     | FillDefinesType
     | FillExtrusionDefinesType
@@ -69,7 +70,8 @@ export type DynamicDefinesType =
     | FogDefinesType
     | HillshadeDefinesType
     | TerrainDepthAccessDefinesType
-    | ModelDefinesType;
+    | ModelDefinesType
+    | BuildingDefinesType;
 
 export const programUniforms = {
     fillExtrusion: fillExtrusionUniforms,
@@ -81,6 +83,7 @@ export const programUniforms = {
     fillOutline: fillOutlineUniforms,
     fillOutlinePattern: fillOutlinePatternUniforms,
     building: buildingUniforms,
+    buildingBloom: buildingBloomUniforms,
     buildingDepth: buildingDepthUniforms,
     elevatedStructuresDepth: elevatedStructuresDepthUniforms,
     elevatedStructures: elevatedStructuresUniforms,

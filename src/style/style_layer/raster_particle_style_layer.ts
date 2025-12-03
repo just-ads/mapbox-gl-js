@@ -17,6 +17,8 @@ import type {ProgramName} from '../../render/program';
 const COLOR_RAMP_RES = 256;
 
 class RasterParticleStyleLayer extends StyleLayer {
+    override type: 'raster-particle';
+
     override paint: PossiblyEvaluated<PaintProps>;
 
     // Shared rendering resources
@@ -38,6 +40,21 @@ class RasterParticleStyleLayer extends StyleLayer {
         super(layer, properties, scope, lut, options);
         this._updateColorRamp();
         this.lastInvalidatedAt = browser.now();
+    }
+
+    override _clear() {
+        if (this.colorRampTexture) {
+            this.colorRampTexture.destroy();
+            this.colorRampTexture = null;
+        }
+        if (this.tileFramebuffer) {
+            this.tileFramebuffer.destroy();
+            this.tileFramebuffer = null;
+        }
+        if (this.particleFramebuffer) {
+            this.particleFramebuffer.destroy();
+            this.particleFramebuffer = null;
+        }
     }
 
     override onRemove(_: MapboxMap): void {
@@ -86,7 +103,7 @@ class RasterParticleStyleLayer extends StyleLayer {
         if (!this.hasColorMap()) return;
 
         const expression = this._transitionablePaint._values['raster-particle-color'].value.expression;
-        const end = this._transitionablePaint._values['raster-particle-max-speed'].value.expression.evaluate({zoom: 0});
+        const end: number = this._transitionablePaint._values['raster-particle-max-speed'].value.expression.evaluate({zoom: 0});
 
         this.colorRamp = renderColorRamp({
             expression,

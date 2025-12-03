@@ -9,6 +9,7 @@ import {FillIntersectionsLayoutArray, FillIntersectionsNormalLayoutArray, Triang
 import {intersectionNormalAttributes, intersectionsAttributes} from '../../src/data/bucket/fill_attributes';
 import SegmentVector from '../../src/data/segment';
 import {number as lerp} from '../../src/style-spec/util/interpolate';
+import {ProgramConfigurationSet} from '../../src/data/program_configuration';
 
 import type VertexBuffer from '../../src/gl/vertex_buffer';
 import type IndexBuffer from '../../src/gl/index_buffer';
@@ -16,9 +17,18 @@ import type {CanonicalTileID} from '../../src/source/tile_id';
 import type {ElevationFeature, Range} from './elevation_feature';
 import type {Segment} from '../../src/data/segment';
 import type Context from '../../src/gl/context';
+import type FillStyleLayer from '../../src/style/style_layer/fill_style_layer';
+import type {VectorTileLayer} from '@mapbox/vector-tile';
+import type {ImageId} from '../../src/style-spec/expression/types/image_id';
+import type {LUT} from '../../src/util/lut';
+import type {FeatureStates} from '../../src/source/source_state';
+import type {SpritePositions} from '../../src/util/image';
+import type {TypedStyleLayer} from '../../src/style/style_layer/typed_style_layer';
 import type {Bounds} from '../../src/style-spec/util/geometry_util';
 
 const TUNNEL_ENTERANCE_HEIGHT = 4.0; // meters
+
+type EdgePoints = [ElevatedPoint, ElevatedPoint];
 
 interface ElevatedPoint {
     coord: Point;
@@ -29,6 +39,11 @@ interface VertexConnection {
     from?: number;
     to?: number;
 }
+
+export interface FeatureInfo {
+    guardRailEnabled: boolean;
+    featureIndex: number;
+}
 interface Edge {
     polygonIdx: number;
     a: number;
@@ -37,6 +52,9 @@ interface Edge {
     portalHash: bigint;
     isTunnel: boolean;
     type: ElevationPortalType;
+    // Track the information of the geometryfeature that the edge is originated from,
+    // used for later populate the vertex vectors of the paint property binders
+    featureInfo: FeatureInfo;
 }
 
 interface VertexEdgeHashes {
@@ -44,21 +62,22 @@ interface VertexEdgeHashes {
     next: bigint;
 }
 
+export interface FeatureSection {
+    featureIndex: number;
+    vertexStart: number;
+}
+
 class MeshBuilder {
     private outPositions: FillIntersectionsLayoutArray;
     private outNormals: FillIntersectionsNormalLayoutArray;
     private outIndices: TriangleIndexArray;
-    private vertexLookup: Map<bigint, number>;
-    private buffer: ArrayBuffer;
-    private view: DataView;
+    private vertexLookup: Map<string, number>;
 
     constructor(vertices: FillIntersectionsLayoutArray, normals: FillIntersectionsNormalLayoutArray, indices: TriangleIndexArray) {
         this.outPositions = vertices;
         this.outNormals = normals;
         this.outIndices = indices;
         this.vertexLookup = new Map();
-        this.buffer = new ArrayBuffer(4);
-        this.view = new DataView(this.buffer);
     }
 
     addVertex(vertex: vec3, normal: vec3, tileToMeter?: number): number {
@@ -67,7 +86,7 @@ class MeshBuilder {
             height *= tileToMeter;
         }
 
-        const lookup = (this.getVec3Bits(vertex) << 96n) | this.getVec3Bits(normal);
+        const lookup = `${vertex[0]},${vertex[1]},${vertex[2]},${normal[0]},${normal[1]},${normal[2]}`;
         const result = this.vertexLookup.get(lookup);
         if (result != null) {
             return result;
@@ -86,66 +105,53 @@ class MeshBuilder {
         return offset;
     }
 
-    addVertices(normal: vec3, tileToMeters?: number, ...positions: vec3[]): number[] {
-        const offsets: number[] = [];
-        for (const v of positions) {
-            const offset = this.addVertex(v, normal, tileToMeters);
-            offsets.push(offset);
-        }
-        assert(offsets.length === positions.length);
-        return offsets;
+    addTriangle(i1: number, i2: number, i3: number) {
+        assert(i1 < this.outPositions.length && i2 < this.outPositions.length && i3 < this.outPositions.length);
+        this.outIndices.emplaceBack(i1, i2, i3);
     }
 
-    addTriangles(indices: number[], vertices?: Point[], heights?: number[]) {
+    addTriangles(indices: number[], vertices: Point[], heights: number[]) {
+        if (indices.length === 0) return;
         assert(indices.length % 3 === 0);
-        if (vertices && heights) {
-            // For constant height, heights array length is 1
-            assert(vertices.length === heights.length || heights.length === 1);
-            const constantHeight = heights.length === 1;
+        // For constant height, heights array length is 1
+        assert(vertices.length === heights.length || heights.length === 1);
+        const constantHeight = heights.length === 1;
 
-            const normal = vec3.fromValues(0, 0, 0);
-            for (let i = 0; i < indices.length; i += 3) {
-                const v0 = vertices[indices[i + 0]];
-                const v1 = vertices[indices[i + 1]];
-                const v2 = vertices[indices[i + 2]];
-                const h0 = constantHeight ? heights[0] : heights[indices[i + 0]];
-                const h1 = constantHeight ? heights[0] : heights[indices[i + 1]];
-                const h2 = constantHeight ? heights[0] : heights[indices[i + 2]];
-                const i0 = this.addVertex(vec3.fromValues(v0.x, v0.y, h0), normal);
-                const i1 = this.addVertex(vec3.fromValues(v1.x, v1.y, h1), normal);
-                const i2 = this.addVertex(vec3.fromValues(v2.x, v2.y, h2), normal);
-                this.outIndices.emplaceBack(i0, i1, i2);
-            }
-        } else {
-            assert(indices.every(i => i < this.outPositions.length));
-            for (let i = 0; i < indices.length; i += 3) {
-                this.outIndices.emplaceBack(
-                    indices[i + 0],
-                    indices[i + 1],
-                    indices[i + 2]
-                );
-            }
+        const tmpVec = vec3.create();
+        const normal = vec3.create();
+
+        for (let i = 0; i < indices.length; i += 3) {
+            const v0 = vertices[indices[i + 0]];
+            const v1 = vertices[indices[i + 1]];
+            const v2 = vertices[indices[i + 2]];
+            const h0 = constantHeight ? heights[0] : heights[indices[i + 0]];
+            const h1 = constantHeight ? heights[0] : heights[indices[i + 1]];
+            const h2 = constantHeight ? heights[0] : heights[indices[i + 2]];
+            vec3.set(tmpVec, v0.x, v0.y, h0);
+            const i0 = this.addVertex(tmpVec, normal);
+            vec3.set(tmpVec, v1.x, v1.y, h1);
+            const i1 = this.addVertex(tmpVec, normal);
+            vec3.set(tmpVec, v2.x, v2.y, h2);
+            const i2 = this.addVertex(tmpVec, normal);
+            this.outIndices.emplaceBack(i0, i1, i2);
         }
     }
 
-    addQuad(vertices: ElevatedPoint[], normal: vec3) {
-        assert(vertices.length === 4);
-        const indices = this.addVertices(normal, undefined, ...vertices.map(v => vec3.fromValues(v.coord.x, v.coord.y, v.height)));
-        const [a, b, c, d] = indices;
-        this.addTriangles([a, b, c, c, d, a]);
+    addQuad(p1: vec3, p2: vec3, p3: vec3, p4: vec3, normal: vec3, tileToMeters?: number) {
+        const a = this.addVertex(p1, normal, tileToMeters);
+        const b = this.addVertex(p2, normal, tileToMeters);
+        const c = this.addVertex(p3, normal, tileToMeters);
+        const d = this.addVertex(p4, normal, tileToMeters);
+        this.addTriangle(a, b, c);
+        this.addTriangle(c, d, a);
     }
 
-    private getBits(val: number): bigint {
-        this.view.setFloat32(0, val);
-        return BigInt(this.view.getUint32(0));
+    getVertexCount(): number {
+        return this.outPositions.length;
     }
 
-    private getVec3Bits(vec: vec3): bigint {
-        const b0 = this.getBits(vec[0]);
-        const b1 = this.getBits(vec[1]);
-        const b2 = this.getBits(vec[2]);
-
-        return (b0 << 64n) | (b1 << 32n) | b2;
+    clearVertexLookup(): void {
+        this.vertexLookup.clear();
     }
 }
 
@@ -156,11 +162,21 @@ export class ElevatedStructures {
 
     maskSegments: SegmentVector | undefined;
     depthSegments: SegmentVector | undefined;
-    renderableSegments: SegmentVector | undefined;
+    renderableBridgeSegments: SegmentVector | undefined;
+    renderableTunnelSegments: SegmentVector | undefined;
     shadowCasterSegments: SegmentVector | undefined;
 
     unevaluatedPortals = new ElevationPortalGraph();
     portalPolygons = new ElevationPolygons();
+
+    // Tracks the rail/tunnel mesh same-feature vertex sections
+    // (within ElevatedStructure::vertexPositions).
+    // To be used for later populating the PaintPropertyBinder vertex vector
+    bridgeFeatureSections: FeatureSection[] = [];
+    tunnelFeatureSections: FeatureSection[] = [];
+
+    bridgeProgramConfigurations: ProgramConfigurationSet<FillStyleLayer>;
+    tunnelProgramConfigurations: ProgramConfigurationSet<FillStyleLayer>;
 
     private vertexHashLookup: Map<number, VertexEdgeHashes> = new Map();
 
@@ -176,8 +192,10 @@ export class ElevatedStructures {
     private vertexNormals = new FillIntersectionsNormalLayoutArray();
     private indexArray = new TriangleIndexArray();
 
-    constructor(tileID: CanonicalTileID) {
+    constructor(tileID: CanonicalTileID, layers: FillStyleLayer[], zoom: number, lut: LUT | null) {
         this.tileToMeters = tileToMeter(tileID);
+        this.bridgeProgramConfigurations = new ProgramConfigurationSet(layers, {zoom, lut}, (name: string) => name !== 'fill-tunnel-structure-color');
+        this.tunnelProgramConfigurations = new ProgramConfigurationSet(layers, {zoom, lut}, (name: string) => name !== 'fill-bridge-guard-rail-color');
     }
 
     addVertices(vertices: Point[], heights: number[]): number {
@@ -209,7 +227,7 @@ export class ElevatedStructures {
         }
     }
 
-    addRenderableRing(polygonIdx: number, vertexOffset: number, count: number, isTunnel: boolean, area: Bounds) {
+    addRenderableRing(polygonIdx: number, vertexOffset: number, count: number, isTunnel: boolean, area: Bounds, featureInfo: FeatureInfo) {
         assert(vertexOffset + count <= this.unevalVertices.length);
 
         const corners = [
@@ -254,7 +272,7 @@ export class ElevatedStructures {
                 portalHash = lookup != null ? lookup.prev : edgeHash;
             }
 
-            this.unevalEdges.push({polygonIdx, a: ai, b: bi, hash: edgeHash, portalHash, isTunnel, type: 'unevaluated'});
+            this.unevalEdges.push({polygonIdx, a: ai, b: bi, hash: edgeHash, portalHash, isTunnel, type: 'unevaluated', featureInfo});
         }
     }
 
@@ -326,11 +344,12 @@ export class ElevatedStructures {
         // The main idea is to store everything (3D structures and road polygons) as a single mesh and sort
         // triangles into adjacent segments in memory that are renderable separately.
         //
-        //                memory: [---bridge_structures---|---tunnel_structures---|---non_tunnel_roads---|---tunnel_roads---|---tunnel_roofs---]
-        //          mask segment:                         [----------------------------------------------]
-        //   renderables segment: [-----------------------------------------------]
-        //         depth segment: [-----------------------------------------------------------------------------------------]
-        // shadow caster segment: [------------------------------------------------------------------------------------------------------------]
+        //                    memory: [---bridge_structures---|---tunnel_structures---|---non_tunnel_roads---|---tunnel_roads---|---tunnel_roofs---]
+        //              mask segment:                         [----------------------------------------------]
+        // bridge renderable segment: [----------------------]
+        // tunnel renderable segment:                         [----------------------]
+        //             depth segment: [-----------------------------------------------------------------------------------------]
+        //     shadow caster segment: [------------------------------------------------------------------------------------------------------------]
         assert(this.vertexPositions.length === 0 && this.vertexNormals.length === 0 && this.indexArray.length === 0);
 
         const beginSegment = () => ({vertexOffset: 0, primitiveOffset: this.indexArray.length} as Segment);
@@ -343,7 +362,7 @@ export class ElevatedStructures {
 
         const shadowCasterSegment = beginSegment();
         const depthSegment = beginSegment();
-        const renderableSegment = beginSegment();
+        const renderableBridgeSegment = beginSegment();
 
         const partition = (edges: Edge[], type: ElevationPortalType): number => {
             edges.sort((a, b) => {
@@ -364,6 +383,8 @@ export class ElevatedStructures {
                 builder, this.unevalVertices, this.unevalHeights, this.unevalEdges, {min: 0, max: wallEndIdx}, this.tileToMeters);
         }
 
+        endSegment(renderableBridgeSegment);
+        const renderableTunnelSegment = beginSegment();
         const maskSegment = beginSegment();
 
         if (this.unevalEdges.length > 0) {
@@ -376,7 +397,7 @@ export class ElevatedStructures {
                 builder, this.unevalVertices, this.unevalHeights, this.unevalEdges, {min: 0, max: wallEndIdx}, {min: wallEndIdx, max: tunnelEndIdx});
         }
 
-        endSegment(renderableSegment);
+        endSegment(renderableTunnelSegment);
 
         // Generate triangles for non-tunnel roads
         builder.addTriangles(this.unevalTriangles, this.unevalVertices, this.unevalHeights);
@@ -392,10 +413,16 @@ export class ElevatedStructures {
 
         this.maskSegments = SegmentVector.simpleSegment(0, maskSegment.primitiveOffset, 0, maskSegment.primitiveLength);
         this.depthSegments = SegmentVector.simpleSegment(0, depthSegment.primitiveOffset, 0, depthSegment.primitiveLength);
-        this.renderableSegments = SegmentVector.simpleSegment(0, renderableSegment.primitiveOffset, 0, renderableSegment.primitiveLength);
+        this.renderableBridgeSegments = SegmentVector.simpleSegment(0, renderableBridgeSegment.primitiveOffset, 0, renderableBridgeSegment.primitiveLength);
+        this.renderableTunnelSegments = SegmentVector.simpleSegment(0, renderableTunnelSegment.primitiveOffset, 0, renderableTunnelSegment.primitiveLength);
         this.shadowCasterSegments = SegmentVector.simpleSegment(0, shadowCasterSegment.primitiveOffset, 0, shadowCasterSegment.primitiveLength);
 
         assert(this.vertexPositions.length === this.vertexNormals.length);
+    }
+
+    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: ImageId[], imagePositions: SpritePositions, layers: ReadonlyArray<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null, worldview?: string) {
+        this.bridgeProgramConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness, worldview);
+        this.tunnelProgramConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness, worldview);
     }
 
     upload(context: Context) {
@@ -406,6 +433,9 @@ export class ElevatedStructures {
         this.vertexBuffer = context.createVertexBuffer(this.vertexPositions, intersectionsAttributes.members);
         this.vertexBufferNormal = context.createVertexBuffer(this.vertexNormals, intersectionNormalAttributes.members);
         this.indexBuffer = context.createIndexBuffer(this.indexArray);
+
+        this.bridgeProgramConfigurations.upload(context);
+        this.tunnelProgramConfigurations.upload(context);
     }
 
     destroy() {
@@ -418,9 +448,31 @@ export class ElevatedStructures {
         if (this.maskSegments) {
             this.maskSegments.destroy();
             this.depthSegments.destroy();
-            this.renderableSegments.destroy();
+            this.renderableBridgeSegments.destroy();
+            this.renderableTunnelSegments.destroy();
             this.shadowCasterSegments.destroy();
         }
+
+        this.bridgeProgramConfigurations.destroy();
+        this.tunnelProgramConfigurations.destroy();
+    }
+
+    populatePaintArrays(vtLayer: VectorTileLayer, canonical: CanonicalTileID, availableImages: ImageId[], brightness: number, worldview: string | undefined) {
+        const populate = (programConfigurations: ProgramConfigurationSet<FillStyleLayer>, sections: FeatureSection[]) => {
+            for (let i = 0; i < sections.length - 1; i++) {
+                const featureIndex = sections[i].featureIndex;
+                const length = sections[i + 1].vertexStart;
+                assert(Number.isFinite(featureIndex));
+
+                const feature = vtLayer.feature(featureIndex);
+                assert(feature);
+
+                programConfigurations.populatePaintArrays(length, feature, featureIndex, {}, availableImages, canonical, brightness, undefined, worldview);
+            }
+        };
+
+        populate(this.bridgeProgramConfigurations, this.bridgeFeatureSections);
+        populate(this.tunnelProgramConfigurations, this.tunnelFeatureSections);
     }
 
     private computeVertexConnections(vertices: Point[], heights: number[], edges: Edge[], startEdge: number, endEdge: number): Map<number, VertexConnection> {
@@ -436,16 +488,16 @@ export class ElevatedStructures {
             const aHash = ElevatedStructures.computePosHash(vertices[a]);
             const bHash = ElevatedStructures.computePosHash(vertices[b]);
 
-            // Ensure the vertex connections exist in the map
-            if (!map.has(aHash)) {
-                map.set(aHash, {});
+            let pA = map.get(aHash);
+            if (!pA) {
+                pA = {};
+                map.set(aHash, pA);
             }
-            if (!map.has(bHash)) {
-                map.set(bHash, {});
+            let pB = map.get(bHash);
+            if (!pB) {
+                pB = {};
+                map.set(bHash, pB);
             }
-
-            const pA = map.get(aHash);
-            const pB = map.get(bHash);
 
             // Do not create connectivity to edges that are not supposed
             // to have guard rail geometry
@@ -460,7 +512,14 @@ export class ElevatedStructures {
         return map;
     }
 
+    private isTerminalVertex(vertexIdx: number, connectivity: Map<number, VertexConnection>): boolean {
+        const posHash = ElevatedStructures.computePosHash(this.unevalVertices[vertexIdx]);
+        const conn = connectivity.get(posHash);
+        return !conn || !conn.from || !conn.to;
+    }
+
     private constructBridgeStructures(builder: MeshBuilder, vertices: Point[], heights: number[], edges: Edge[], edgeRange: Range, tileToMeters: number) {
+        builder.clearVertexLookup();
         // Compute connectivity graph for vertices in order to find
         // forward and normal vectors for the geometry
         const vertexConnectivity = this.computeVertexConnections(vertices, heights, edges, edgeRange.min, edgeRange.max);
@@ -468,9 +527,15 @@ export class ElevatedStructures {
         const metersToTile = 1.0 / tileToMeters;
         const scale = 0.5 * metersToTile;
 
-        const toTileVec = (vIdx: number) => vec3.fromValues(vertices[vIdx].x, vertices[vIdx].y, heights[vIdx] * metersToTile);
+        const toTileVec = (v: vec3, vIdx: number) => vec3.set(v, vertices[vIdx].x, vertices[vIdx].y, heights[vIdx] * metersToTile);
 
-        const computeFwd = (vIdx: number): vec3 | undefined => {
+        const fromVec = vec3.create();
+        const midVec = vec3.create();
+        const toVec = vec3.create();
+        const fwd = vec3.create();
+        const sub = vec3.create();
+
+        const computeFwd = (out: vec3, vIdx: number): vec3 | undefined => {
             // Use connectivity information to compute the vertex normal vector
             const connectivity = vertexConnectivity.get(ElevatedStructures.computePosHash(vertices[vIdx]));
             assert(connectivity);
@@ -480,168 +545,272 @@ export class ElevatedStructures {
 
             if (!from || !to) return undefined;
 
-            const fromVec = toTileVec(from);
-            const midVec = toTileVec(vIdx);
-            const toVec = toTileVec(to);
+            toTileVec(fromVec, from);
+            toTileVec(midVec, vIdx);
+            toTileVec(toVec, to);
 
-            const fwd = vec3.fromValues(0, 0, 0);
+            vec3.zero(fwd);
 
             if (!vec3.exactEquals(fromVec, midVec)) {
-                const sub = vec3.sub(vec3.create(), midVec, fromVec);
-                vec3.add(fwd, fwd, vec3.normalize(sub, sub));
+                vec3.sub(sub, midVec, fromVec);
+                vec3.normalize(fwd, sub);
             }
 
             if (!vec3.exactEquals(toVec, midVec)) {
-                const sub = vec3.sub(vec3.create(), toVec, midVec);
+                vec3.sub(sub, toVec, midVec);
                 vec3.add(fwd, fwd, vec3.normalize(sub, sub));
             }
 
             const len = vec3.len(fwd);
 
-            return len > 0.0 ? vec3.scale(fwd, fwd, 1.0 / len) : undefined;
+            return len > 0.0 ? vec3.scale(out, fwd, 1.0 / len) : undefined;
         };
+
+        let lastFeatureIndex = Number.POSITIVE_INFINITY;
+
+        // Sort the edges according to the feature index, since this makes less fragmentation of vertex binder
+        // and facilitates more reusing of vertices during mesh construction.
+        this.sortSubarray<Edge>(edges, edgeRange.min, edgeRange.max, (a: Edge, b: Edge) => a.featureInfo.featureIndex - b.featureInfo.featureIndex);
+
+        // Pre-allocate vec3 objects that are used inside the loop
+        const va = vec3.create();
+        const vb = vec3.create();
+        const dir = vec3.create();
+        const aLeft = vec3.create();
+        const bLeft = vec3.create();
+        const aUp = vec3.create();
+        const bUp = vec3.create();
+        const tmpVec1 = vec3.create();
+        const tmpVec2 = vec3.create();
+        const aVertices: vec3[] = [vec3.create(), vec3.create(), vec3.create(), vec3.create()];
+        const bVertices: vec3[] = [vec3.create(), vec3.create(), vec3.create(), vec3.create()];
+        const bridgeEdge: EdgePoints = [{coord: new Point(0, 0), height: 0}, {coord: new Point(0, 0), height: 0}];
+        const compare = (a: number, b: number) => a > b;
 
         // Generate bridge "guard rails"
         for (let i = edgeRange.min; i < edgeRange.max; i++) {
             const edge = edges[i];
-            const bridgeEdge = this.prepareEdgePoints(vertices, heights, edge, (a, b) => a > b);
+            if (!edge.featureInfo.guardRailEnabled) continue;
 
-            if (bridgeEdge == null) continue;
+            const result = this.prepareEdgePoints(bridgeEdge, vertices, heights, edge, compare);
 
-            const pa = bridgeEdge[0];
-            const pb = bridgeEdge[1];
+            if (!result) continue;
 
-            const va = vec3.fromValues(pa.coord.x, pa.coord.y, metersToTile * pa.height);
-            const vb = vec3.fromValues(pb.coord.x, pb.coord.y, metersToTile * pb.height);
+            const [pa, pb] = bridgeEdge;
+
+            vec3.set(va, pa.coord.x, pa.coord.y, metersToTile * pa.height);
+            vec3.set(vb, pb.coord.x, pb.coord.y, metersToTile * pb.height);
 
             if (vec3.exactEquals(va, vb)) continue;
 
-            const dir = vec3.sub(vec3.create(), vb, va);
+            vec3.sub(dir, vb, va);
             vec3.normalize(dir, dir);
 
             // Compute "coordinate frame", i.e. cross section of the bridge mesh at both points.
             // These sections are the connected with triangles.
-            const normalize = (v: vec3) => vec3.normalize(v, v);
-            const aFwd = computeFwd(edge.a) || dir;
-            const bFwd = computeFwd(edge.b) || dir;
-            const aLeft = normalize(vec3.fromValues(aFwd[1], -aFwd[0], 0.0));
-            const bLeft = normalize(vec3.fromValues(bFwd[1], -bFwd[0], 0.0));
-            const aUp = normalize(vec3.cross(vec3.create(), aLeft, aFwd));
-            const bUp = normalize(vec3.cross(vec3.create(), bLeft, bFwd));
+            const aFwd = computeFwd(tmpVec1, edge.a) || dir;
+            const bFwd = computeFwd(tmpVec2, edge.b) || dir;
+
+            vec3.set(aLeft, aFwd[1], -aFwd[0], 0.0);
+            vec3.normalize(aLeft, aLeft);
+            vec3.set(bLeft, bFwd[1], -bFwd[0], 0.0);
+            vec3.normalize(bLeft, bLeft);
+
+            vec3.cross(tmpVec1, aLeft, aFwd);
+            vec3.normalize(aUp, tmpVec1);
+            vec3.cross(tmpVec1, bLeft, bFwd);
+            vec3.normalize(bUp, tmpVec1);
 
             // Use metric units for the size in order to have zoom independent sizes.
             // Construct "outer", "top" and "inner" sides of the guard rails
-            const tmpVec = vec3.create();
-            const aVertices: vec3[] = [
-                vec3.add(vec3.create(), va, vec3.scale(tmpVec, vec3.sub(tmpVec, aLeft, aUp), scale)),
-                vec3.add(vec3.create(), va, vec3.scale(tmpVec, vec3.add(tmpVec, aLeft, aUp), scale)),
-                vec3.add(vec3.create(), va, vec3.scale(tmpVec, aUp, scale)),
-                va
-            ];
-            const bVertices: vec3[] = [
-                vec3.add(vec3.create(), vb, vec3.scale(tmpVec, vec3.sub(tmpVec, bLeft, bUp), scale)),
-                vec3.add(vec3.create(), vb, vec3.scale(tmpVec, vec3.add(tmpVec, bLeft, bUp), scale)),
-                vec3.add(vec3.create(), vb, vec3.scale(tmpVec, bUp, scale)),
-                vb
-            ];
+            vec3.add(aVertices[0], va, vec3.scale(tmpVec1, vec3.sub(tmpVec1, aLeft, aUp), scale));
+            vec3.add(aVertices[1], va, vec3.scale(tmpVec1, vec3.add(tmpVec1, aLeft, aUp), scale));
+            vec3.add(aVertices[2], va, vec3.scale(tmpVec1, aUp, scale));
+            aVertices[3] = va;
+
+            vec3.add(bVertices[0], vb, vec3.scale(tmpVec1, vec3.sub(tmpVec1, bLeft, bUp), scale));
+            vec3.add(bVertices[1], vb, vec3.scale(tmpVec1, vec3.add(tmpVec1, bLeft, bUp), scale));
+            vec3.add(bVertices[2], vb, vec3.scale(tmpVec1, bUp, scale));
+            bVertices[3] = vb;
+
+            lastFeatureIndex = this.addFeatureSection(edge.featureInfo.featureIndex, lastFeatureIndex, this.bridgeFeatureSections, builder);
 
             // Outer side
-            const [ao0, ao1] = builder.addVertices(aLeft, tileToMeters, aVertices[0], aVertices[1]);
-            const [bo0, bo1] = builder.addVertices(bLeft, tileToMeters, bVertices[0], bVertices[1]);
+            const ao0 = builder.addVertex(aVertices[0], aLeft, tileToMeters);
+            const ao1 = builder.addVertex(aVertices[1], aLeft, tileToMeters);
+            const bo0 = builder.addVertex(bVertices[0], bLeft, tileToMeters);
+            const bo1 = builder.addVertex(bVertices[1], bLeft, tileToMeters);
 
-            builder.addTriangles([ao0, ao1, bo0, ao1, bo1, bo0]);
+            builder.addTriangle(ao0, ao1, bo0);
+            builder.addTriangle(ao1, bo1, bo0);
 
             // Top side
-            const [at0, at1] = builder.addVertices(aUp, tileToMeters, aVertices[1], aVertices[2]);
-            const [bt0, bt1] = builder.addVertices(bUp, tileToMeters, bVertices[1], bVertices[2]);
+            const at0 = builder.addVertex(aVertices[1], aUp, tileToMeters);
+            const at1 = builder.addVertex(aVertices[2], aUp, tileToMeters);
+            const bt0 = builder.addVertex(bVertices[1], bUp, tileToMeters);
+            const bt1 = builder.addVertex(bVertices[2], bUp, tileToMeters);
 
-            builder.addTriangles([at0, at1, bt0, at1, bt1, bt0]);
+            builder.addTriangle(at0, at1, bt0);
+            builder.addTriangle(at1, bt1, bt0);
 
             // Inner side
-            const [ai0, ai1] = builder.addVertices(vec3.negate(aLeft, aLeft), tileToMeters, aVertices[2], aVertices[3]);
-            const [bi0, bi1] = builder.addVertices(vec3.negate(bLeft, bLeft), tileToMeters, bVertices[2], bVertices[3]);
+            vec3.negate(aLeft, aLeft);
+            vec3.negate(bLeft, bLeft);
+            const ai0 = builder.addVertex(aVertices[2], aLeft, tileToMeters);
+            const ai1 = builder.addVertex(aVertices[3], aLeft, tileToMeters);
+            const bi0 = builder.addVertex(bVertices[2], bLeft, tileToMeters);
+            const bi1 = builder.addVertex(bVertices[3], bLeft, tileToMeters);
 
-            builder.addTriangles([ai0, ai1, bi0, ai1, bi1, bi0]);
+            builder.addTriangle(ai0, ai1, bi0);
+            builder.addTriangle(ai1, bi1, bi0);
+
+            // Generate guard rail caps
+            const aIsTerminal = this.isTerminalVertex(edge.a, vertexConnectivity);
+            const bIsTerminal = this.isTerminalVertex(edge.b, vertexConnectivity);
+
+            if (pa.height < 0.01 && aIsTerminal) {
+                builder.addQuad(aVertices[3], aVertices[2], aVertices[1], aVertices[0], vec3.negate(aFwd, aFwd), tileToMeters);
+            }
+            if (pb.height < 0.01 && bIsTerminal) {
+                builder.addQuad(bVertices[0], bVertices[1], bVertices[2], bVertices[3], bFwd, tileToMeters);
+            }
         }
+
+        this.bridgeFeatureSections.push({featureIndex: Number.POSITIVE_INFINITY, vertexStart: builder.getVertexCount()});
+
+        assert(this.bridgeFeatureSections.every((sec, i) => {
+            return i === 0 || this.bridgeFeatureSections[i - 1].vertexStart <= sec.vertexStart;
+        }));
     }
 
     private constructTunnelStructures(builder: MeshBuilder, vertices: Point[], heights: number[], edges: Edge[], wallRange: Range, entranceRange: Range) {
+        builder.clearVertexLookup();
         const tunnelEntranceHeight = TUNNEL_ENTERANCE_HEIGHT;
+        let lastFeatureIndex = Number.POSITIVE_INFINITY;
+
+        // Sort the edges according to the feature index, since this makes less fragmentation of vertex binder
+        // and facilitates more reusing of vertices during mesh construction.
+        const sortFn = (a: Edge, b: Edge) => a.featureInfo.featureIndex - b.featureInfo.featureIndex;
+        this.sortSubarray<Edge>(edges, wallRange.min, wallRange.max, sortFn);
+        this.sortSubarray<Edge>(edges, entranceRange.min, entranceRange.max, sortFn);
 
         const normalize = (v: vec3) => vec3.normalize(v, v);
+
+        const tunnelEdge: EdgePoints = [{coord: new Point(0, 0), height: 0}, {coord: new Point(0, 0), height: 0}];
+        const compare = (a: number, b: number) => a < b;
+
+        const v1 = vec3.create();
+        const v2 = vec3.create();
+        const v3 = vec3.create();
+        const v4 = vec3.create();
+        const tmpVec = vec3.create();
+
         // Generate underground walls
         for (let i = wallRange.min; i < wallRange.max; i++) {
-            const tunnelEdge = this.prepareEdgePoints(vertices, heights, edges[i], (a, b) => a < b);
+            const result = this.prepareEdgePoints(tunnelEdge, vertices, heights, edges[i], compare);
 
-            if (tunnelEdge == null) continue;
+            if (!result) continue;
 
             const [a, b] = tunnelEdge;
-            const norm = normalize(vec3.fromValues(b.coord.y - a.coord.y, -(b.coord.x - a.coord.x), 0.0));
+            // For tunnel walls, the normal dir points to the inside of the road polygon (left dir points to outside of the
+            // road polygon)
+            const norm = normalize(vec3.set(tmpVec, -(b.coord.y - a.coord.y), b.coord.x - a.coord.x, 0.0));
 
-            builder.addQuad([
-                a,
-                b,
-                {coord: b.coord, height: edges[i].isTunnel ? -0.1 : 0.0},
-                {coord: a.coord, height: edges[i].isTunnel ? -0.1 : 0.0}
-            ], norm);
+            lastFeatureIndex = this.addFeatureSection(edges[i].featureInfo.featureIndex, lastFeatureIndex, this.tunnelFeatureSections, builder);
+
+            builder.addQuad(
+                vec3.set(v1, a.coord.x, a.coord.y, a.height),
+                vec3.set(v2, b.coord.x, b.coord.y, b.height),
+                vec3.set(v3, b.coord.x, b.coord.y, edges[i].isTunnel ? -0.1 : 0.0),
+                vec3.set(v4, a.coord.x, a.coord.y, edges[i].isTunnel ? -0.1 : 0.0),
+                norm);
         }
 
         // Generate tunnel enterances
         for (let i = entranceRange.min; i < entranceRange.max; i++) {
             const edge = edges[i];
 
+            // If the edge is tunnel, it is an edge of tunnel polygon, invert to get the overlapped edge of non-tunnel
+            // polygon
+            if (edge.isTunnel) {
+                [edge.a, edge.b] = [edge.b, edge.a];
+            }
+
             const a = vertices[edge.a];
             const b = vertices[edge.b];
-            const norm = normalize(vec3.fromValues(b.y - a.y, -(b.x - a.x), 0.0));
+            // For tunnel walls, the normal dir points to the inside of the road polygon (left dir points to outside of the
+            // road polygon)
+            const norm = normalize(vec3.set(tmpVec, -(b.y - a.y), b.x - a.x, 0.0));
+
+            lastFeatureIndex = this.addFeatureSection(edge.featureInfo.featureIndex, lastFeatureIndex, this.tunnelFeatureSections, builder);
 
             // 2 quads == double sided
-            builder.addQuad([
-                {coord: b, height: 0.0},
-                {coord: a, height: 0.0},
-                {coord: a, height: heights[edge.a] + tunnelEntranceHeight},
-                {coord: b, height: heights[edge.b] + tunnelEntranceHeight}
-            ], norm);
+            builder.addQuad(
+                vec3.set(v1, b.x, b.y, 0.0),
+                vec3.set(v2, a.x, a.y, 0.0),
+                vec3.set(v3, a.x, a.y, heights[edge.a] + tunnelEntranceHeight),
+                vec3.set(v4, b.x, b.y, heights[edge.b] + tunnelEntranceHeight),
+                norm);
 
-            builder.addQuad([
-                {coord: a, height: 0.0},
-                {coord: b, height: 0.0},
-                {coord: b, height: heights[edge.b] + tunnelEntranceHeight},
-                {coord: a, height: heights[edge.a] + tunnelEntranceHeight}
-            ], norm);
+            builder.addQuad(
+                vec3.set(v1, a.x, a.y, 0.0),
+                vec3.set(v2, b.x, b.y, 0.0),
+                vec3.set(v3, b.x, b.y, heights[edge.b] + tunnelEntranceHeight),
+                vec3.set(v4, a.x, a.y, heights[edge.a] + tunnelEntranceHeight),
+                norm);
         }
+
+        this.tunnelFeatureSections.push({featureIndex: Number.POSITIVE_INFINITY, vertexStart: builder.getVertexCount()});
+
+        assert(this.tunnelFeatureSections.every((sec, i) => {
+            return i === 0 || this.tunnelFeatureSections[i - 1].vertexStart <= sec.vertexStart;
+        }));
     }
 
-    private prepareEdgePoints(vertices: Point[], heights: number[], edge: Edge, comp: (a: number, b: number) => boolean): [ElevatedPoint, ElevatedPoint] | undefined {
+    private setElevatedPoint(out: ElevatedPoint, x: number, y: number, h: number) {
+        assert(out);
+        out.coord.x = x;
+        out.coord.y = y;
+        out.height = h;
+    }
+
+    private prepareEdgePoints(out: EdgePoints, vertices: Point[], heights: number[], edge: Edge, comp: (a: number, b: number) => boolean): boolean {
+        assert(out.length === 2);
         // Prepare the edge by accepting only the segment that
         // passes the comparison function. In practice either the part above or below ground.
+        let vax = vertices[edge.a].x;
+        let vay = vertices[edge.a].y;
+        let vbx = vertices[edge.b].x;
+        let vby = vertices[edge.b].y;
         let ha = heights[edge.a];
         let hb = heights[edge.b];
         const aPass = comp(ha, 0.0);
         const bPass = comp(hb, 0.0);
 
         if (aPass && bPass) {
-            return [{coord: vertices[edge.a], height: ha}, {coord: vertices[edge.b], height: hb}];
+            this.setElevatedPoint(out[0], vax, vay, ha);
+            this.setElevatedPoint(out[1], vbx, vby, hb);
+            return true;
         } else if (!aPass && !bPass) {
-            return undefined;
+            return false;
         }
-
-        const va = vertices[edge.a].clone();
-        const vb = vertices[edge.b].clone();
 
         // Interpolate the line so that both points passes the comparison function
         if (!aPass) {
             const t = ha / (ha - hb);
-            va.x = lerp(va.x, vb.x, t);
-            va.y = lerp(va.y, vb.y, t);
+            vax = lerp(vax, vbx, t);
+            vay = lerp(vay, vby, t);
             ha = lerp(ha, hb, t);
         } else if (!bPass) {
             const t = hb / (hb - ha);
-            vb.x = lerp(vb.x, va.x, t);
-            vb.y = lerp(vb.y, va.y, t);
+            vbx = lerp(vbx, vax, t);
+            vby = lerp(vby, vay, t);
             hb = lerp(hb, ha, t);
         }
 
-        return [{coord: va, height: ha}, {coord: vb, height: hb}];
+        this.setElevatedPoint(out[0], vax, vay, ha);
+        this.setElevatedPoint(out[1], vbx, vby, hb);
+        return true;
     }
 
     private prepareEdges(portals: ElevationPortalEdge[], edges: Edge[]) {
@@ -716,6 +885,22 @@ export class ElevatedStructures {
 
     private isOnBorder(a: number, b: number): boolean {
         return (a <= 0 && b <= 0) || (a >= EXTENT && b >= EXTENT);
+    }
+
+    private addFeatureSection(featureIndex: number, lastFeatureIndex: number, sections: FeatureSection[], builder: MeshBuilder): number {
+        if (featureIndex !== lastFeatureIndex) {
+            lastFeatureIndex = featureIndex;
+            sections.push({featureIndex, vertexStart: builder.getVertexCount()});
+            builder.clearVertexLookup();
+        }
+
+        return lastFeatureIndex;
+    }
+
+    private sortSubarray<T>(array: Array<T>, start: number, end: number, fn: (a: T, b: T) => number) {
+        const sub = array.slice(start, end);
+        sub.sort(fn);
+        array.splice(start, sub.length, ...sub);
     }
 
     static computeEdgeHash(pa: Point, pb: Point): bigint {

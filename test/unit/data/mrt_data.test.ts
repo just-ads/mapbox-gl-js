@@ -1,10 +1,14 @@
-import {describe, test, expect} from 'vitest';
+import Pbf from 'pbf';
+import {describe, test, expect, beforeAll} from 'vitest';
 import {readArrayBuffer} from '../../util/read_array_buffer';
 import {MapboxRasterTile} from '../../../src/data/mrt/mrt.esm.js';
 
 describe('MapboxRasterTile', () => {
+    beforeAll(() => {
+        MapboxRasterTile.setPbf(Pbf);
+    });
     test('parses an MRT with an icon set', async () => {
-        const arrayBuffer = await readArrayBuffer('../../fixtures/iconset-0-0-0.mrt');
+        const arrayBuffer = await readArrayBuffer('test/fixtures/iconset-0-0-0.mrt');
 
         const mrt = new MapboxRasterTile();
         mrt.parseHeader(arrayBuffer);
@@ -22,14 +26,16 @@ describe('MapboxRasterTile', () => {
             const result = await MapboxRasterTile.performDecoding(bufferSlice, task);
             task.complete(null, result);
         } catch (error) {
-            expect.unreachable(error);
+            expect.unreachable(error as string);
         }
 
         expect(layer.hasDataForBand('the-shard')).toBe(true);
 
         const bandView = layer.getBandView('the-shard');
         expect(bandView).toMatchObject({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             data: expect.any(Uint8Array),
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             bytes: expect.any(Uint8Array),
             offset: 0,
             scale: 1,

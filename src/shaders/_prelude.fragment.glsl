@@ -1,6 +1,16 @@
 // NOTE: This prelude is injected in the fragment shader only
 
-out vec4 glFragColor;
+// DUAL_SOURCE_BLENDING and USE_MRT1 are mutually exclusive. Please define only one.
+#ifdef DUAL_SOURCE_BLENDING
+layout(location = 0, index = 0) out vec4 glFragColor;
+layout(location = 0, index = 1) out vec4 glFragColorSrc1;
+#else
+layout(location = 0) out vec4 glFragColor;
+#endif
+
+#ifdef USE_MRT1
+layout(location = 1) out vec4 out_Target1;
+#endif
 
 highp float unpack_depth(highp vec4 rgba_depth)
 {
@@ -75,7 +85,7 @@ vec4 applyLUT(highp sampler3D lut, vec4 col) {
     vec3 size = vec3(textureSize(lut, 0));
     // Sample from the center of the pixel in the LUT
     vec3 uvw = (col.rbg * float(size - 1.0) + 0.5) / size;
-    return vec4(texture(lut, uvw).rgb,col.a);
+    return vec4(texture(lut, uvw).rgb * col.a, col.a);
 }
 
 vec3 applyLUT(highp sampler3D lut, vec3 col) {

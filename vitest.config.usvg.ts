@@ -1,13 +1,14 @@
 import {basename} from 'path';
-import {readFileSync} from 'fs';
+import {readFileSync, globSync} from 'fs';
 import virtual from '@rollup/plugin-virtual';
-import {globSync} from 'glob';
+import {playwright} from '@vitest/browser-playwright';
 import {mergeConfig, defineConfig} from 'vitest/config';
 import baseConfig from './vitest.config.base';
-import {ignores} from './test/usvg/ignores';
+
+const isCI = process.env.CI === 'true';
 
 // base64 encoded PNG fixtures
-const fixtures = globSync('./test/usvg/test-suite/*.png').reduce((acc, pngPath) => {
+const fixtures = globSync(['./test/usvg/test-suite/*.png', './test/usvg/mapbox_usvg_pb_test_suite/*.png']).reduce((acc, pngPath) => {
     const name = basename(pngPath, '.png');
     const base64Data = readFileSync(pngPath, 'base64');
     acc[name] = base64Data;
@@ -16,16 +17,20 @@ const fixtures = globSync('./test/usvg/test-suite/*.png').reduce((acc, pngPath) 
 
 export default mergeConfig(baseConfig, defineConfig({
     test: {
+        browser: {
+            provider: playwright({launchOptions: {channel: isCI ? 'chromium' : 'chrome'}}),
+            instances: [
+                {browser: 'chromium'},
+            ],
+        },
         retry: 0,
         include: ['./test/usvg/*.test.ts'],
         setupFiles: ['./test/usvg/setup.ts'],
-        reporters: process.env.CI ?
-            [['junit', {outputFile: './test/usvg/test-results.xml'}], ['basic']] :
-            ['basic'],
+        reporters: isCI ? [['verbose', {summary: false}]] : [['default']],
     },
     plugins: [
         virtual({
-            'virtual:usvg-fixtures': `export const fixtures = ${JSON.stringify(fixtures)}; export const ignores = ${JSON.stringify(ignores)}`
+            'virtual:usvg-fixtures': `export const fixtures = ${JSON.stringify(fixtures)};`
         })
     ]
 }));

@@ -5,12 +5,15 @@ import EvaluationParameters from './evaluation_parameters';
 import {ZoomDependentExpression} from '../style-spec/expression/index';
 
 import type {ConfigOptions, TransitionParameters, Transitioning, PossiblyEvaluated} from './properties';
-import type {TerrainSpecification} from '../style-spec/types';
+import type {TerrainSpecification, TerrainSpecificationUpdate} from '../style-spec/types';
+import type {StylePropertySpecification} from '../style-spec/style-spec';
 
 type Props = {
     ["source"]: DataConstantProperty<string>;
     ["exaggeration"]: DataConstantProperty<number>;
 };
+
+const terrainSpecification = styleSpec.terrain as Record<string, StylePropertySpecification>;
 
 export const DrapeRenderMode = {
     deferred: 0,
@@ -24,25 +27,28 @@ class Terrain extends Evented {
     properties: PossiblyEvaluated<Props>;
     drapeRenderMode: number;
 
-    constructor(terrainOptions: TerrainSpecification, drapeRenderMode: number, scope: string, configOptions?: ConfigOptions | null) {
+    worldview: string | undefined;
+
+    constructor(terrainOptions: TerrainSpecification, drapeRenderMode: number, scope: string, configOptions?: ConfigOptions | null, worldview?: string) {
         super();
         this.scope = scope;
         this._transitionable = new Transitionable(new Properties({
-            "source": new DataConstantProperty(styleSpec.terrain.source),
-            "exaggeration": new DataConstantProperty(styleSpec.terrain.exaggeration),
+            "source": new DataConstantProperty(terrainSpecification.source),
+            "exaggeration": new DataConstantProperty(terrainSpecification.exaggeration),
         }), scope, configOptions);
-        // @ts-expect-error - TS2345 - Argument of type 'TerrainSpecification' is not assignable to parameter of type 'PropertyValueSpecifications<Props>'.
+
         this._transitionable.setTransitionOrValue(terrainOptions, configOptions);
         this._transitioning = this._transitionable.untransitioned();
         this.drapeRenderMode = drapeRenderMode;
+
+        this.worldview = worldview;
     }
 
     get(): TerrainSpecification {
         return this._transitionable.serialize() as TerrainSpecification;
     }
 
-    set(terrain: TerrainSpecification, configOptions?: ConfigOptions | null) {
-        // @ts-expect-error - TS2345 - Argument of type 'TerrainSpecification' is not assignable to parameter of type 'PropertyValueSpecifications<Props>'.
+    set(terrain: TerrainSpecification | TerrainSpecificationUpdate, configOptions?: ConfigOptions | null) {
         this._transitionable.setTransitionOrValue(terrain, configOptions);
     }
 
@@ -60,7 +66,7 @@ class Terrain extends Evented {
 
     getExaggeration(atZoom: number): number {
 
-        return this._transitioning.possiblyEvaluate(new EvaluationParameters(atZoom)).get('exaggeration');
+        return this._transitioning.possiblyEvaluate(new EvaluationParameters(atZoom, {worldview: this.worldview})).get('exaggeration');
     }
 
     // For dynamic terrain, this is the zoom range when the terrain flattening (disabling) starts
@@ -88,7 +94,8 @@ class Terrain extends Evented {
         let theLastExaggeration = 1.0;
         const zeroExaggerationCutoff = 0.01; // ~0 exaggeration
         for (const zoom of expression.zoomStops) {
-            theLastExaggeration = expression.evaluate(new EvaluationParameters(zoom));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+            theLastExaggeration = expression.evaluate(new EvaluationParameters(zoom, {worldview: this.worldview}));
             if (theLastExaggeration > zeroExaggerationCutoff) {
                 zoomBeforeDrop = zoom;
                 fullyDisabledZoom = -1;

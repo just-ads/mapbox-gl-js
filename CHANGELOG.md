@@ -1,3 +1,136 @@
+## 3.17.0-beta.2
+
+### Features and improvements ✨
+
+- Make `line-emissive-strength` data-driven.
+- Remove experimental flag from the `extra_bounds` property of raster and vector sources.
+- Various performance improvements.
+
+### Bug fixes 🐞
+
+- Fix features not being localized in dynamic filters when a worldview is set.
+- Correctly support filtered features in appearances.
+- Fix an issue occuring when expressions are used in appearances.
+
+## 3.17.0-beta.1
+
+### Features and improvements ✨
+
+- Experimental ESM support.
+- Remove experimental flag from model layer.
+- Conflate building parts together as a whole building.
+
+### Bug fixes 🐞
+
+- Fix line patterns not elevating properly on HD roads.
+- Sanitize attributions in AttributionControl.
+- Fix appearance optimization that resulted in wrong appearances being rendered.
+
+## 3.16.0
+
+### Features and improvements ✨
+
+- Introduce experimental Appearances API for managing layer styling based on feature state.
+- Add `Map` `setLayerProperty` that combines `setLayoutProperty` & `setPaintProperty` into one method for convenience.
+- Add support for node/material overrides & other improvements to `model` source and layer.
+- Various improvements & fixes for upcoming 3D features (indoor, procedural buildings & elevated roads).
+- Add response headers to the `sourcedata` event data.
+- Improve TypeScript types for style specification.
+
+### Bug fixes 🐞
+
+- Fix raster particle layer not rendering correctly on styles with emissive light.
+- Fix icons of different sizes rendering incorrectly in appearances.
+- Fix worldview filtering with dynamic expressions.
+- Improve accuracy of `queryRenderedFeatures` for model layers.
+- Fix a bug with heatmap sometimes disappearing after switching projection.
+- Fix rendering of model layer with vector source on globe projection.
+- Fix flickering of fill-extrusion buildings when using clip layers.
+- Fix inaccuracies in 3D model query intersection.
+- Fix the passing of `GeolocationPosition` to `geolocate` event listeners.
+- Fix the placement of line-aligned text with a non-default `scaleFactor`.
+
+## 3.15.0
+
+### Features and improvements ✨
+
+- Add `queryRasterValue` method for querying values in `raster-array` layers.
+- Add `icon-image-use-theme` property.
+- Add support for Mapbox vector tiles with precalculated line metrics (for line gradients).
+- Improve HD Roads loading performance.
+- Optimize applying LUT when updating images at runtime.
+- Improve TypeScript types in Style Spec validation methods.
+- Slightly improve `hsla` expression performance.
+- Optimize applying LUT for patterns.
+- Round `queryRasterValue` results to 12 decimal digits to fix precision issues.
+- Improvements on typing and testing.
+
+### Bug fixes 🐞
+
+- Fix an issue with refreshing expired raster array tiles.
+- Fix an error on GeoJSON with `"Infinity"` and similar ids.
+- Fix `GL_INVALID_VALUE` console warning on Mapbox Satellite Standard and a few other styles.
+- Fix model layer positioning during globe to mercator transition.
+- Fix an issue with incorrect transparency for some icons with LUT applied.
+- Fix an issue where updating `*-occlusion-opacity` properties didn't have any effect.
+- Fix an issue with MRT layers throwing an error when reloading.
+- Fix occlusion layer ordering.
+- Fix an issue where using too many data-driven properties on the symbol layer could break the map.
+- Fix gradients and interpolations with fully-transparent colors.
+- Fix model layer density reduction.
+- Fix performance regression on styles that use feature-state expressions.
+
+## 3.14.0
+
+### Breaking changes ⚠️
+- Imported styles will use the `glyphs` URL template from the root style instead of their own.
+
+### Features and improvements ✨
+- Add a `split` expression to divide a string into an array of substrings based on a specified delimiter.
+- Improve memory usage for GeoJSON sources.
+
+### Bug fixes 🐞
+- Fix an issue with querying rendered features during the globe-to-Mercator transition.
+- Fix resources cleanup when removing a map with a terrain or/and vector icons.
+- Fix an issue where a single primary image was not rendered correctly with `icon-image-cross-fade`.
+- Fix an edge case involving the mixing of vertical and horizontal writing modes.
+- Fix rendering of multiple `raster` layers from a single `raster-array` source.
+- Fix restoration of maps with background patterns, heatmap, image, video, or raster sources after WebGL context loss.
+- Fix memory spike when calling `setData` on large datasets.
+
+## 3.13.0
+
+### Breaking changes ⚠️
+- `interpolate` expression will interpolate between non-alpha-premultiplied colors. The change might affect `raster-particle-color`, `line-gradient`, and `heatmap-color`.
+- `rgb` expression will return non-premultiplied-alpha color.
+
+### Features and improvements ✨
+- Add the `["worldview"]` expression, which returns the current `worldview` of the map.
+- Add `model-translation` support for batched model layers.
+- Improve indoor level interaction.
+- Add support of gradient transforms in the fill style of vector icons.
+
+### Bug fixes 🐞
+- Fix querying and styling issues with multiple model layers referencing the same source.
+- Fix `mapbox-gl-rtl-text` v0.3.0 plugin not loading in certain configurations.
+- Fix icons with `text-variable-anchor` disappearing.
+- Fix minor distortions on vector icons in some cases.
+- Fix zooming over terrain with negative altitude values.
+- Fix interactions to not throw on `mouseleave` without `mouseenter`.
+- Fix shadow rendering issues on underground structures.
+- Fix striping artifacts when rendering shadows on some GPU configurations.
+- Fix errors when viewing a style with filtered model layers.
+- Fix parsing of `color-use-theme` property of 3D lights.
+- Fix feature-dependent `config` expressions (h/t [@brncsk](https://github.com/brncsk)) [#13453](https://github.com/mapbox/mapbox-gl-js/pull/13453).
+- Fix reset of the indoor floorplan selection after moving the camera.
+- Fix excessive rerendering of the map after `setStyle` with the same URL of an import.
+- Fix source reloading during mercator-globe transition with terrain.
+- Fix color of semi-transparent vector icons.
+
+### Workflow 🛠️
+
+- Switched from CircleCI to GitHub Actions for continuous integration tests.
+
 ## 3.12.0
 
 ### Features and improvements ✨

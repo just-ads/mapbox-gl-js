@@ -50,19 +50,19 @@ export type FunctionSpecification<T> = {
 };
 
 export type CameraFunctionSpecification<T> =
-    | { type: 'exponential', stops: Array<[number, T]> }
-    | { type: 'interval',    stops: Array<[number, T]> };
+    | {type: 'exponential', stops: Array<[number, T]>}
+    | {type: 'interval',    stops: Array<[number, T]>};
 
 export type SourceFunctionSpecification<T> =
-    | { type: 'exponential', stops: Array<[number, T]>, property: string, default?: T }
-    | { type: 'interval',    stops: Array<[number, T]>, property: string, default?: T }
-    | { type: 'categorical', stops: Array<[string | number | boolean, T]>, property: string, default?: T }
-    | { type: 'identity', property: string, default?: T };
+    | {type: 'exponential', stops: Array<[number, T]>, property: string, default?: T}
+    | {type: 'interval',    stops: Array<[number, T]>, property: string, default?: T}
+    | {type: 'categorical', stops: Array<[string | number | boolean, T]>, property: string, default?: T}
+    | {type: 'identity', property: string, default?: T};
 
 export type CompositeFunctionSpecification<T> =
-    | { type: 'exponential', stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T }
-    | { type: 'interval',    stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T }
-    | { type: 'categorical', stops: Array<[{zoom: number, value: string | number | boolean}, T]>, property: string, default?: T };
+    | {type: 'exponential', stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T}
+    | {type: 'interval',    stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T}
+    | {type: 'categorical', stops: Array<[{zoom: number, value: string | number | boolean}, T]>, property: string, default?: T};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ExpressionSpecification = [string, ...any[]];
@@ -125,19 +125,48 @@ export type StyleSpecification = {
      * @experimental This property is experimental and subject to change in future versions.
      */
     "featuresets"?: FeaturesetsSpecification
-}
+};
 
 export type SourcesSpecification = {
     [_: string]: SourceSpecification
-}
+};
 
 export type ModelsSpecification = {
     [_: string]: ModelSpecification
-}
+};
+
+export type ModelNodeOverrideSpecification = {
+    "orientation"?: [number, number, number]
+};
+export type ModelNodeOverridesSpecification = {
+    [_: string]: ModelNodeOverrideSpecification
+};
+export type ModelMaterialOverrideSpecification = {
+    "model-color"?: ColorSpecification,
+    "model-color-mix-intensity"?: number,
+    "model-opacity"?: number,
+    "model-emissive-strength"?: number
+};
+export type ModelMaterialOverridesSpecification = {
+    [_: string]: ModelMaterialOverrideSpecification
+};
+export type ModelSourceModelsSpecification = {
+    [_: string]: ModelSourceModelSpecification
+};
+export type ModelSourceModelSpecification = {
+    "uri": string,
+    "position"?: [number, number],
+    "orientation"?: [number, number, number],
+    "nodeOverrides"?: ModelNodeOverridesSpecification,
+    "materialOverrides"?: ModelMaterialOverridesSpecification,
+    "nodeOverrideNames"?: Array<string>,
+    "materialOverrideNames"?: Array<string>,
+    "featureProperties"?: unknown
+};
 
 export type IconsetsSpecification = {
     [_: string]: IconsetSpecification
-}
+};
 
 export type LightSpecification = {
     "anchor"?: PropertyValueSpecification<"map" | "viewport">,
@@ -148,13 +177,17 @@ export type LightSpecification = {
     "color-use-theme"?: PropertyValueSpecification<string>,
     "intensity"?: PropertyValueSpecification<number>,
     "intensity-transition"?: TransitionSpecification
-}
+};
 
 export type TerrainSpecification = {
     "source": string,
     "exaggeration"?: PropertyValueSpecification<number>,
     "exaggeration-transition"?: TransitionSpecification
-}
+};
+export type TerrainSpecificationUpdate = {
+    "exaggeration"?: PropertyValueSpecification<number>,
+    "exaggeration-transition"?: TransitionSpecification
+};
 
 export type FogSpecification = {
     "range"?: PropertyValueSpecification<[number, number]>,
@@ -174,7 +207,7 @@ export type FogSpecification = {
     "star-intensity-transition"?: TransitionSpecification,
     "vertical-range"?: PropertyValueSpecification<[number, number]>,
     "vertical-range-transition"?: TransitionSpecification
-}
+};
 
 export type SnowSpecification = {
     /**
@@ -224,7 +257,7 @@ export type SnowSpecification = {
      */
     "flake-size"?: PropertyValueSpecification<number>,
     "flake-size-transition"?: TransitionSpecification
-}
+};
 
 export type RainSpecification = {
     /**
@@ -279,22 +312,22 @@ export type RainSpecification = {
      */
     "distortion-strength"?: PropertyValueSpecification<number>,
     "distortion-strength-transition"?: TransitionSpecification
-}
+};
 
 export type CameraSpecification = {
     "camera-projection"?: PropertyValueSpecification<"perspective" | "orthographic">,
     "camera-projection-transition"?: TransitionSpecification
-}
+};
 
 export type ColorThemeSpecification = {
     "data"?: ExpressionSpecification
-}
+};
 
 export type ProjectionSpecification = {
     "name": "albers" | "equalEarth" | "equirectangular" | "lambertConformalConic" | "mercator" | "naturalEarth" | "winkelTripel" | "globe",
     "center"?: [number, number],
     "parallels"?: [number, number]
-}
+};
 
 export type ImportSpecification = {
     "id": string,
@@ -302,26 +335,33 @@ export type ImportSpecification = {
     "config"?: ConfigSpecification,
     "data"?: StyleSpecification,
     "color-theme"?: ColorThemeSpecification | null | undefined
-}
+};
 
 export type IndoorSpecification = {
     /**
      * @experimental This property is experimental and subject to change in future versions.
      */
-    "floorplanFeaturesetId"?: ExpressionSpecification,
+    [_: string]: IndoorSourceSpecification
+};
+
+export type IndoorSourceSpecification = {
     /**
      * @experimental This property is experimental and subject to change in future versions.
      */
-    "buildingFeaturesetId"?: ExpressionSpecification
-}
+    "sourceId"?: string,
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "sourceLayers"?: Array<string>
+};
 
 export type ConfigSpecification = {
     [_: string]: unknown
-}
+};
 
 export type SchemaSpecification = {
     [_: string]: OptionSpecification
-}
+};
 
 export type OptionSpecification = {
     "default": ExpressionSpecification,
@@ -332,14 +372,14 @@ export type OptionSpecification = {
     "stepValue"?: number,
     "values"?: Array<unknown>,
     "metadata"?: unknown
-}
+};
 
 /**
  * @experimental This is experimental and subject to change in future versions.
  */
 export type FeaturesetsSpecification = {
     [_: string]: FeaturesetSpecification
-}
+};
 
 /**
  * @experimental This is experimental and subject to change in future versions.
@@ -353,7 +393,7 @@ export type FeaturesetSpecification = {
      * @experimental This property is experimental and subject to change in future versions.
      */
     "selectors"?: Array<SelectorSpecification>
-}
+};
 
 /**
  * @experimental This is experimental and subject to change in future versions.
@@ -375,7 +415,7 @@ export type SelectorSpecification = {
      * @experimental This property is experimental and subject to change in future versions.
      */
     "_uniqueFeatureID"?: boolean
-}
+};
 
 /**
  * @experimental This is experimental and subject to change in future versions.
@@ -385,7 +425,13 @@ export type SelectorPropertySpecification = {
      * @experimental This property is experimental and subject to change in future versions.
      */
     [_: string]: unknown
-}
+};
+
+export type AppearanceSpecification = {
+    "condition"?: DataDrivenPropertyValueSpecification<boolean>,
+    "name"?: string,
+    "properties"?: unknown
+};
 
 export type VectorSourceSpecification = {
     "type": "vector",
@@ -402,7 +448,7 @@ export type VectorSourceSpecification = {
     "vtOptions": { encrypt: '1' | '2'},
     "volatile"?: boolean,
     [_: string]: unknown
-}
+};
 
 export type RasterProjection = 'GCJ02' | 'BAIDU' | 'MERCATOR'
 
@@ -421,7 +467,7 @@ export type RasterSourceSpecification = {
     "attribution"?: string,
     "volatile"?: boolean,
     [_: string]: unknown
-}
+};
 
 export type RasterDEMSourceSpecification = {
     "type": "raster-dem",
@@ -437,7 +483,7 @@ export type RasterDEMSourceSpecification = {
     "encoding"?: "terrarium" | "mapbox",
     "volatile"?: boolean,
     [_: string]: unknown
-}
+};
 
 /**
  * @experimental This is experimental and subject to change in future versions.
@@ -456,7 +502,7 @@ export type RasterArraySourceSpecification = {
     "rasterLayers"?: unknown,
     "volatile"?: boolean,
     [_: string]: unknown
-}
+};
 
 export type GeoJSONSourceSpecification = {
     "type": "geojson",
@@ -477,29 +523,30 @@ export type GeoJSONSourceSpecification = {
     "generateId"?: boolean,
     "promoteId"?: PromoteIdSpecification,
     "dynamic"?: boolean
-}
+};
 
 export type VideoSourceSpecification = {
     "type": "video",
     "urls": Array<string>,
     "customTags"?: CustomTags,
     "coordinates": [[number, number], [number, number], [number, number], [number, number]]
-}
+};
 
 export type ImageSourceSpecification = {
     "type": "image",
     "url"?: string,
     "customTags"?: CustomTags,
     "coordinates": [[number, number], [number, number], [number, number], [number, number]]
-}
+};
 
 export type ModelSourceSpecification = {
     "type": "model" | "batched-model",
     "maxzoom"?: number,
     "minzoom"?: number,
     "customTags"?: CustomTags,
-    "tiles"?: Array<string>
-}
+    "tiles"?: Array<string>,
+    "models"?: ModelSourceModelsSpecification
+};
 
 export type SourceSpecification =
     | VectorSourceSpecification
@@ -509,7 +556,7 @@ export type SourceSpecification =
     | GeoJSONSourceSpecification
     | VideoSourceSpecification
     | ImageSourceSpecification
-    | ModelSourceSpecification
+    | ModelSourceSpecification;
 
 export type IconsetSpecification =
     | {
@@ -519,7 +566,7 @@ export type IconsetSpecification =
     | {
         "type": "source",
         "source": string
-    }
+    };
 
 export type ModelSpecification = string;
 
@@ -533,7 +580,7 @@ export type AmbientLightSpecification = {
         "intensity-transition"?: TransitionSpecification
     },
     "type": "ambient"
-}
+};
 
 export type DirectionalLightSpecification = {
     "id": string,
@@ -554,7 +601,7 @@ export type DirectionalLightSpecification = {
         "shadow-intensity-transition"?: TransitionSpecification
     },
     "type": "directional"
-}
+};
 
 export type FlatLightSpecification = {
     "id": string,
@@ -569,7 +616,7 @@ export type FlatLightSpecification = {
         "intensity-transition"?: TransitionSpecification
     },
     "type": "flat"
-}
+};
 
 export type LightsSpecification =
     | AmbientLightSpecification
@@ -614,7 +661,6 @@ export type FillLayerSpecification = {
         "fill-translate-anchor"?: PropertyValueSpecification<"map" | "viewport">,
         "fill-pattern"?: DataDrivenPropertyValueSpecification<ResolvedImageSpecification>,
         "fill-pattern-cross-fade"?: PropertyValueSpecification<number>,
-        "fill-pattern-cross-fade-transition"?: TransitionSpecification,
         "fill-emissive-strength"?: PropertyValueSpecification<number>,
         "fill-emissive-strength-transition"?: TransitionSpecification,
         /**
@@ -634,8 +680,12 @@ export type FillLayerSpecification = {
         "fill-tunnel-structure-color"?: DataDrivenPropertyValueSpecification<ColorSpecification>,
         "fill-tunnel-structure-color-transition"?: TransitionSpecification,
         "fill-tunnel-structure-color-use-theme"?: PropertyValueSpecification<string>
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `FillLayerSpecification['layout']` instead.
@@ -702,7 +752,6 @@ export type LineLayerSpecification = {
         "line-dasharray"?: DataDrivenPropertyValueSpecification<Array<number>>,
         "line-pattern"?: DataDrivenPropertyValueSpecification<ResolvedImageSpecification>,
         "line-pattern-cross-fade"?: PropertyValueSpecification<number>,
-        "line-pattern-cross-fade-transition"?: TransitionSpecification,
         "line-gradient"?: ExpressionSpecification,
         "line-gradient-use-theme"?: PropertyValueSpecification<string>,
         "line-trim-offset"?: [number, number],
@@ -716,7 +765,7 @@ export type LineLayerSpecification = {
         "line-trim-color"?: PropertyValueSpecification<ColorSpecification>,
         "line-trim-color-transition"?: TransitionSpecification,
         "line-trim-color-use-theme"?: PropertyValueSpecification<string>,
-        "line-emissive-strength"?: PropertyValueSpecification<number>,
+        "line-emissive-strength"?: DataDrivenPropertyValueSpecification<number>,
         "line-emissive-strength-transition"?: TransitionSpecification,
         "line-border-width"?: DataDrivenPropertyValueSpecification<number>,
         "line-border-width-transition"?: TransitionSpecification,
@@ -725,8 +774,12 @@ export type LineLayerSpecification = {
         "line-border-color-use-theme"?: PropertyValueSpecification<string>,
         "line-occlusion-opacity"?: PropertyValueSpecification<number>,
         "line-occlusion-opacity-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `LineLayerSpecification['layout']` instead.
@@ -772,6 +825,7 @@ export type SymbolLayerSpecification = {
         "icon-text-fit"?: DataDrivenPropertyValueSpecification<"none" | "width" | "height" | "both">,
         "icon-text-fit-padding"?: DataDrivenPropertyValueSpecification<[number, number, number, number]>,
         "icon-image"?: DataDrivenPropertyValueSpecification<ResolvedImageSpecification>,
+        "icon-image-use-theme"?: PropertyValueSpecification<string>,
         "icon-rotate"?: DataDrivenPropertyValueSpecification<number>,
         "icon-padding"?: PropertyValueSpecification<number>,
         "icon-keep-upright"?: PropertyValueSpecification<boolean>,
@@ -829,7 +883,6 @@ export type SymbolLayerSpecification = {
         "icon-translate-transition"?: TransitionSpecification,
         "icon-translate-anchor"?: PropertyValueSpecification<"map" | "viewport">,
         "icon-image-cross-fade"?: PropertyValueSpecification<number>,
-        "icon-image-cross-fade-transition"?: TransitionSpecification,
         "text-opacity"?: DataDrivenPropertyValueSpecification<number>,
         "text-opacity-transition"?: TransitionSpecification,
         "text-occlusion-opacity"?: DataDrivenPropertyValueSpecification<number>,
@@ -856,8 +909,12 @@ export type SymbolLayerSpecification = {
          */
         "symbol-z-offset"?: DataDrivenPropertyValueSpecification<number>,
         "symbol-z-offset-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `SymbolLayerSpecification['layout']` instead.
@@ -912,8 +969,12 @@ export type CircleLayerSpecification = {
         "circle-stroke-opacity-transition"?: TransitionSpecification,
         "circle-emissive-strength"?: PropertyValueSpecification<number>,
         "circle-emissive-strength-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `CircleLayerSpecification['layout']` instead.
@@ -949,8 +1010,12 @@ export type HeatmapLayerSpecification = {
         "heatmap-color-use-theme"?: PropertyValueSpecification<string>,
         "heatmap-opacity"?: PropertyValueSpecification<number>,
         "heatmap-opacity-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `HeatmapLayerSpecification['layout']` instead.
@@ -991,7 +1056,6 @@ export type FillExtrusionLayerSpecification = {
         "fill-extrusion-translate-anchor"?: PropertyValueSpecification<"map" | "viewport">,
         "fill-extrusion-pattern"?: DataDrivenPropertyValueSpecification<ResolvedImageSpecification>,
         "fill-extrusion-pattern-cross-fade"?: PropertyValueSpecification<number>,
-        "fill-extrusion-pattern-cross-fade-transition"?: TransitionSpecification,
         "fill-extrusion-height"?: DataDrivenPropertyValueSpecification<number>,
         "fill-extrusion-height-transition"?: TransitionSpecification,
         "fill-extrusion-base"?: DataDrivenPropertyValueSpecification<number>,
@@ -1068,8 +1132,12 @@ export type FillExtrusionLayerSpecification = {
         "fill-extrusion-line-width"?: DataDrivenPropertyValueSpecification<number>,
         "fill-extrusion-line-width-transition"?: TransitionSpecification,
         "fill-extrusion-cast-shadows"?: boolean
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `FillExtrusionLayerSpecification['layout']` instead.
@@ -1093,67 +1161,54 @@ export type BuildingLayerSpecification = {
     "filter"?: FilterSpecification,
     "layout"?: {
         "visibility"?: "visible" | "none" | ExpressionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
+        "building-facade"?: DataDrivenPropertyValueSpecification<boolean>,
+        "building-facade-floors"?: DataDrivenPropertyValueSpecification<number>,
+        "building-facade-unit-width"?: DataDrivenPropertyValueSpecification<number>,
+        "building-facade-window"?: DataDrivenPropertyValueSpecification<[number, number]>,
         "building-roof-shape"?: DataDrivenPropertyValueSpecification<"flat" | "hipped" | "gabled" | "parapet" | "mansard" | "skillion" | "pyramidal">,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-height"?: DataDrivenPropertyValueSpecification<number>,
         "building-height-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-base"?: DataDrivenPropertyValueSpecification<number>,
-        "building-base-transition"?: TransitionSpecification
+        "building-base-transition"?: TransitionSpecification,
+        "building-flood-light-wall-radius"?: DataDrivenPropertyValueSpecification<number>,
+        "building-flood-light-wall-radius-transition"?: TransitionSpecification,
+        "building-flood-light-ground-radius"?: DataDrivenPropertyValueSpecification<number>,
+        "building-flood-light-ground-radius-transition"?: TransitionSpecification,
+        "building-flip-roof-orientation"?: DataDrivenPropertyValueSpecification<boolean>,
+        "building-flip-roof-orientation-transition"?: TransitionSpecification
     },
     "paint"?: {
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-opacity"?: PropertyValueSpecification<number>,
         "building-opacity-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
-        "building-ambient-occlusion-wall-intensity"?: PropertyValueSpecification<number>,
-        "building-ambient-occlusion-wall-intensity-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
+        "building-ambient-occlusion-intensity"?: ExpressionSpecification,
+        "building-ambient-occlusion-intensity-transition"?: TransitionSpecification,
         "building-ambient-occlusion-ground-intensity"?: PropertyValueSpecification<number>,
         "building-ambient-occlusion-ground-intensity-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-ambient-occlusion-ground-radius"?: PropertyValueSpecification<number>,
         "building-ambient-occlusion-ground-radius-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-ambient-occlusion-ground-attenuation"?: PropertyValueSpecification<number>,
         "building-ambient-occlusion-ground-attenuation-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-vertical-scale"?: PropertyValueSpecification<number>,
         "building-vertical-scale-transition"?: TransitionSpecification,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-cast-shadows"?: boolean,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
         "building-color"?: DataDrivenPropertyValueSpecification<ColorSpecification>,
         "building-color-use-theme"?: PropertyValueSpecification<string>,
-        /**
-         * @experimental This property is experimental and subject to change in future versions.
-         */
-        "building-emissive-strength"?: DataDrivenPropertyValueSpecification<number>
-    }
-}
+        "building-emissive-strength"?: DataDrivenPropertyValueSpecification<number>,
+        "building-facade-emissive-chance"?: PropertyValueSpecification<number>,
+        "building-cutoff-fade-range"?: ExpressionSpecification,
+        "building-flood-light-color"?: PropertyValueSpecification<ColorSpecification>,
+        "building-flood-light-color-transition"?: TransitionSpecification,
+        "building-flood-light-color-use-theme"?: PropertyValueSpecification<string>,
+        "building-flood-light-intensity"?: PropertyValueSpecification<number>,
+        "building-flood-light-intensity-transition"?: TransitionSpecification,
+        "building-flood-light-ground-attenuation"?: PropertyValueSpecification<number>,
+        "building-flood-light-ground-attenuation-transition"?: TransitionSpecification
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `BuildingLayerSpecification['layout']` instead.
@@ -1211,8 +1266,12 @@ export type RasterLayerSpecification = {
          */
         "raster-elevation"?: PropertyValueSpecification<number>,
         "raster-elevation-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `RasterLayerSpecification['layout']` instead.
@@ -1250,8 +1309,12 @@ export type RasterParticleLayerSpecification = {
         "raster-particle-reset-rate-factor"?: number,
         "raster-particle-elevation"?: PropertyValueSpecification<number>,
         "raster-particle-elevation-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `RasterParticleLayerSpecification['layout']` instead.
@@ -1293,8 +1356,12 @@ export type HillshadeLayerSpecification = {
         "hillshade-accent-color-use-theme"?: PropertyValueSpecification<string>,
         "hillshade-emissive-strength"?: PropertyValueSpecification<number>,
         "hillshade-emissive-strength-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `HillshadeLayerSpecification['layout']` instead.
@@ -1346,9 +1413,14 @@ export type ModelLayerSpecification = {
         "model-height-based-emissive-strength-multiplier"?: DataDrivenPropertyValueSpecification<[number, number, number, number, number]>,
         "model-height-based-emissive-strength-multiplier-transition"?: TransitionSpecification,
         "model-cutoff-fade-range"?: ExpressionSpecification,
-        "model-front-cutoff"?: PropertyValueSpecification<[number, number, number]>
-    }
-}
+        "model-front-cutoff"?: PropertyValueSpecification<[number, number, number]>,
+        "model-elevation-reference"?: "sea" | "ground" | "hd-road-markup" | ExpressionSpecification
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `ModelLayerSpecification['layout']` instead.
@@ -1386,8 +1458,12 @@ export type BackgroundLayerSpecification = {
         "background-opacity-transition"?: TransitionSpecification,
         "background-emissive-strength"?: PropertyValueSpecification<number>,
         "background-emissive-strength-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `BackgroundLayerSpecification['layout']` instead.
@@ -1426,8 +1502,12 @@ export type SkyLayerSpecification = {
         "sky-atmosphere-color-use-theme"?: PropertyValueSpecification<string>,
         "sky-opacity"?: PropertyValueSpecification<number>,
         "sky-opacity-transition"?: TransitionSpecification
-    }
-}
+    },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>
+};
 
 /**
  * @deprecated Use `SkyLayerSpecification['layout']` instead.
@@ -1449,9 +1529,13 @@ export type SlotLayerSpecification = {
     "minzoom"?: never,
     "maxzoom"?: never,
     "filter"?: never,
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>,
     "layout"?: never,
     "paint"?: never
-}
+};
 
 export type ClipLayerSpecification = {
     "id": string,
@@ -1467,8 +1551,12 @@ export type ClipLayerSpecification = {
         "clip-layer-types"?: ExpressionSpecification,
         "clip-layer-scope"?: ExpressionSpecification
     },
+    /**
+     * @experimental This property is experimental and subject to change in future versions.
+     */
+    "appearances"?: Array<AppearanceSpecification>,
     "paint"?: never
-}
+};
 
 /**
  * @deprecated Use `ClipLayerSpecification['layout']` instead.

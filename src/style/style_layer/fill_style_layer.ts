@@ -21,6 +21,8 @@ import type {ImageId} from '../../style-spec/expression/types/image_id';
 import type {ProgramName} from '../../render/program';
 
 class FillStyleLayer extends StyleLayer {
+    override type: 'fill';
+
     override _unevaluatedLayout: Layout<LayoutProps>;
     override layout: PossiblyEvaluated<LayoutProps>;
 
@@ -39,8 +41,7 @@ class FillStyleLayer extends StyleLayer {
     override getProgramIds(): ProgramName[] {
         const pattern = this.paint.get('fill-pattern');
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const image = pattern && pattern.constantOr((1 as any));
+        const image = pattern && pattern.constantOr(1);
 
         const ids: ProgramName[] = [image ? 'fillPattern' : 'fill'];
 

@@ -1,30 +1,38 @@
 import {default as ValidationError, ValidationWarning} from '../error/validation_error';
 import validate from './validate';
-import getType from '../util/get_type';
+import {getType, isObject} from '../util/get_type';
 
-import type {ValidationOptions} from './validate';
+import type {StyleReference} from '../reference/latest';
+import type {StyleSpecification} from '../types';
 
-export default function validateFog(options: ValidationOptions): Array<ValidationError> {
+type FogValidatorOptions = {
+    key: string;
+    value: unknown;
+    style: Partial<StyleSpecification>;
+    styleSpec: StyleReference;
+};
+
+export default function validateFog(options: FogValidatorOptions): ValidationError[] {
     const fog = options.value;
     const style = options.style;
     const styleSpec = options.styleSpec;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fogSpec = styleSpec.fog;
-    let errors = [];
 
-    const rootType = getType(fog);
     if (fog === undefined) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return errors;
-    } else if (rootType !== 'object') {
-        errors = errors.concat([new ValidationError('fog', fog, `object expected, ${rootType} found`)]);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return errors;
+        return [];
     }
 
+    if (!isObject(fog)) {
+        return [new ValidationError('fog', fog, `object expected, ${getType(fog)} found`)];
+    }
+
+    let errors: ValidationError[] = [];
     for (const key in fog) {
         const transitionMatch = key.match(/^(.*)-transition$/);
         const useThemeMatch = key.match(/^(.*)-use-theme$/);
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (useThemeMatch && fogSpec[useThemeMatch[1]]) {
             errors = errors.concat(validate({
                 key,
@@ -33,18 +41,22 @@ export default function validateFog(options: ValidationOptions): Array<Validatio
                 style,
                 styleSpec
             }));
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         } else if (transitionMatch && fogSpec[transitionMatch[1]] && fogSpec[transitionMatch[1]].transition) {
             errors = errors.concat(validate({
                 key,
                 value: fog[key],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 valueSpec: styleSpec.transition,
                 style,
                 styleSpec
             }));
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         } else if (fogSpec[key]) {
             errors = errors.concat(validate({
                 key,
                 value: fog[key],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
                 valueSpec: fogSpec[key],
                 style,
                 styleSpec
@@ -54,6 +66,5 @@ export default function validateFog(options: ValidationOptions): Array<Validatio
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return errors;
 }

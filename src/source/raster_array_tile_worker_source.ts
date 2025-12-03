@@ -60,16 +60,16 @@ class RasterArrayWorkerTile {
                 const bufferSlice = buffer.slice(range.firstByte, range.lastByte + 1);
                 const decodingTask = MapboxRasterTile.performDecoding(bufferSlice, task)
                     .then(result => task.complete(null, result))
-                    .catch(error => task.complete(error, null));
+                    .catch((error: Error) => task.complete(error, null));
 
                 decodingTasks.push(decodingTask);
             }
 
             Promise.allSettled(decodingTasks)
                 .then(() => callback(null, mrt))
-                .catch(error => callback(error));
+                .catch((error: Error) => callback(error));
         } catch (error) {
-            callback(error);
+            callback(error as Error);
         }
     }
 }
@@ -90,7 +90,7 @@ class RasterArrayTileWorkerSource implements WorkerSource {
         const requestParam = params.request;
 
         const workerTile = this.loading[uid] = new RasterArrayWorkerTile(params);
-        const {cancel} = getArrayBuffer(requestParam, (error?: Error, buffer?: ArrayBuffer, cacheControl?: string, expires?: string) => {
+        const {cancel} = getArrayBuffer(requestParam, (error?: Error, buffer?: ArrayBuffer, headers?: Headers) => {
             const aborted = !this.loading[uid];
             delete this.loading[uid];
 
@@ -102,7 +102,7 @@ class RasterArrayTileWorkerSource implements WorkerSource {
 
             workerTile.parse(buffer, (error?: Error | null, mrt?: MapboxRasterTile) => {
                 if (error || !mrt) return callback(error);
-                callback(null, mrt, cacheControl, expires);
+                callback(null, mrt, headers);
             });
 
             this.loaded[uid] = workerTile;
@@ -137,7 +137,7 @@ class RasterArrayTileWorkerSource implements WorkerSource {
     decodeRasterArray(params: ActorMessages['decodeRasterArray']['params'], callback: ActorMessages['decodeRasterArray']['callback']) {
         MapboxRasterTile.performDecoding(params.buffer, params.task)
             .then(result => callback(null, result))
-            .catch(error => callback(error));
+            .catch((error: Error) => callback(error));
     }
 }
 

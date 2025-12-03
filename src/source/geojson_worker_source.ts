@@ -1,7 +1,7 @@
 import {getJSON} from '../util/ajax';
 import {getPerformanceMeasurement} from '../util/performance';
 import GeoJSONWrapper from './geojson_wrapper';
-import vtpbf from 'vt-pbf';
+import writePbf from './vector_tile_to_pbf';
 import Supercluster from 'supercluster';
 import geojsonvt from 'geojson-vt';
 import assert from 'assert';
@@ -14,7 +14,8 @@ import type {
 } from './worker_source';
 import type Actor from '../util/actor';
 import type StyleLayerIndex from '../style/style_layer_index';
-import type {Feature} from '../style-spec/expression/index';
+import type {Feature} from './geojson_wrapper';
+import type {Feature as ExpressionFeature} from '../style-spec/expression/index';
 import type {LoadVectorDataCallback} from './load_vector_tile';
 import type {RequestParameters, ResponseCallback} from '../util/ajax';
 import type {Callback} from '../types/callback';
@@ -58,7 +59,7 @@ export interface GeoJSONIndex {
     getLeaves?: (clusterId: number, limit: number, offset: number) => Array<GeoJSON.Feature>;
 }
 
-function loadGeoJSONTile(params: WorkerSourceVectorTileRequest, callback: LoadVectorDataCallback): undefined {
+function loadGeoJSONTile(this: GeoJSONWorkerSource, params: WorkerSourceVectorTileRequest, callback: LoadVectorDataCallback): undefined {
     const canonical = params.tileID.canonical;
 
     if (!this._geoJSONIndex) {
@@ -66,27 +67,43 @@ function loadGeoJSONTile(params: WorkerSourceVectorTileRequest, callback: LoadVe
         return;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const geoJSONTile = this._geoJSONIndex.getTile(canonical.z, canonical.x, canonical.y);
     if (!geoJSONTile) {
         callback(null, null); // nothing in the given tile
         return;
     }
 
-    const geojsonWrapper = new GeoJSONWrapper(geoJSONTile.features);
+    // HACK: separate elevation features into separate layer
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const isElevationfeature = (f) => f.tags && '3d_elevation_id' in f.tags && 'source' in f.tags && f.tags.source === 'elevation';
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+    const elevationFeatures = geoJSONTile.features.filter(f => isElevationfeature(f));
+
+    let layers: Record<string, Feature[]> = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+        _geojsonTileLayer: geoJSONTile.features
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    if (elevationFeatures.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        const nonElevationFeatures = geoJSONTile.features.filter(f => !isElevationfeature(f));
+        layers = {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+            _geojsonTileLayer: nonElevationFeatures,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+            'hd_road_elevation': elevationFeatures
+        };
+    }
+    const vectorTile = new GeoJSONWrapper(layers);
 
     // Encode the geojson-vt tile into binary vector tile form.  This
     // is a convenience that allows `FeatureIndex` to operate the same way
     // across `VectorTileSource` and `GeoJSONSource` data.
-    let pbf = vtpbf(geojsonWrapper);
-    if (pbf.byteOffset !== 0 || pbf.byteLength !== pbf.buffer.byteLength) {
-        // Compatibility with node Buffer (https://github.com/mapbox/pbf/issues/35)
-        pbf = new Uint8Array(pbf);
-    }
+    const rawData = writePbf(layers).buffer as ArrayBuffer;
 
-    callback(null, {
-        vectorTile: geojsonWrapper,
-        rawData: pbf.buffer
-    });
+    callback(null, {vectorTile, rawData});
 }
 
 /**
@@ -136,6 +153,8 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         const requestParam = params && params.request;
         const perf = requestParam && requestParam.collectResourceTiming;
 
+        this._geoJSONIndex = null;
+
         this.loadGeoJSON(params, (err?: Error, data?: FeatureCollectionOrFeature) => {
             if (err || !data) {
                 return callback(err);
@@ -150,7 +169,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
                         if (compiled.result === 'error')
                             throw new Error(compiled.value.map(err => `${err.key}: ${err.message}`).join(', '));
 
-                        (data as GeoJSON.FeatureCollection).features = (data as GeoJSON.FeatureCollection).features.filter(feature => compiled.value.evaluate({zoom: 0}, feature as unknown as Feature));
+                        (data as GeoJSON.FeatureCollection).features = (data as GeoJSON.FeatureCollection).features.filter(feature => compiled.value.evaluate({zoom: 0}, feature as unknown as ExpressionFeature));
                     }
 
                     // for GeoJSON sources that are marked as dynamic, we retain the GeoJSON data
@@ -180,7 +199,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
                         geojsonvt(data, params.geojsonVtOptions);
 
                 } catch (err) {
-                    return callback(err);
+                    return callback(err as Error);
                 }
 
                 this.loaded = {};
@@ -192,6 +211,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
                     // late evaluation in the main thread causes TypeError: illegal invocation
                     if (resourceTimingData) {
                         result.resourceTiming = {};
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                         result.resourceTiming[params.source] = JSON.parse(JSON.stringify(resourceTimingData));
                     }
                 }
@@ -239,11 +259,15 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         if (params.request) {
             getJSON(params.request, callback);
         } else if (typeof params.data === 'string') {
-            try {
-                return callback(null, JSON.parse(params.data));
-            } catch (e) {
-                return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
-            }
+            // delay loading by one tick to hopefully let GC clean up the previous index (if present)
+            setTimeout(() => {
+                try {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                    return callback(null, JSON.parse(params.data));
+                } catch (e) {
+                    return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
+                }
+            }, 0);
         } else {
             return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
         }
@@ -255,7 +279,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         try {
             callback(null, this._geoJSONIndex.getClusterExpansionZoom(params.clusterId));
         } catch (e) {
-            callback(e);
+            callback(e as Error);
         }
     }
 
@@ -265,7 +289,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         try {
             callback(null, this._geoJSONIndex.getChildren(params.clusterId));
         } catch (e) {
-            callback(e);
+            callback(e as Error);
         }
     }
 
@@ -277,7 +301,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         try {
             callback(null, this._geoJSONIndex.getLeaves(params.clusterId, params.limit, params.offset));
         } catch (e) {
-            callback(e);
+            callback(e as Error);
         }
     }
 }
@@ -295,9 +319,11 @@ function getSuperclusterOptions({
     const reduceExpressions: Record<string, any> = {};
     const globals = {accumulated: null, zoom: 0};
     const feature = {properties: null};
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     const propertyNames = Object.keys(clusterProperties);
 
     for (const key of propertyNames) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const [operator, mapExpression] = clusterProperties[key];
 
         const mapExpressionParsed = createExpression(mapExpression);
@@ -311,19 +337,26 @@ function getSuperclusterOptions({
         reduceExpressions[key] = reduceExpressionParsed.value;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     superclusterOptions.map = (pointProperties) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         feature.properties = pointProperties;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const properties: Record<string, any> = {};
         for (const key of propertyNames) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             properties[key] = mapExpressions[key].evaluate(globals, feature);
         }
         return properties;
     };
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     superclusterOptions.reduce = (accumulated, clusterProperties) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         feature.properties = clusterProperties;
         for (const key of propertyNames) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
             globals.accumulated = accumulated[key];
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
             accumulated[key] = reduceExpressions[key].evaluate(globals, feature);
         }
     };

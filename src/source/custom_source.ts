@@ -1,6 +1,6 @@
 import Texture from '../render/texture';
 import TileBounds from './tile_bounds';
-import {extend, pick} from '../util/util';
+import {pick} from '../util/util';
 import {Event, ErrorEvent, Evented} from '../util/evented';
 import {makeFQID} from '../util/fqid';
 
@@ -15,8 +15,7 @@ import type {TextureImage} from '../render/texture';
 
 type DataType = 'raster';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isRaster(data: any): boolean {
+function isRaster(data: unknown): boolean {
     return data instanceof ImageData ||
         data instanceof HTMLCanvasElement ||
         data instanceof ImageBitmap ||
@@ -222,7 +221,7 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
         // @ts-expect-error - TS2339 - Property 'coveringTiles' does not exist on type 'CustomSourceInterface<T>'.
         implementation.coveringTiles = this._coveringTiles.bind(this);
 
-        extend(this, pick(implementation, ['dataType', 'scheme', 'minzoom', 'maxzoom', 'tileSize', 'attribution', 'minTileCacheSize', 'maxTileCacheSize']));
+        Object.assign(this, pick(implementation, ['dataType', 'scheme', 'minzoom', 'maxzoom', 'tileSize', 'attribution', 'minTileCacheSize', 'maxTileCacheSize']));
     }
 
     serialize() {
@@ -270,6 +269,7 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
         // @ts-expect-error - TS2741 - Property 'cancel' is missing in type 'Promise<void | Awaited<T>>' but required in type 'Cancelable'.
         tile.request = Promise
             .resolve(this._implementation.loadTile({x, y, z}, {signal}))
+
             .then(tileLoaded.bind(this))
             .catch((error?: Error | DOMException | AJAXError) => {
                 // silence AbortError
@@ -280,7 +280,7 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
 
         tile.request.cancel = () => controller.abort();
 
-        function tileLoaded(data?: T | null) {
+        function tileLoaded(this: CustomSource<T>, data?: T | null) {
             delete tile.request;
 
             if (tile.aborted) {
@@ -301,7 +301,7 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
             // A map will render nothing in the tile’s space.
             if (data === null) {
                 const emptyImage = {width: this.tileSize, height: this.tileSize, data: null};
-                this.loadTileData(tile, emptyImage);
+                this.loadTileData(tile, emptyImage as T);
                 tile.state = 'loaded';
                 return callback(null);
             }
@@ -328,7 +328,7 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
         if (tile.texture && tile.texture instanceof Texture) {
             // Clean everything else up owned by the tile, but preserve the texture.
             // Destroy first to prevent racing with the texture cache being popped.
-            tile.destroy(true);
+            tile.destroy(false);
 
             // Save the texture to the cache
             if (tile.texture && tile.texture instanceof Texture) {

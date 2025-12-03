@@ -4,7 +4,6 @@ import SegmentVector from '../data/segment';
 import * as symbolProjection from '../symbol/projection';
 import {mat4, vec3, vec4} from 'gl-matrix';
 import {clamp} from '../util/util';
-const identityMat4 = mat4.create();
 import StencilMode from '../gl/stencil_mode';
 import DepthMode from '../gl/depth_mode';
 import CullFaceMode from '../gl/cull_face_mode';
@@ -23,6 +22,10 @@ import {
 } from './program/symbol_program';
 import {getSymbolTileProjectionMatrix} from '../geo/projection/projection_util';
 import {evaluateSizeForFeature, evaluateSizeForZoom, type InterpolatedSize} from '../symbol/symbol_size';
+import EXTENT from '../style-spec/data/extent';
+import {Texture3D} from '../render/texture';
+import TextureSlots from '../../3d-style/render/texture_slots';
+import {Elevation} from '../terrain/elevation';
 
 import type Tile from '../source/tile';
 import type Transform from '../geo/transform';
@@ -64,6 +67,8 @@ type SymbolTileRenderState = {
 };
 
 type Alignment = 'auto' | 'map' | 'viewport';
+
+const identityMat4 = mat4.create();
 
 function drawSymbols(painter: Painter, sourceCache: SourceCache, layer: SymbolStyleLayer, coords: Array<OverscaledTileID>, variableOffsets: Partial<Record<CrossTileID, VariableOffset>>) {
     if (painter.renderPass !== 'translucent') return;
@@ -118,10 +123,10 @@ function drawSymbols(painter: Painter, sourceCache: SourceCache, layer: SymbolSt
 
 function computeGlobeCameraUp(transform: Transform): [number, number, number] {
     const viewMatrix = transform._camera.getWorldToCamera(transform.worldSize, 1);
-    const viewToEcef = mat4.multiply([] as unknown as mat4, viewMatrix, transform.globeMatrix);
+    const viewToEcef = mat4.multiply([], viewMatrix, transform.globeMatrix);
     mat4.invert(viewToEcef, viewToEcef);
 
-    const cameraUpVector: vec3 = [0, 0, 0];
+    const cameraUpVector: [number, number, number] = [0, 0, 0];
     const up: vec4 = [0, 1, 0, 0];
     vec4.transformMat4(up, up, viewToEcef);
     cameraUpVector[0] = up[0];
@@ -185,7 +190,7 @@ type PlacedTextShift = {
     y: number,
     z: number,
     angle: number
-}
+};
 
 function updateVariableAnchorsForBucket(bucket: SymbolBucket, rotateWithMap: boolean, pitchWithMap: boolean, variableOffsets: Partial<Record<CrossTileID, VariableOffset>>, transform: Transform, labelPlaneMatrix: Float32Array, coord: OverscaledTileID, tileScale: number, size: InterpolatedSize, updateTextFitIcon: boolean) {
     const placedSymbols = bucket.text.placedSymbolArray;
@@ -211,8 +216,10 @@ function updateVariableAnchorsForBucket(bucket: SymbolBucket, rotateWithMap: boo
 
         } else {
             let dx = 0, dy = 0, dz = 0;
-            if (elevation) {
-                const h = elevation ? elevation.getAtTileOffset(coord, tileAnchorX, tileAnchorY) : 0.0;
+            const renderElevatedRoads = bucket.elevationType === 'road';
+            if (elevation || renderElevatedRoads) {
+                const elevationFeature = renderElevatedRoads ? bucket.getElevationFeatureForText(s) : null;
+                const h = Elevation.getAtTileOffset(coord, new Point(tileAnchorX, tileAnchorY), elevation, elevationFeature);
                 const [ux, uy, uz] = projection.upVector(coord.canonical, tileAnchorX, tileAnchorY);
                 dx = h * ux * metersToTile;
                 dy = h * uy * metersToTile;
@@ -309,6 +316,7 @@ function drawLayerSymbols(
     const iconBrightnessMin = layer.paint.get('icon-color-brightness-min');
     const iconBrightnessMax = layer.paint.get('icon-color-brightness-max');
     const elevationFromSea = layer.layout.get('symbol-elevation-reference') === 'sea';
+    const ignoreLut = layer.layout.get('icon-image-use-theme') === 'none';
 
     const context = painter.context;
     const gl = context.gl;
@@ -359,20 +367,24 @@ function drawLayerSymbols(
             hasVariableAnchors &&
             bucket.hasIconData();
 
-        const depthMode = bucket.elevationType === 'road' ? depthModeFor3D : depthModeForLayer;
         const invMatrix = bucket.getProjection().createInversionMatrix(tr, coord.canonical);
 
-        const renderElevatedRoads = bucket.elevationType === 'road';
-        const shadowRenderer = painter.shadowRenderer;
-        const renderWithShadows = renderElevatedRoads && !!shadowRenderer && shadowRenderer.enabled;
-        let groundShadowFactor: [number, number, number] = [0, 0, 0];
-        if (renderWithShadows) {
-            const directionalLight = painter.style.directionalLight;
-            const ambientLight = painter.style.ambientLight;
-            if (directionalLight && ambientLight) {
-                groundShadowFactor = calculateGroundShadowFactor(painter.style, directionalLight, ambientLight);
+        // World matrix of the tile applies non-uniform scaling for coordinate axes as x&y are scaled from
+        // tile units to world units and z is left as-is in meters. This has to be compensated so that
+        // the basis of the normal vector used to orientate map aligned symbols remains orthogonal in world space
+        const orientationNormalScale = (1 << tile.tileID.canonical.z) * EXTENT / painter.transform.worldSize;
+
+        const getGroundShadowFactor = (renderWithShadows: boolean): [number, number, number] => {
+            let groundShadowFactor: [number, number, number] = [0, 0, 0];
+            if (renderWithShadows) {
+                const directionalLight = painter.style.directionalLight;
+                const ambientLight = painter.style.ambientLight;
+                if (directionalLight && ambientLight) {
+                    groundShadowFactor = calculateGroundShadowFactor(painter.style, directionalLight, ambientLight);
+                }
             }
-        }
+            return groundShadowFactor;
+        };
 
         const setOcclusionDefines = (defines: DynamicDefinesType[]) => {
             // Globe or orthographic - no depth occlusion needed
@@ -380,7 +392,7 @@ function drawLayerSymbols(
                 return;
             }
 
-            if (!layer.hasInitialOcclusionOpacityProperties) {
+            if (!layer.hasOcclusionOpacityProperties) {
                 // Occlusion against terrain only
                 if (painter.terrain) {
                     defines.push('DEPTH_D24');
@@ -393,6 +405,22 @@ function drawLayerSymbols(
             }
         };
 
+        const setLutDefines = (defines: DynamicDefinesType[]) => {
+            if (!layer.lut || ignoreLut) {
+                return;
+            }
+
+            if (!layer.lut.texture) {
+                layer.lut.texture = new Texture3D(painter.context, layer.lut.image, [layer.lut.image.height, layer.lut.image.height, layer.lut.image.height], context.gl.RGBA8);
+            }
+            context.activeTexture.set(context.gl.TEXTURE0 + TextureSlots.LUT);
+            if (layer.lut.texture) {
+                layer.lut.texture.bind(context.gl.LINEAR, context.gl.CLAMP_TO_EDGE);
+            }
+            defines.push('APPLY_LUT_ON_GPU');
+
+        };
+
         const getIconState = () => {
             const symbolPlacement = layer.layout.get('symbol-placement');
             const alongLine = iconRotateWithMap && (symbolPlacement === 'line' || symbolPlacement === 'line-center');
@@ -400,8 +428,16 @@ function drawLayerSymbols(
             const baseDefines: DynamicDefinesType[] = [];
 
             setOcclusionDefines(baseDefines);
+            setLutDefines(baseDefines);
 
             const projectedPosOnLabelSpace = alongLine || updateTextFitIcon;
+
+            const renderElevatedRoads = bucket.elevationType === 'road';
+            const shadowRenderer = painter.shadowRenderer;
+            const renderWithShadows = renderElevatedRoads && iconPitchWithMap && !!shadowRenderer && shadowRenderer.enabled;
+            const groundShadowFactor = getGroundShadowFactor(renderWithShadows);
+
+            const depthMode = renderElevatedRoads && iconPitchWithMap && !painter.terrain ? depthModeFor3D : depthModeForLayer;
 
             const transitionProgress = layer.paint.get('icon-image-cross-fade');
             if (painter.terrainRenderModeElevated() && iconPitchWithMap) {
@@ -413,10 +449,10 @@ function drawLayerSymbols(
                     baseDefines.push('PROJECTED_POS_ON_VIEWPORT');
                 }
             }
-            if (transitionProgress > 0.0) {
+            if (transitionProgress > 0.0 && bucket.hasAnySecondaryIcon) {
                 baseDefines.push('ICON_TRANSITION');
             }
-            if (bucket.icon.zOffsetVertexBuffer) {
+            if (bucket.icon.zOffsetVertexBuffer && (!renderElevatedRoads || !painter.terrain)) {
                 baseDefines.push('Z_OFFSET');
             }
 
@@ -432,13 +468,17 @@ function drawLayerSymbols(
                 baseDefines.push('RENDER_SHADOWS', 'DEPTH_TEXTURE', 'NORMAL_OFFSET');
             }
 
+            if (renderElevatedRoads && iconPitchWithMap && !painter.terrain && bucket.icon.orientationVertexBuffer) {
+                baseDefines.push('ELEVATED_ROADS');
+            }
+
             const programConfiguration = bucket.icon.programConfigurations.get(layer.id);
             const program = painter.getOrCreateProgram('symbol', {config: programConfiguration, defines: baseDefines});
 
             const texSize: [number, number] = tile.imageAtlasTexture ? tile.imageAtlasTexture.size : [0, 0];
             const sizeData = bucket.iconSizeData;
             const size = evaluateSizeForZoom(sizeData, tr.zoom);
-            const transformed = iconPitchWithMap || tr.pitch !== 0;
+            const transformed = iconPitchWithMap || !tr.isOrthographic;
 
             const labelPlaneMatrixRendering = symbolProjection.getLabelPlaneMatrixForRendering(tileMatrix, tile.tileID.canonical, iconPitchWithMap, iconRotateWithMap, tr, bucket.getProjection(), s);
 
@@ -463,7 +503,8 @@ function drawLayerSymbols(
 
             const colorAdjustmentMatrix = layer.getColorAdjustmentMatrix(iconSaturation, iconContrast, iconBrightnessMin, iconBrightnessMax);
             const uniformValues = symbolUniformValues(sizeData.kind, size, rotateInShader, iconPitchWithMap, painter,
-                matrix, uLabelPlaneMatrix, uglCoordMatrix, elevationFromSea, false, texSize, [0, 0], true, coord, globeToMercator, mercatorCenter, invMatrix, cameraUpVector, bucket.getProjection(), groundShadowFactor, colorAdjustmentMatrix, transitionProgress);
+                matrix, uLabelPlaneMatrix, uglCoordMatrix, elevationFromSea, false, texSize, [0, 0], true, coord, globeToMercator, mercatorCenter, invMatrix,
+                cameraUpVector, bucket.getProjection(), groundShadowFactor, orientationNormalScale, colorAdjustmentMatrix, transitionProgress, null);
 
             const atlasTexture = tile.imageAtlasTexture ? tile.imageAtlasTexture : null;
 
@@ -479,11 +520,12 @@ function drawLayerSymbols(
             // Unpitched point labels need to have their rotation applied after projection
 
             if (alongLine && bucket.icon) {
-                const elevation = tr.elevation;
-                const getElevation = elevation ? elevation.getAtTileOffsetFunc(coord, tr.center.lat, tr.worldSize, bucket.getProjection()) : null;
+                const getElevation = Elevation.getAtTileOffsetFunc(coord, tr.center.lat, tr.worldSize, bucket.getProjection());
                 const labelPlaneMatrixPlacement = symbolProjection.getLabelPlaneMatrixForPlacement(tileMatrix, tile.tileID.canonical, iconPitchWithMap, iconRotateWithMap, tr, bucket.getProjection(), s);
+                const iconSizeScaleRange = layer.layout.get('icon-size-scale-range');
+                const iconScaleFactor = clamp(painter.scaleFactor, iconSizeScaleRange[0], iconSizeScaleRange[1]);
 
-                symbolProjection.updateLineLabels(bucket, tileMatrix, painter, false, labelPlaneMatrixPlacement, glCoordMatrix, iconPitchWithMap, iconKeepUpright, getElevation, coord);
+                symbolProjection.updateLineLabels(bucket, tileMatrix, painter, false, labelPlaneMatrixPlacement, glCoordMatrix, iconPitchWithMap, iconKeepUpright, getElevation, coord, iconScaleFactor);
             }
 
             return {
@@ -509,6 +551,13 @@ function drawLayerSymbols(
             const baseDefines: DynamicDefinesType[] = [];
             const projectedPosOnLabelSpace = alongLine || variablePlacement || updateTextFitIcon;
 
+            const renderElevatedRoads = bucket.elevationType === 'road';
+            const shadowRenderer = painter.shadowRenderer;
+            const renderWithShadows = renderElevatedRoads && textPitchWithMap && !!shadowRenderer && shadowRenderer.enabled;
+            const groundShadowFactor = getGroundShadowFactor(renderWithShadows);
+
+            const depthMode = renderElevatedRoads && textPitchWithMap && !painter.terrain ? depthModeFor3D : depthModeForLayer;
+
             if (painter.terrainRenderModeElevated() && textPitchWithMap) {
                 baseDefines.push('PITCH_WITH_MAP_TERRAIN');
             }
@@ -518,7 +567,7 @@ function drawLayerSymbols(
                     baseDefines.push('PROJECTED_POS_ON_VIEWPORT');
                 }
             }
-            if (bucket.text.zOffsetVertexBuffer) {
+            if (bucket.text.zOffsetVertexBuffer && (!renderElevatedRoads || !painter.terrain)) {
                 baseDefines.push('Z_OFFSET');
             }
 
@@ -530,6 +579,10 @@ function drawLayerSymbols(
 
             if (renderWithShadows) {
                 baseDefines.push('RENDER_SHADOWS', 'DEPTH_TEXTURE', 'NORMAL_OFFSET');
+            }
+
+            if (renderElevatedRoads && textPitchWithMap && !painter.terrain && bucket.text.orientationVertexBuffer) {
+                baseDefines.push('ELEVATED_ROADS');
             }
 
             setOcclusionDefines(baseDefines);
@@ -546,7 +599,7 @@ function drawLayerSymbols(
             if (bucket.iconsInText) {
                 texSizeIcon = tile.imageAtlasTexture ? tile.imageAtlasTexture.size : [0, 0];
                 atlasTextureIcon = tile.imageAtlasTexture ? tile.imageAtlasTexture : null;
-                const transformed = textPitchWithMap || tr.pitch !== 0;
+                const transformed = textPitchWithMap || !tr.isOrthographic;
                 const zoomDependentSize = sizeData.kind === 'composite' || sizeData.kind === 'camera';
                 atlasInterpolationIcon = transformed || painter.options.rotating || painter.options.zooming || zoomDependentSize ? gl.LINEAR : gl.NEAREST;
             }
@@ -581,7 +634,8 @@ function drawLayerSymbols(
             const cameraUpVector = bucketIsGlobeProjection ? globeCameraUp : mercatorCameraUp;
 
             const uniformValues = symbolUniformValues(sizeData.kind, size, rotateInShader, textPitchWithMap, painter,
-                matrix, uLabelPlaneMatrix, uglCoordMatrix, elevationFromSea, true, texSize, texSizeIcon, true, coord, globeToMercator, mercatorCenter, invMatrix, cameraUpVector, bucket.getProjection(), groundShadowFactor, null, null, textScaleFactor);
+                matrix, uLabelPlaneMatrix, uglCoordMatrix, elevationFromSea, true, texSize, texSizeIcon, true, coord, globeToMercator, mercatorCenter, invMatrix,
+                cameraUpVector, bucket.getProjection(), groundShadowFactor, orientationNormalScale, null, null, textScaleFactor);
 
             const atlasTexture = tile.glyphAtlasTexture ? tile.glyphAtlasTexture : null;
             const atlasInterpolation = gl.LINEAR;
@@ -590,11 +644,11 @@ function drawLayerSymbols(
             const labelPlaneMatrixInv = painter.terrain && textPitchWithMap && alongLine ? mat4.invert(mat4.create(), labelPlaneMatrixRendering) : identityMat4;
 
             if (alongLine && bucket.text) {
-                const elevation = tr.elevation;
-                const getElevation = elevation ? elevation.getAtTileOffsetFunc(coord, tr.center.lat, tr.worldSize, bucket.getProjection()) : null;
+                const getElevation = Elevation.getAtTileOffsetFunc(coord, tr.center.lat, tr.worldSize, bucket.getProjection());
+
                 const labelPlaneMatrixPlacement = symbolProjection.getLabelPlaneMatrixForPlacement(tileMatrix, tile.tileID.canonical, textPitchWithMap, textRotateWithMap, tr, bucket.getProjection(), s);
 
-                symbolProjection.updateLineLabels(bucket, tileMatrix, painter, true, labelPlaneMatrixPlacement, glCoordMatrix, textPitchWithMap, textKeepUpright, getElevation, coord);
+                symbolProjection.updateLineLabels(bucket, tileMatrix, painter, true, labelPlaneMatrixPlacement, glCoordMatrix, textPitchWithMap, textKeepUpright, getElevation, coord, textScaleFactor);
             }
 
             return {
@@ -604,6 +658,7 @@ function drawLayerSymbols(
                 atlasTexture,
                 atlasTextureIcon,
                 atlasInterpolation,
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 atlasInterpolationIcon,
                 isSDF: true,
                 hasHalo,
@@ -696,7 +751,7 @@ function drawLayerSymbols(
         }
 
         if (state.renderWithShadows) {
-            painter.shadowRenderer.setupShadows(state.tile.tileID.toUnwrapped(), state.program, 'vector-tile', state.tile.tileID.overscaledZ);
+            painter.shadowRenderer.setupShadows(state.tile.tileID.toUnwrapped(), state.program, 'vector-tile');
         }
 
         painter.uploadCommonLightUniforms(painter.context, state.program as unknown as Program<LightsUniformsType>);
@@ -723,7 +778,7 @@ function drawLayerSymbols(
 function drawSymbolElements(buffers: SymbolBuffers, segments: SegmentVector, layer: SymbolStyleLayer, painter: Painter, program: Program<SymbolUniformsType>, depthMode: DepthMode, stencilMode: StencilMode, colorMode: ColorMode, uniformValues: UniformValues<SymbolUniformsType>, instanceCount: number) {
     const context = painter.context;
     const gl = context.gl;
-    const dynamicBuffers = [buffers.dynamicLayoutVertexBuffer, buffers.opacityVertexBuffer, buffers.iconTransitioningVertexBuffer, buffers.globeExtVertexBuffer, buffers.zOffsetVertexBuffer];
+    const dynamicBuffers = [buffers.dynamicLayoutVertexBuffer, buffers.opacityVertexBuffer, buffers.iconTransitioningVertexBuffer, buffers.globeExtVertexBuffer, buffers.zOffsetVertexBuffer, buffers.orientationVertexBuffer];
     program.draw(painter, gl.TRIANGLES, depthMode, stencilMode, colorMode, CullFaceMode.disabled,
         uniformValues, layer.id, buffers.layoutVertexBuffer,
         buffers.indexBuffer, segments, layer.paint,

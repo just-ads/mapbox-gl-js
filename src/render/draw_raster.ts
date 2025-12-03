@@ -35,6 +35,7 @@ import type {Source} from '../source/source';
 import type {UserManagedTexture} from './texture';
 import type {DynamicDefinesType} from '../render/program/program_uniforms';
 import type VertexBuffer from '../gl/vertex_buffer';
+import type {CrossTileID, VariableOffset} from '../symbol/placement';
 
 export default drawRaster;
 
@@ -59,8 +60,7 @@ function adjustColorMix(colorMix: [number, number, number, number]): [number, nu
     ];
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterStyleLayer, tileIDs: Array<OverscaledTileID>, variableOffsets: any, isInitialLoad: boolean) {
+function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterStyleLayer, tileIDs: Array<OverscaledTileID>, variableOffsets?: Partial<Record<CrossTileID, VariableOffset>>, isInitialLoad?: boolean) {
     if (painter.renderPass !== 'translucent') return;
     if (layer.paint.get('raster-opacity') === 0) return;
     const isGlobeProjection = painter.transform.projection.name === 'globe';
@@ -74,7 +74,8 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
     const gl = context.gl;
     const source = sourceCache.getSource();
 
-    const rasterConfig = configureRaster(source, layer, context, gl);
+    const mrt = painter.terrain && painter.terrain.renderingToTexture && painter.emissiveMode === 'mrt-fallback';
+    const rasterConfig = configureRaster(source, layer, context, gl, mrt);
 
     if (source instanceof ImageSource && !tileIDs.length) {
         if (!isGlobeProjection) {
@@ -157,6 +158,14 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
             const parentTile = sourceCache.findLoadedParent(coord, 0);
 
             const fade = rasterFade(tile, parentTile, sourceCache, painter.transform, rasterFadeDuration);
+
+            if (!fade.isFading && tile.refreshedUponExpiration) {
+                // we don't crossfade tiles that were just refreshed upon expiring:
+                // once they are not fading anymore, unset the `refreshedUponExpiration` flag so we don't
+                // incorrectly fail to crossfade them
+                tile.refreshedUponExpiration = false;
+            }
+
             if (painter.terrain) painter.terrain.prepareDrawTile();
 
             let parentScaleBy: number, parentTL: [number, number];
@@ -220,6 +229,7 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
             }
 
             const uniformValues = rasterUniformValues(
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 projMatrix,
                 normalizeMatrix,
                 globeMatrix,
@@ -253,6 +263,7 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
                 const elevatedGlobeIndexBuffer = source.elevatedGlobeIndexBuffer;
                 if (renderingToTexture || !isGlobeProjection) {
                     if (source.boundsBuffer && source.boundsSegments) program.draw(
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                         painter, gl.TRIANGLES, depthMode, StencilMode.disabled, colorMode, CullFaceMode.disabled,
                         uniformValues, layer.id, source.boundsBuffer,
                         painter.quadTriangleIndexBuffer, source.boundsSegments);
@@ -262,6 +273,7 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
                         source.getSegmentsForLongitude(tr.center.lng);
                     if (segments) {
                         program.draw(
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                             painter, gl.TRIANGLES, depthMode, StencilMode.disabled, colorMode, cullFaceMode,
                             uniformValues, layer.id, elevatedGlobeVertexBuffer,
                             elevatedGlobeIndexBuffer, segments);
@@ -275,11 +287,13 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
                     assert(buffer);
                     assert(indexBuffer);
                     assert(segments);
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     program.draw(painter, gl.TRIANGLES, depthMode, elevatedStencilMode || stencilMode, painter.colorModeForRenderPass(), cullFaceMode, uniformValues, layer.id, buffer, indexBuffer, segments);
                 }
             } else {
                 const {tileBoundsBuffer, tileBoundsIndexBuffer, tileBoundsSegments} = painter.getTileBoundsBuffers(tile);
 
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 program.draw(painter, gl.TRIANGLES, depthMode, stencilMode, colorMode, CullFaceMode.disabled,
                     uniformValues, layer.id, tileBoundsBuffer,
                     tileBoundsIndexBuffer, tileBoundsSegments);
@@ -315,8 +329,7 @@ function drawRaster(painter: Painter, sourceCache: SourceCache, layer: RasterSty
     painter.resetStencilClippingMasks();
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawPole(isNorth: boolean, coord: OverscaledTileID | null | undefined, painter: Painter, sourceCache: SourceCache, layer: RasterStyleLayer, emissiveStrength: number, rasterConfig: any, cullFaceMode: CullFaceMode, stencilMode: StencilMode) {
+function drawPole(isNorth: boolean, coord: OverscaledTileID | null | undefined, painter: Painter, sourceCache: SourceCache, layer: RasterStyleLayer, emissiveStrength: number, rasterConfig: RasterConfig, cullFaceMode: CullFaceMode, stencilMode: StencilMode) {
     const source = sourceCache.getSource();
     const sharedBuffers = painter.globeSharedBuffers;
     if (!sharedBuffers) return;
@@ -416,8 +429,8 @@ export function prepare(layer: RasterStyleLayer, sourceCache: SourceCache, _: Pa
 
     const tiles = sourceCache.getIds().map(id => sourceCache.getTileByID(id) as RasterArrayTile);
     for (const tile of tiles) {
-        if (tile.updateNeeded(sourceLayer, band)) {
-            source.prepareTile(tile, sourceLayer, band);
+        if (tile.updateNeeded(layer.id, band)) {
+            source.prepareTile(tile, sourceLayer, layer.id, band);
         }
     }
 }
@@ -456,6 +469,7 @@ function configureRaster(
     layer: RasterStyleLayer,
     context: Context,
     gl: WebGL2RenderingContext,
+    mrt: boolean
 ): RasterConfig {
     const isRasterColor = layer.paint.get('raster-color');
     const isRasterArray = source.type === 'raster-array';
@@ -509,6 +523,10 @@ function configureRaster(
         let tex = layer.colorRampTexture;
         if (!tex) tex = layer.colorRampTexture = new Texture(context, layer.colorRamp, gl.RGBA8);
         tex.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
+    }
+
+    if (mrt) {
+        defines.push('USE_MRT1');
     }
 
     return {

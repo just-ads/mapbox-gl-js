@@ -112,17 +112,25 @@ class VersionSchema {
 const schemaV100 = new VersionSchema(
     (parser: PropertyParser, feature: VectorTileFeature, out: Feature) => {
         return parser.reset(feature)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require(PROPERTY_ELEVATION_ID, value => { out.id = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .optional('fixed_height_relative', value => { out.constantHeight = value; }, ElevationFeatureParser.decodeRelativeHeight)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .geometry(value => { out.bounds = value; }, computeBounds)
             .success();
     },
     (parser: PropertyParser, feature: VectorTileFeature, out: Vertex) => {
         return parser.reset(feature)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require(PROPERTY_ELEVATION_ID, value => { out.id = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require('elevation_idx', value => { out.idx = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require('extent', value => { out.extent = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require("height_relative", value => { out.height = value; }, ElevationFeatureParser.decodeRelativeHeight)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .geometry(value => { out.position = value; }, ElevationFeatureParser.getPoint)
             .success();
     }
@@ -135,17 +143,25 @@ const schemaV100 = new VersionSchema(
 const schemaV101 = new VersionSchema(
     (parser: PropertyParser, feature: VectorTileFeature, out: Feature) => {
         return parser.reset(feature)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require(PROPERTY_ELEVATION_ID, value => { out.id = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .optional('fixed_height', value => { out.constantHeight = value; }, ElevationFeatureParser.decodeMetricHeight)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .geometry(value => { out.bounds = value; }, computeBounds)
             .success();
     },
     (parser: PropertyParser, feature: VectorTileFeature, out: Vertex) => {
         return parser.reset(feature)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require(PROPERTY_ELEVATION_ID, value => { out.id = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require('elevation_idx', value => { out.idx = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require('extent', value => { out.extent = value; })
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .require("height", value => { out.height = value; }, ElevationFeatureParser.decodeMetricHeight)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             .geometry(value => { out.position = value; }, ElevationFeatureParser.getPoint)
             .success();
     }
@@ -170,6 +186,18 @@ export abstract class ElevationFeatureParser {
         return height * scaler;
     }
 
+    static getVersionSchema(version: unknown) {
+        if (!version) {
+            return schemaV100;
+        }
+
+        if (version === '1.0.1') {
+            return schemaV101;
+        }
+
+        return undefined;
+    };
+
     static parse(data: VectorTileLayer): Result {
         const vertices: Vertex[] = [];
         const features: Feature[] = [];
@@ -184,40 +212,30 @@ export abstract class ElevationFeatureParser {
         for (let index = 0; index < featureCount; index++) {
             const feature = data.feature(index);
 
-            const version = feature.properties.hasOwnProperty("version") ? String(feature.properties["version"]) : undefined;
+            const version = feature.properties.version;
 
             // Get correct schema for the version. undefined == no version defined -> use default schema
-            const getVersionSchema = (version: string | undefined) => {
-                if (!version) {
-                    return schemaV100;
-                }
-
-                if (version === '1.0.1') {
-                    return schemaV101;
-                }
-
-                return undefined;
-            };
-
-            const schema = getVersionSchema(version);
+            const schema = ElevationFeatureParser.getVersionSchema(version);
             if (schema === undefined) {
                 warnOnce(`Unknown elevation feature version number ${version || '(unknown)'}`);
                 continue;
             }
 
-            const type = feature.properties.hasOwnProperty('type') ? feature.properties['type'] : undefined;
+            const type = feature.properties['type'];
             if (!type) {
                 continue;
             }
 
+            const featureType = VectorTileFeature.types[feature.type];
+
             // Expect to find only "curve_meta" and "curve_point" features
-            if (VectorTileFeature.types[feature.type] === 'Point' && type === 'curve_point') {
+            if (featureType === 'Point' && type === 'curve_point') {
                 const out = {} as Vertex;
 
                 if (schema.parseVertex(parser, feature, out)) {
                     vertices.push(out);
                 }
-            } else if (VectorTileFeature.types[feature.type] === 'Polygon' && type === 'curve_meta') {
+            } else if (featureType === 'Polygon' && type === 'curve_meta') {
                 const out = {} as Feature;
 
                 if (schema.parseFeature(parser, feature, out)) {

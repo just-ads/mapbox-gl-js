@@ -85,7 +85,7 @@ class CompoundExpression implements Expression {
 
             // Use a fresh context for each attempted signature so that, if
             // we eventually succeed, we haven't polluted `context.errors`.
-            signatureContext = new ParsingContext(context.registry, context.path, null, context.scope, undefined, context._scope, context.options);
+            signatureContext = new ParsingContext(context.registry, context.path, null, context.scope, undefined, context._scope, context.options, context.iconImageUseTheme);
 
             // First parse all the args, potentially coercing to the
             // types expected by this overload.
@@ -93,11 +93,13 @@ class CompoundExpression implements Expression {
             let argParseFailed = false;
             for (let i = 1; i < args.length; i++) {
                 const arg = args[i];
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 const expectedType = Array.isArray(params) ?
                     params[i - 1] :
                 // @ts-expect-error - TS2339 - Property 'type' does not exist on type 'Varargs | Evaluate'.
                     params.type;
 
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 const parsed = signatureContext.parse(arg, 1 + parsedArgs.length, expectedType);
                 if (!parsed) {
                     argParseFailed = true;
@@ -120,8 +122,10 @@ class CompoundExpression implements Expression {
 
             for (let i = 0; i < parsedArgs.length; i++) {
                 // @ts-expect-error - TS2339 - Property 'type' does not exist on type 'Varargs | Evaluate'.
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 const expected = Array.isArray(params) ? params[i] : params.type;
                 const arg = parsedArgs[i];
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 signatureContext.concat(i + 1).checkSubtype(expected, arg.type);
             }
 

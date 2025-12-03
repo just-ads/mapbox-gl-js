@@ -1,4 +1,4 @@
-import {vi, describe, test, afterEach, expect, waitFor, createMap} from '../../util/vitest';
+import {vi, describe, test, afterEach, expect, waitFor, createMap, beforeEach} from '../../util/vitest';
 import {mockFetch} from '../../util/network';
 
 import type {Mock} from 'vitest';
@@ -130,6 +130,29 @@ const style = {
                     }
                 ]
             }
+        },
+        "geojson3": {
+            "type": "geojson",
+            "data": {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": null,
+                        "geometry": {"type": "Point", "coordinates": [0, 0]}
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": null,
+                        "geometry": {"type": "Point", "coordinates": [0, 0]}
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": null,
+                        "geometry": {"type": "Point", "coordinates": [0.01, 0.01]}
+                    }
+                ]
+            }
         }
     },
     "featuresets": {
@@ -163,6 +186,11 @@ const style = {
             "id": "circle-2",
             "type": "circle",
             "source": "geojson2"
+        },
+        {
+            "id": "circle-3",
+            "type": "circle",
+            "source": "geojson3"
         }
     ]
 };
@@ -337,18 +365,9 @@ describe('Interaction', () => {
             zoom: 10,
             center: [0, 0],
         });
+        const point = map.project({lng: 0.01, lat: 0.01});
 
         await waitFor(map, 'load');
-
-        const mouseenter = vi.fn((e: InteractionEvent): boolean | void => {
-            map.setFeatureState(e.feature, {hover: true});
-        });
-
-        map.addInteraction('mouseenter', {
-            type: 'mouseenter',
-            target: {layerId: 'circle-1'},
-            handler: mouseenter
-        });
 
         const mouseleave = vi.fn((e: InteractionEvent): boolean | void => {
             map.setFeatureState(e.feature, {hover: false});
@@ -360,8 +379,26 @@ describe('Interaction', () => {
             handler: mouseleave
         });
 
+        beforeEach(() => {
+            vi.resetAllMocks();
+        });
+
+        test('Mouseleave without mouseenter does not work', () => {
+            dispatchEvent(map, 'mousemove', point);
+
+            expect(mouseleave).toHaveBeenCalledTimes(0);
+        });
+
         test('Hover with setFeatureState', () => {
-            const point = map.project({lng: 0.01, lat: 0.01});
+            const mouseenter = vi.fn((e: InteractionEvent): boolean | void => {
+                map.setFeatureState(e.feature, {hover: true});
+            });
+
+            map.addInteraction('mouseenter', {
+                type: 'mouseenter',
+                target: {layerId: 'circle-1'},
+                handler: mouseenter
+            });
 
             // hover events are delegated to `mousemove` and `mouseout`
             dispatchEvent(map, 'mousemove', point);
@@ -397,6 +434,29 @@ describe('Interaction', () => {
                 properties: {foo: 3},
                 state: {hover: false} // state after mouseleave
             });
+        });
+
+        test('Hover works on features without ids', () => {
+            const mouseenter = vi.fn((e: InteractionEvent): boolean | void => {});
+
+            map.addInteraction('mouseenter-idless', {
+                type: 'mouseenter',
+                target: {layerId: 'circle-3'},
+                handler: mouseenter
+            });
+
+            const onerror = vi.fn();
+
+            map.on('error', onerror);
+
+            dispatchEvent(map, 'mousemove', point);
+            dispatchEvent(map, 'mouseout', point);
+            dispatchEvent(map, 'mousemove', point);
+
+            expect(mouseenter).toHaveBeenCalledTimes(2);
+            expect(mouseleave).toHaveBeenCalledTimes(1);
+
+            expect(onerror).toHaveBeenCalledTimes(0);
         });
     });
 

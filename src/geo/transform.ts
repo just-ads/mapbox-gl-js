@@ -3,11 +3,11 @@ import MercatorCoordinate, {mercatorXfromLng, mercatorYfromLat, mercatorZfromAlt
 import {getProjection} from './projection/index';
 import {tileAABB} from '../geo/projection/tile_transform';
 import Point from '@mapbox/point-geometry';
-import {wrap, clamp, pick, radToDeg, degToRad, getAABBPointSquareDist, furthestTileCorner, warnOnce, deepEqual} from '../util/util';
-import {easeIn, number as interpolate} from '../style-spec/util/interpolate';
+import {wrap, clamp, pick, radToDeg, degToRad, getAABBPointSquareDist, furthestTileCorner, warnOnce, deepEqual, easeIn} from '../util/util';
+import {number as interpolate} from '../style-spec/util/interpolate';
 import EXTENT from '../style-spec/data/extent';
 import {vec4, mat4, mat2, vec3, quat} from 'gl-matrix';
-import {Frustum, FrustumCorners, Ray} from '../util/primitives';
+import {FAR_BL, FAR_BR, Frustum, FrustumCorners, NEAR_BL, NEAR_BR, Ray} from '../util/primitives';
 import EdgeInsets from './edge_insets';
 import {FreeCamera, FreeCameraOptions, orientationFromFrame} from '../ui/free_camera';
 import assert from 'assert';
@@ -25,6 +25,7 @@ import {
     aabbForTileOnGlobe,
 } from '../geo/projection/globe_util';
 import {projectClamped} from '../symbol/projection';
+import {edgeIntersectsBox} from '../util/intersection_tests';
 
 import type {Aabb} from '../util/primitives';
 import type Projection from '../geo/projection/projection';
@@ -570,7 +571,7 @@ class Transform {
         }
         const height = this.cameraToCenterDistance;
         const terrainElevation = this.pixelsPerMeter * this._centerAltitude;
-        const mercatorZ = (terrainElevation + height) / this.worldSize;
+        const mercatorZ = Math.max(0, (terrainElevation + height) / this.worldSize);
 
         // MSL (Mean Sea Level) zoom describes the distance of the camera to the sea level (altitude).
         // It is used only for manipulating the camera location. The standard zoom (this._zoom)
@@ -654,6 +655,25 @@ class Transform {
         this._calcMatrices();
     }
 
+    equals(transform: Transform): boolean {
+        const lastElevation = this.elevation;
+        const newElevation = transform.elevation;
+        const elevationChanged = (lastElevation != null) !== (newElevation != null) ||
+                                 (lastElevation && newElevation && lastElevation.exaggeration() !== newElevation.exaggeration());
+
+        return this.width === transform.width &&
+               this.height === transform.height &&
+               this.center.lng === transform.center.lng &&
+               this.center.lat === transform.center.lat &&
+               this.zoom === transform.zoom &&
+               this.bearing === transform.bearing &&
+               this.pitch === transform.pitch &&
+               this.fov === transform.fov &&
+               this.projection.name === transform.projection.name &&
+               this._edgeInsets.equals(transform.padding) &&
+               !elevationChanged;
+    }
+
     /**
      * Computes a zoom value relative to a map plane that goes through the provided mercator position.
      *
@@ -672,7 +692,7 @@ class Transform {
             targetPosition = [position.x, position.y, position.z];
         }
 
-        const distToTarget = vec3.length(vec3.sub([] as unknown as vec3, this._camera.position, targetPosition));
+        const distToTarget = vec3.length(vec3.sub([], this._camera.position, targetPosition));
         return clamp(this._zoomFromMercatorZ(distToTarget), this._minZoom, this._maxZoom);
     }
 
@@ -726,8 +746,8 @@ class Transform {
 
         // The new orientation must be sanitized by making sure it can be represented
         // with a pitch and bearing. Roll-component must be removed and the camera can't be upside down
-        const forward = vec3.transformQuat([] as unknown as vec3, [0, 0, -1], orientation);
-        const up = vec3.transformQuat([] as unknown as vec3, [0, -1, 0], orientation);
+        const forward = vec3.transformQuat([], [0, 0, -1], orientation);
+        const up = vec3.transformQuat([], [0, -1, 0], orientation);
 
         if (up[2] < 0.0)
             return false;
@@ -860,7 +880,7 @@ class Transform {
      * @param {vec3} direction direction unit vector, if undefined quadrant visibility information is used
      * @returns {Array<OverscaledTileID>} a set of extension tiles
      */
-    extendTileCover(coveringTiles: Array<OverscaledTileID>, maxZoom: number, direction?: vec3): Array<OverscaledTileID> {
+    extendTileCover(coveringTiles: Array<OverscaledTileID>, maxZoom: number, direction?: vec3, minZoom?: number): Array<OverscaledTileID> {
         let out: OverscaledTileID[] = [];
         const extendDirection = direction != null;
         const extendQuadrants = !extendDirection;
@@ -881,6 +901,9 @@ class Transform {
 
             // Skip if not at the specified zoom level
             if (extendQuadrants && id.canonical.z !== maxZoom) continue;
+
+            // Skip shadow tiles below minimum zoom level
+            if (extendDirection && minZoom !== undefined && minZoom > id.canonical.z) continue;
 
             const tileId = id.canonical;
             const overscaledZ = id.overscaledZ;
@@ -963,7 +986,7 @@ class Transform {
         }
 
         // Remove higher zoom new IDs that overlap with other new IDs
-        const nonOverlappingIds = [];
+        const nonOverlappingIds: OverscaledTileID[] = [];
 
         for (const id of out) {
             if (!out.some(ancestorCandidate => id.isChildOf(ancestorCandidate))) {
@@ -1003,6 +1026,97 @@ class Transform {
 
         return out;
     }
+
+    /**
+     * Extend tile coverage to include tiles that are below the view frustum.
+     * @param {Array<OverscaledTileID>} tiles tile cover that is extended
+     * @param {Frustum} frustum view frustum
+     * @param {number} maxZoom maximum zoom level
+     * @returns {Array<OverscaledTileID>} a set of extension tiles
+     */
+    extendTileCoverToNearPlane(tiles: Array<OverscaledTileID>, frustum: Frustum, maxZoom: number): Array<OverscaledTileID> {
+        const out: OverscaledTileID[] = [];
+
+        const addedTiles = new Set<number>();
+        // Add existing tile keys to prevent having to remove duplicates later
+        for (const tile of tiles) {
+            addedTiles.add(tile.key);
+        }
+        const addTileId = (overscaledZ: number, wrap: number, z: number, x: number, y: number) => {
+            const key = calculateKey(wrap, overscaledZ, z, x, y);
+            if (!addedTiles.has(key)) {
+                out.push(new OverscaledTileID(overscaledZ, wrap, z, x, y));
+                addedTiles.add(key);
+            }
+        };
+
+        const overscaledZ = tiles.reduce((overscaledZ, tile) => {
+            return Math.max(overscaledZ, tile.overscaledZ);
+        }, maxZoom);
+
+        const numTiles = 1 << maxZoom;
+
+        const tileCorners = [
+            new Point(0, 0),
+            new Point(EXTENT, 0),
+            new Point(EXTENT, EXTENT),
+            new Point(0, EXTENT)
+        ];
+
+        const p1 = new Point(0, 0);
+        const p2 = new Point(0, 0);
+
+        const findTileIntersections = (e1: vec3, e2: vec3) => {
+            const e1X = Math.floor(e1[0]);
+            const e1Y = Math.floor(e1[1]);
+            const e1TileX = (e1[0] - e1X) * EXTENT;
+            const e1TileY = (e1[1] - e1Y) * EXTENT;
+
+            const e2X = Math.floor(e2[0]);
+            const e2Y = Math.floor(e2[1]);
+            const e2TileX = (e2[0] - e2X) * EXTENT;
+            const e2TileY = (e2[1] - e2Y) * EXTENT;
+
+            // Find tile intersections from a 3x3 grid around the starting point.
+            // This is enough to find the tiles needed for the tile cover extension.
+            for (let dx = -1; dx <= 1; dx++) {
+                const x = e1X + dx;
+                if (x < 0 || x >= numTiles) continue;
+
+                // Convert e1 and e2 (x coord) to the coordinate space of the current tile
+                p1.x = e1TileX - dx * EXTENT;
+                p2.x = e2TileX - (x - e2X) * EXTENT;
+
+                for (let dy = -1; dy <= 1; dy++) {
+                    const y = e1Y + dy;
+
+                    // Convert e1 and e2 (y coord) to the coordinate space of the current tile
+                    p1.y = e1TileY - dy * EXTENT;
+                    p2.y = e2TileY - (y - e2Y) * EXTENT;
+
+                    if (edgeIntersectsBox(p1, p2, tileCorners)) {
+                        addTileId(overscaledZ, 0, maxZoom, x, y);
+                    }
+                }
+            }
+        };
+
+        const points = frustum.points;
+        const nearBl = points[NEAR_BL];
+        const nearBr = points[NEAR_BR];
+        const farBl = this._projectToGround(nearBl, points[FAR_BL]);
+        const farBr = this._projectToGround(nearBr, points[FAR_BR]);
+
+        findTileIntersections(nearBl, farBl);
+        findTileIntersections(nearBr, farBr);
+
+        return out;
+    }
+
+    _projectToGround(near: vec3, far: vec3) {
+        assert(far[2] < near[2]);
+        return vec3.lerp(vec3.create(), near, far, near[2] / (near[2] - far[2]));
+    };
 
     /**
      * Return all coordinates that could cover this transform for a covering
@@ -1060,7 +1174,7 @@ class Transform {
 
         // When calculating tile cover for terrain, create deep AABB for nodes, to ensure they intersect frustum: for sources,
         // other than DEM, use minimum of visible DEM tiles and center altitude as upper bound (pitch is always less than 90°).
-        let maxRange;
+        let maxRange: number;
         if (this._elevation && options.isTerrainDEM) {
             maxRange = this._elevation.exaggeration() * 10000;
         } else if (this._elevation) {
@@ -1069,7 +1183,7 @@ class Transform {
         } else {
             maxRange = this._centerAltitude;
         }
-        const minRange = options.isTerrainDEM ? -maxRange : this._elevation ? this._elevation.getMinElevationBelowMSL() : 0;
+        const minRange: number = options.isTerrainDEM ? -maxRange : this._elevation ? this._elevation.getMinElevationBelowMSL() : 0;
 
         const scaleAdjustment = this.projection.isReprojectedInTileSpace ? getScaleAdjustment(this) : 1.0;
 
@@ -1101,16 +1215,19 @@ class Transform {
         };
 
         const newRootTile = (wrap: number): RootTile => {
+
             const max = maxRange;
             const min = minRange;
             return {
                 // With elevation, this._elevation provides z coordinate values. For 2D:
                 // All tiles are on zero elevation plane => z difference is zero
+
                 aabb: tileAABB(this, numTiles, 0, 0, 0, wrap, min, max, this.projection),
                 zoom: 0,
                 x: 0,
                 y: 0,
                 minZ: min,
+
                 maxZ: max,
                 wrap,
                 fullyVisible: false
@@ -1236,9 +1353,9 @@ class Transform {
                 }
             }
 
-            if (!isMercator) {
+            if (!(isMercator || isGlobe)) {
                 const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                let distToSplit = (1 << maxZoom - it.zoom) * zoomSplitDistance * tileScaleAdjustment;
+                let distToSplit = (1 << (maxZoom - it.zoom)) * zoomSplitDistance * tileScaleAdjustment;
                 distToSplit = distToSplit * distToSplitScale(Math.max(dz, cameraHeight), distance);
                 return distance < distToSplit;
             }
@@ -1248,7 +1365,7 @@ class Transform {
             const corners = it.aabb.getCorners();
             const distanceXyz = [];
             for (const corner of corners) {
-                vec3.sub(distanceXyz as unknown as vec3, corner, cameraPoint as unknown as vec3);
+                vec3.sub(distanceXyz, corner, cameraPoint);
                 if (!isGlobe) {
                     if (useElevationData) {
                         distanceXyz[2] *= meterToTile;
@@ -1256,9 +1373,10 @@ class Transform {
                         distanceXyz[2] = cameraHeight;
                     }
                 }
-                const dist = vec3.dot(distanceXyz as unknown as vec3, this._camera.forward());
+                const dist = vec3.dot(distanceXyz, this._camera.forward());
                 if (dist < closestDistance) {
                     closestDistance = dist;
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     closestElevation = Math.abs(distanceXyz[2]);
                 }
             }
@@ -1271,7 +1389,7 @@ class Transform {
             }
             // Border case: with tilt of 85 degrees, center could be outside max zoom distance, due to scale.
             // Ensure max zoom tiles over center.
-            const closestPointToCenter = it.aabb.closestPoint(centerPoint as unknown as vec3);
+            const closestPointToCenter = it.aabb.closestPoint(centerPoint);
             return (closestPointToCenter[0] === centerPoint[0] && closestPointToCenter[1] === centerPoint[1]);
         };
 
@@ -1389,8 +1507,8 @@ class Transform {
                 vec4.transformMat4(br, br, fogTileMatrix);
 
                 // the fog matrix can flip the min/max values, so we calculate them explicitly
-                const min = vec4.min([] as unknown as vec4, tl, br) as number[];
-                const max = vec4.max([] as unknown as vec4, tl, br) as number[];
+                const min = vec4.min([], tl, br) as number[];
+                const max = vec4.max([], tl, br) as number[];
 
                 const sqDist = getAABBPointSquareDist(min, max);
 
@@ -1409,7 +1527,7 @@ class Transform {
                 if (elevation && sqDist > fogCullDistSq && horizonLineFromTop !== 0) {
                     const projMatrix = this.calculateProjMatrix(entry.tileID.toUnwrapped());
 
-                    let minmax;
+                    let minmax: {min: number; max: number} | null | undefined;
                     if (!options.isTerrainDEM) {
                         minmax = elevation.getMinMaxForTile(entry.tileID);
                     }
@@ -1422,10 +1540,10 @@ class Transform {
                     const farX = cornerFar[0] * EXTENT;
                     const farY = cornerFar[1] * EXTENT;
 
-                    const worldFar = [farX, farY, minmax.max];
+                    const worldFar: [number, number, number] = [farX, farY, minmax.max];
 
                     // World to NDC
-                    vec3.transformMat4(worldFar as [number, number, number], worldFar as [number, number, number], projMatrix);
+                    vec3.transformMat4(worldFar, worldFar, projMatrix);
 
                     // NDC to Screen
                     const screenCoordY = (1 - worldFar[1]) * this.height * 0.5;
@@ -1459,7 +1577,7 @@ class Transform {
     get unmodified(): boolean { return this._unmodified; }
 
     zoomScale(zoom: number): number { return Math.pow(2, zoom); }
-    scaleZoom(scale: number): number { return Math.log(scale) / Math.LN2; }
+    scaleZoom(scale: number): number { return Math.log2(scale); }
 
     // Transform from LngLat to Point in world coordinates [-180, 180] x [90, -90] --> [0, this.worldSize] x [0, this.worldSize]
     project(lnglat: LngLat): Point {
@@ -1642,7 +1760,7 @@ class Transform {
         vec4.scale(p0, p0, 1 / this.worldSize);
         vec4.scale(p1, p1, 1 / this.worldSize);
 
-        return new Ray([p0[0], p0[1], p0[2]], vec3.normalize([] as unknown as vec3, vec3.sub([] as unknown as vec3, p1 as unknown as vec3, p0 as unknown as vec3)));
+        return new Ray([p0[0], p0[1], p0[2]], vec3.normalize([], vec3.sub([], p1, p0)));
     }
 
     /**
@@ -2033,6 +2151,7 @@ class Transform {
         } else {
             projMatrix = aligned ? this.alignedProjMatrix : this.projMatrix;
         }
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         mat4.multiply(posMatrix, projMatrix, posMatrix);
 
         cache[projMatrixKey] = new Float32Array(posMatrix);
@@ -2052,14 +2171,14 @@ class Transform {
     }
 
     customLayerMatrix(): mat4 {
-        return this.mercatorMatrix.slice() as mat4;
+        return (this.mercatorMatrix as number[]).slice();
     }
 
     globeToMercatorMatrix(): Array<number> | null | undefined {
         if (this.projection.name === 'globe') {
             const pixelsToMerc = 1 / this.worldSize;
-            const m = mat4.fromScaling([] as unknown as mat4, [pixelsToMerc, pixelsToMerc, pixelsToMerc]);
-            mat4.multiply(m, m, this.globeMatrix as unknown as mat4);
+            const m = mat4.fromScaling([], [pixelsToMerc, pixelsToMerc, pixelsToMerc]);
+            mat4.multiply(m, m, this.globeMatrix);
             return m as number[];
         }
         return undefined;
@@ -2088,7 +2207,7 @@ class Transform {
         const t = elevation.raycast(start, dir, elevation.exaggeration());
 
         if (t) {
-            const point = vec3.scaleAndAdd([] as unknown as vec3, start, dir, t);
+            const point = vec3.scaleAndAdd([], start, dir, t);
             const newCenter = new MercatorCoordinate(point[0], point[1], mercatorZfromAltitude(point[2], latFromMercatorY(point[1])));
 
             const camToNew = [newCenter.x - start[0], newCenter.y - start[1], newCenter.z - start[2] * metersToMerc];
@@ -2211,7 +2330,7 @@ class Transform {
      * @returns {number} The zoom value.
      */
     _minZoomForBounds(): number {
-        let minZoom = Math.max(0, this.scaleZoom(this.height / (this.worldMaxY - this.worldMinY)));
+        let minZoom = Math.max(0, this.scaleZoom(Math.max(0, this.height) / (this.worldMaxY - this.worldMinY)));
         if (this.maxBounds) {
             minZoom = Math.max(minZoom, this.scaleZoom(this.width / (this.worldMaxX - this.worldMinX)));
         }
@@ -2292,19 +2411,21 @@ class Transform {
 
             const mixValue =
                 this.pitch >= OrthographicPitchTranstionValue ? 1.0 : this.pitch / OrthographicPitchTranstionValue;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             lerpMatrix(cameraToClip, cameraToClip, cameraToClipPerspective, easeIn(mixValue));
         } else {
             cameraToClip = cameraToClipPerspective;
         }
 
-        const worldToClipPerspective = mat4.mul([] as unknown as mat4, cameraToClipPerspective, worldToCamera);
-        let m = mat4.mul([] as unknown as mat4, cameraToClip, worldToCamera);
+        const worldToClipPerspective = mat4.mul([], cameraToClipPerspective, worldToCamera);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        let m = mat4.mul([], cameraToClip, worldToCamera);
 
         if (this.projection.isReprojectedInTileSpace) {
             // Projections undistort as you zoom in (shear, scale, rotate).
             // Apply the undistortion around the center of the map.
             const mc = this.locationCoordinate(this.center);
-            const adjustments = mat4.identity([] as unknown as mat4);
+            const adjustments = mat4.identity([]);
             mat4.translate(adjustments, adjustments, [mc.x * this.worldSize, mc.y * this.worldSize, 0]);
             mat4.multiply(adjustments, adjustments, getProjectionAdjustments(this) as mat4);
             mat4.translate(adjustments, adjustments, [-mc.x * this.worldSize, -mc.y * this.worldSize, 0]);
@@ -2317,24 +2438,25 @@ class Transform {
 
         // The mercatorMatrix can be used to transform points from mercator coordinates
         // ([0, 0] nw, [1, 1] se) to GL coordinates. / zUnit compensates for scaling done in worldToCamera.
-        this.mercatorMatrix = mat4.scale([] as unknown as mat4, m, [this.worldSize, this.worldSize, this.worldSize / zUnit, 1.0] as unknown as vec3);
+        this.mercatorMatrix = mat4.scale([], m, [this.worldSize, this.worldSize, this.worldSize / zUnit, 1.0]);
 
         this.projMatrix = m;
 
         // For tile cover calculation, use inverted of base (non elevated) matrix
         // as tile elevations are in tile coordinates and relative to center elevation.
-        this.invProjMatrix = mat4.invert(new Float64Array(16) as unknown as mat4, this.projMatrix);
+        this.invProjMatrix = mat4.invert(new Float64Array(16), this.projMatrix);
 
         if (isGlobe) {
             const expandedCameraToClipPerspective = this._camera.getCameraToClipPerspective(this._fov, this.width / this.height, this._nearZ, Infinity);
             expandedCameraToClipPerspective[8] = -offset.x * 2 / this.width;
             expandedCameraToClipPerspective[9] = offset.y * 2 / this.height;
-            this.expandedFarZProjMatrix = mat4.mul([] as unknown as mat4, expandedCameraToClipPerspective, worldToCamera);
+            this.expandedFarZProjMatrix = mat4.mul([], expandedCameraToClipPerspective, worldToCamera);
         } else {
             this.expandedFarZProjMatrix = this.projMatrix;
         }
 
-        const clipToCamera = mat4.invert([] as unknown as mat4, cameraToClip);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        const clipToCamera = mat4.invert([], cameraToClip);
         this.frustumCorners = FrustumCorners.fromInvProjectionMatrix(clipToCamera, this.horizonLineFromTop(), this.height);
 
         // Create a camera frustum in mercator units
@@ -2369,7 +2491,7 @@ class Transform {
             angleCos = Math.cos(this.angle), angleSin = Math.sin(this.angle),
             dx = x - Math.round(x) + angleCos * xShift + angleSin * yShift,
             dy = y - Math.round(y) + angleCos * yShift + angleSin * xShift;
-        const alignedM = new Float64Array(m) as unknown as mat4;
+        const alignedM = new Float64Array(m);
         mat4.translate(alignedM, alignedM, [dx > 0.5 ? dx - 1 : dx, dy > 0.5 ? dy - 1 : dy, 0]);
         this.alignedProjMatrix = alignedM;
 
@@ -2385,21 +2507,21 @@ class Transform {
         this.glCoordMatrix = m;
 
         // matrix for conversion from location to screen coordinates
-        this.pixelMatrix = mat4.multiply(new Float64Array(16) as unknown as mat4, this.labelPlaneMatrix, worldToClipPerspective);
+        this.pixelMatrix = mat4.multiply(new Float64Array(16), this.labelPlaneMatrix, worldToClipPerspective);
 
         this._calcFogMatrices();
         this._distanceTileDataCache = {};
 
         // inverse matrix for conversion from screen coordinates to location
-        m = mat4.invert(new Float64Array(16) as unknown as mat4, this.pixelMatrix);
+        m = mat4.invert(new Float64Array(16), this.pixelMatrix);
         if (!m) throw new Error("failed to invert matrix");
         this.pixelMatrixInverse = m;
 
         if (this.projection.name === 'globe' || this.mercatorFromTransition) {
-            this.globeMatrix = calculateGlobeMatrix(this) as unknown as mat4;
+            this.globeMatrix = calculateGlobeMatrix(this);
 
             const globeCenter: [number, number, number] = [this.globeMatrix[12], this.globeMatrix[13], this.globeMatrix[14]];
-            this.globeCenterInViewSpace = vec3.transformMat4(globeCenter, globeCenter, worldToCamera as unknown as mat4) as [number, number, number];
+            this.globeCenterInViewSpace = vec3.transformMat4(globeCenter, globeCenter, worldToCamera) as [number, number, number];
             this.globeRadius = this.worldSize / 2.0 / Math.PI - 1.0;
         } else {
             this.globeMatrix = m;
@@ -2490,7 +2612,7 @@ class Transform {
             t = Math.min((maxZ - z) / deltaZ, 1);
         }
 
-        this._camera.position = vec3.scaleAndAdd([] as unknown as vec3, this._camera.position, translation, t);
+        this._camera.position = vec3.scaleAndAdd([], this._camera.position, translation, t);
         this._updateStateFromCamera();
     }
 
@@ -2538,7 +2660,7 @@ class Transform {
     }
 
     _zoomFromMercatorZ(z: number): number {
-        return this.scaleZoom(this.cameraToCenterDistance / (z * this.tileSize));
+        return this.scaleZoom(this.cameraToCenterDistance / (Math.max(0, z) * this.tileSize));
     }
 
     // This function is helpful to approximate true zoom given a mercator height with varying ppm.
@@ -2562,7 +2684,7 @@ class Transform {
 
             const worldSize = this.tileSize * Math.pow(2, zoomMid);
             const d = this.getCameraToCenterDistance(this.projection, zoomMid, worldSize);
-            const newZoom = this.scaleZoom(d / (mercatorZ * this.tileSize));
+            const newZoom = this.scaleZoom(d / (Math.max(0, mercatorZ) * this.tileSize));
 
             const diff = Math.abs(zoomMid - newZoom);
 
@@ -2658,7 +2780,7 @@ class Transform {
      * @returns {number} The distance in mercator coordinates.
      */
     zoomDeltaToMovement(center: vec3, zoomDelta: number): number {
-        const distance = vec3.length(vec3.sub([] as unknown as vec3, this._camera.position, center));
+        const distance = vec3.length(vec3.sub([], this._camera.position, center));
         const relativeZoom = this._zoomFromMercatorZ(distance) + zoomDelta;
         return distance - this._mercatorZfromZoom(relativeZoom);
     }

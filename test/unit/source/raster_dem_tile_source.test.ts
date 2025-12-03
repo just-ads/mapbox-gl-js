@@ -12,14 +12,16 @@ import {getPNGResponse, mockFetch} from '../../util/network';
 import RasterDEMTileSource from '../../../src/source/raster_dem_tile_source';
 import {OverscaledTileID} from '../../../src/source/tile_id';
 import {RequestManager} from '../../../src/util/mapbox';
-import {extend} from '../../../src/util/util';
 
 function createSource(options, transformCallback) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
     const source = new RasterDEMTileSource('id', options, {send() {}}, options.eventedParent);
     source.onAdd({
         transform: {angle: 0, pitch: 0, showCollisionBoxes: false},
         _getMapId: () => 1,
-        _requestManager: new RequestManager(transformCallback)
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        _requestManager: new RequestManager(transformCallback),
+        getWorldview: () => undefined
     });
 
     source.on('error', (e) => {
@@ -35,6 +37,7 @@ describe('RasterTileSource', () => {
             '/source.json': () => new Response(JSON.stringify({}))
         });
         const transformSpy = vi.fn((url) => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             return {url};
         });
         const options = {
@@ -50,7 +53,7 @@ describe('RasterTileSource', () => {
         };
         const source = createSource(options, transformSpy);
         source.load();
-        expect(source.serialize()).toEqual(extend({type: "raster-dem"}, options));
+        expect(source.serialize()).toEqual(Object.assign({type: "raster-dem"}, options));
         await waitFor(source, 'data');
     });
 
@@ -65,6 +68,7 @@ describe('RasterTileSource', () => {
             }))
         });
         const transformSpy = vi.fn((url) => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             return {url};
         });
 
@@ -130,6 +134,7 @@ describe('RasterTileSource', () => {
 
         test('getNeighboringTiles', () => {
             expect(
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                 Uint32Array.from(Object.keys(source._getNeighboringTiles(new OverscaledTileID(10, 0, 10, 5, 5)))).sort()
             ).toEqual(Uint32Array.from([
                 new OverscaledTileID(10, 0, 10, 4, 5).key,
@@ -145,6 +150,7 @@ describe('RasterTileSource', () => {
 
         test('getNeighboringTiles with wrapped tiles', () => {
             expect(
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                 Uint32Array.from(Object.keys(source._getNeighboringTiles(new OverscaledTileID(5, 0, 5, 31, 5)))).sort()
             ).toEqual(Uint32Array.from([
                 new OverscaledTileID(5, 0, 5, 30, 6).key,

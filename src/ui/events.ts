@@ -1,11 +1,10 @@
 import {Event} from '../util/evented';
 import * as DOM from '../util/dom';
 import Point from '@mapbox/point-geometry';
-import {extend} from '../util/util';
 
 import type Tile from '../source/tile';
 import type LngLat from '../geo/lng_lat';
-import type {Map} from './map';
+import type {Map as MapboxMap} from './map';
 import type {GeoJSONFeature} from '../util/vectortile_to_geojson';
 import type {EventData, EventOf} from '../util/evented';
 import type {SourceSpecification} from '../style-spec/types';
@@ -66,7 +65,7 @@ export class MapMouseEvent extends Event<MapEvents, MapMouseEventType> {
     /**
      * The `Map` object that fired the event.
      */
-    override target: Map;
+    override target: MapboxMap;
 
     /**
      * The DOM event which caused the map event.
@@ -149,10 +148,10 @@ export class MapMouseEvent extends Event<MapEvents, MapMouseEventType> {
     /**
      * @private
      */
-    constructor(type: MapMouseEventType, map: Map, originalEvent: MouseEvent, data: EventData = {}) {
+    constructor(type: MapMouseEventType, map: MapboxMap, originalEvent: MouseEvent, data: EventData = {}) {
         const point = DOM.mousePos(map.getCanvasContainer(), originalEvent);
         const lngLat = map.unproject(point);
-        super(type, extend({point, lngLat, originalEvent}, data) as MapEvents[MapMouseEventType]);
+        super(type, Object.assign({point, lngLat, originalEvent}, data) as MapEvents[MapMouseEventType]);
         this._defaultPrevented = false;
         this.target = map;
     }
@@ -208,7 +207,7 @@ export class MapTouchEvent extends Event<MapEvents, MapTouchEventType> {
     /**
      * The `Map` object that fired the event.
      */
-    override target: Map;
+    override target: MapboxMap;
 
     /**
      * The DOM event which caused the map event.
@@ -292,7 +291,7 @@ export class MapTouchEvent extends Event<MapEvents, MapTouchEventType> {
     /**
      * @private
      */
-    constructor(type: MapTouchEventType, map: Map, originalEvent: TouchEvent) {
+    constructor(type: MapTouchEventType, map: MapboxMap, originalEvent: TouchEvent) {
         const touches = type === "touchend" ? originalEvent.changedTouches : originalEvent.touches;
         const points = DOM.touchPos(map.getCanvasContainer(), touches);
         const lngLats = points.map((t) => map.unproject(t));
@@ -337,7 +336,7 @@ export class MapWheelEvent extends Event<MapEvents, MapWheelEventType> {
     /**
      * The `Map` object that fired the event.
      */
-    override target: Map;
+    override target: MapboxMap;
 
     /**
      * The DOM event which caused the map event.
@@ -371,7 +370,7 @@ export class MapWheelEvent extends Event<MapEvents, MapWheelEventType> {
     /**
      * @private
      */
-    constructor(map: Map, originalEvent: WheelEvent) {
+    constructor(map: MapboxMap, originalEvent: WheelEvent) {
         super('wheel', {originalEvent} as MapEvents[MapWheelEventType]);
         this._defaultPrevented = false;
     }
@@ -406,7 +405,7 @@ export type MapInteractionEventType = MapMouseEventType | MapTouchEventType | Ma
  */
 export type MapBoxZoomEvent = {
     type: 'boxzoomstart' | 'boxzoomend' | 'boxzoomcancel';
-    target: Map;
+    target: MapboxMap;
     originalEvent: MouseEvent;
 };
 
@@ -423,7 +422,8 @@ export type MapSourceDataEvent = {
     sourceDataType?: 'metadata' | 'content' | 'visibility' | 'error';
     tile?: Tile;
     coord?: Tile['tileID'];
-    resourceTiming?: PerformanceResourceTiming[]
+    resourceTiming?: PerformanceResourceTiming[],
+    responseHeaders?: Map<string, string>;
 };
 
 export type MapSourceTileLoadFailEvent = {
@@ -477,9 +477,9 @@ export type MapSourceTileProgressEvent = {
  * @see [Example: Change a map's style](https://docs.mapbox.com/mapbox-gl-js/example/setstyle/)
  * @see [Example: Add a GeoJSON line](https://docs.mapbox.com/mapbox-gl-js/example/geojson-line/)
  */
-export type MapDataEvent = MapStyleDataEvent | MapSourceDataEvent
+export type MapDataEvent = MapStyleDataEvent | MapSourceDataEvent;
 
-export type MapContextEvent = MapEventOf<'webglcontextlost' | 'webglcontextrestored'>
+export type MapContextEvent = MapEventOf<'webglcontextlost' | 'webglcontextrestored'>;
 
 export type MapEvents = {
     /** @section Interaction */
@@ -814,9 +814,9 @@ export type MapEvents = {
      * @example
      * // Initialize the map.
      * const map = new mapboxgl.Map({});
-     * // Set an event listener that fires when a `touchstart` event occurs within the map.
-     * map.on('touchstart', () => {
-     *     console.log('A touchstart event occurred.');
+     * // Set an event listener that fires when a `touchend` event occurs within the map.
+     * map.on('touchend', () => {
+     *     console.log('A touchend event occurred.');
      * });
      * @see [Example: Create a draggable point](https://docs.mapbox.com/mapbox-gl-js/example/drag-a-point/)
      */
@@ -1580,7 +1580,6 @@ export type MapEvents = {
      */
     'style.load': void;
 
-    /* eslint-disable jsdoc/valid-types */
     /**
      * Fired immediately after imported style resources have been downloaded
      * and the first visually complete rendering of the base style extended with the imported style has occurred.
@@ -1598,7 +1597,6 @@ export type MapEvents = {
      * });
      */
     'style.import.load': void;
-    /* eslint-enable jsdoc/valid-types */
 
     /**
      * Fired after speed index calculation is completed if `speedIndexTiming` option has been set to `true`.
@@ -1667,7 +1665,7 @@ export type MapEvents = {
      * @private
      */
     'gpu-timing-deferred-render': {gpuTime: number};
-}
+};
 
 /**
  * Utility type that represents all possible Map event types.
@@ -1683,6 +1681,6 @@ export type MapEventType = keyof MapEvents & string;
  *
  * type MoveEvent = MapEvent<'move'>; // equivalent to { type: 'move', target: Map, originalEvent?: MouseEvent | WheelEvent | TouchEvent }
  */
-export type MapEventOf<Type extends MapEventType> = EventOf<MapEvents, Type, Map>;
+export type MapEventOf<Type extends MapEventType> = EventOf<MapEvents, Type, MapboxMap>;
 
 export type MapEvent = MapEventOf<MapEventType>;

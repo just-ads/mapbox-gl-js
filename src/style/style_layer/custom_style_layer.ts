@@ -224,6 +224,7 @@ export function validateCustomStyleLayer(layerObject: CustomLayerInterface): Val
 }
 
 class CustomStyleLayer extends StyleLayer {
+    override type: 'custom';
 
     implementation: CustomLayerInterface;
 
@@ -255,8 +256,7 @@ class CustomStyleLayer extends StyleLayer {
         return false;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    override serialize(): any {
+    override serialize(): never {
         assert(false, "Custom layers cannot be serialized");
     }
 

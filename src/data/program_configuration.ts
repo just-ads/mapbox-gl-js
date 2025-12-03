@@ -3,7 +3,7 @@ import Color from '../style-spec/util/color';
 import {supportsPropertyExpression} from '../style-spec/util/properties';
 import {register} from '../util/web_worker_transfer';
 import {PossiblyEvaluatedPropertyValue} from '../style/properties';
-import {StructArrayLayout1f4, StructArrayLayout2f8, StructArrayLayout4f16, PatternLayoutArray, DashLayoutArray} from './array_types';
+import {StructArrayLayout1f4, StructArrayLayout2f8, StructArrayLayout4f16, PatternLayoutArray, DashLayoutArray, StructArrayLayout4ui8} from './array_types';
 import {clamp} from '../util/util';
 import {patternAttributes, patternTransitionAttributes} from './bucket/pattern_attributes';
 import dashAttributes from './bucket/dash_attributes';
@@ -36,7 +36,7 @@ import type {FormattedSection} from '../style-spec/expression/types/formatted';
 import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {IUniform} from '../render/uniform_binding';
 import type {LUT} from "../util/lut";
-import type {RenderColor} from "../style-spec/util/color";
+import type {PremultipliedRenderColor} from "../style-spec/util/color";
 import type {ImageId} from '../style-spec/expression/types/image_id';
 
 export type BinderUniform = {
@@ -51,11 +51,31 @@ export type ProgramConfigurationContext = {
     lut: LUT | null;
 };
 
-function packColor(color: RenderColor): [number, number] {
+function packColor(color: PremultipliedRenderColor): [number, number] {
     return [
         packUint8ToFloat(255 * color.r, 255 * color.g),
         packUint8ToFloat(255 * color.b, 255 * color.a)
     ];
+}
+
+function shouldIgnoreLut(
+    lutExpression: PossiblyEvaluatedValue<string>,
+    feature: Feature,
+    featureState: FeatureState,
+    availableImages: ImageId[],
+    canonical?: CanonicalTileID,
+    brightness?: number | null,
+    formattedSection?: FormattedSection,
+    worldview?: string
+): boolean {
+    if (!lutExpression) return false;
+
+    if (lutExpression.kind === 'composite' || lutExpression.kind === 'source') {
+        const value = lutExpression.evaluate(new EvaluationParameters(0, {brightness, worldview}), feature, featureState, canonical, availableImages, formattedSection);
+        return value === 'none';
+    }
+
+    return lutExpression.value === 'none';
 }
 
 /**
@@ -98,6 +118,7 @@ interface AttributeBinder {
         canonical?: CanonicalTileID,
         brightness?: number | null,
         formattedSection?: FormattedSection,
+        worldview?: string
     ) => void;
     updatePaintArray: (
         start: number,
@@ -107,6 +128,7 @@ interface AttributeBinder {
         availableImages: ImageId[],
         imagePositions: SpritePositions,
         brightness: number,
+        worldview: string | undefined,
     ) => void;
     upload: (arg1: Context) => void;
     destroy: () => void;
@@ -153,9 +175,8 @@ class ConstantBinder implements UniformBinder {
     ): void {
         const value = currentValue.constantOr(this.value);
         if (value instanceof Color) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const lut = this.lutExpression && (this.lutExpression as any).value === 'none' ? null : this.context.lut;
-            uniform.set(program, uniformName, value.toRenderColor(lut));
+            const lut = this.lutExpression && this.lutExpression.kind === 'constant' && this.lutExpression.value === 'none' ? null : this.context.lut;
+            uniform.set(program, uniformName, value.toPremultipliedRenderColor(lut));
         } else {
             uniform.set(program, uniformName, value);
         }
@@ -243,20 +264,22 @@ class SourceExpressionBinder implements AttributeBinder {
         this.paintVertexArray = new PaintVertexArray();
     }
 
-    populatePaintArray(newLength: number, feature: Feature, imagePositions: SpritePositions, availableImages: ImageId[], canonical?: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection) {
+    populatePaintArray(newLength: number, feature: Feature, imagePositions: SpritePositions, availableImages: ImageId[], canonical?: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection, worldview?: string) {
         const start = this.paintVertexArray.length;
         assert(Array.isArray(availableImages));
 
-        const value = (this.expression.kind === 'composite' || this.expression.kind === 'source') ? this.expression.evaluate(new EvaluationParameters(0, {brightness}), feature, {}, canonical, availableImages, formattedSection) : this.expression.kind === 'constant' && this.expression.value;
-        const ignoreLut = this.lutExpression ? (this.lutExpression.kind === 'composite' || this.lutExpression.kind === 'source' ? this.lutExpression.evaluate(new EvaluationParameters(0, {brightness}), feature, {}, canonical, availableImages, formattedSection) : this.lutExpression.value) === 'none' : false;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const value = (this.expression.kind === 'composite' || this.expression.kind === 'source') ? this.expression.evaluate(new EvaluationParameters(0, {brightness, worldview}), feature, {}, canonical, availableImages, formattedSection) : this.expression.kind === 'constant' && this.expression.value;
+        const ignoreLut = shouldIgnoreLut(this.lutExpression, feature, {}, availableImages, canonical, brightness, formattedSection, worldview);
 
         this.paintVertexArray.resize(newLength);
         this._setPaintValue(start, newLength, value, ignoreLut ? null : this.context.lut);
     }
 
-    updatePaintArray(start: number, end: number, feature: Feature, featureState: FeatureState, availableImages: ImageId[], spritePositions: SpritePositions, brightness: number) {
-        const value = (this.expression.kind === 'composite' || this.expression.kind === 'source') ? this.expression.evaluate({zoom: 0, brightness}, feature, featureState, undefined, availableImages) : this.expression.kind === 'constant' && this.expression.value;
-        const ignoreLut = this.lutExpression ? (this.lutExpression.kind === 'composite' || this.lutExpression.kind === 'source' ? this.lutExpression.evaluate(new EvaluationParameters(0, {brightness}), feature, featureState, undefined, availableImages) : this.lutExpression.value) === 'none' : false;
+    updatePaintArray(start: number, end: number, feature: Feature, featureState: FeatureState, availableImages: ImageId[], spritePositions: SpritePositions, brightness: number, worldview: string | undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const value = (this.expression.kind === 'composite' || this.expression.kind === 'source') ? this.expression.evaluate({zoom: 0, brightness, worldview}, feature, featureState, undefined, availableImages) : this.expression.kind === 'constant' && this.expression.value;
+        const ignoreLut = shouldIgnoreLut(this.lutExpression, feature, featureState, availableImages, undefined, brightness, undefined, worldview);
 
         this._setPaintValue(start, end, value, ignoreLut ? null : this.context.lut);
     }
@@ -264,14 +287,17 @@ class SourceExpressionBinder implements AttributeBinder {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     _setPaintValue(start: number, end: number, value: any, lut: LUT) {
         if (this.type === 'color') {
-            const color = packColor(value.toRenderColor(lut));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const color = packColor(value.toPremultipliedRenderColor(lut));
             for (let i = start; i < end; i++) {
                 this.paintVertexArray.emplace(i, color[0], color[1]);
             }
         } else {
             for (let i = start; i < end; i++) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 this.paintVertexArray.emplace(i, value);
             }
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             this.maxValue = Math.max(this.maxValue, Math.abs(value));
         }
     }
@@ -325,36 +351,40 @@ class CompositeExpressionBinder implements AttributeBinder, UniformBinder {
         this.paintVertexArray = new PaintVertexArray();
     }
 
-    populatePaintArray(newLength: number, feature: Feature, imagePositions: SpritePositions, availableImages: ImageId[], canonical?: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection) {
-        const min = this.expression.evaluate(new EvaluationParameters(this.context.zoom, {brightness}), feature, {}, canonical, availableImages, formattedSection);
-        const max = this.expression.evaluate(new EvaluationParameters(this.context.zoom + 1, {brightness}), feature, {}, canonical, availableImages, formattedSection);
-        const ignoreLut = this.lutExpression ? (this.lutExpression.kind === 'composite' || this.lutExpression.kind === 'source' ? this.lutExpression.evaluate(new EvaluationParameters(0, {brightness}), feature, {}, canonical, availableImages, formattedSection) : this.lutExpression.value) === 'none' : false;
+    populatePaintArray(newLength: number, feature: Feature, imagePositions: SpritePositions, availableImages: ImageId[], canonical?: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection, worldview?: string) {
+        const min = this.expression.evaluate(new EvaluationParameters(this.context.zoom, {brightness, worldview}), feature, {}, canonical, availableImages, formattedSection);
+        const max = this.expression.evaluate(new EvaluationParameters(this.context.zoom + 1, {brightness, worldview}), feature, {}, canonical, availableImages, formattedSection);
+        const ignoreLut = shouldIgnoreLut(this.lutExpression, feature, {}, availableImages, canonical, brightness, formattedSection, worldview);
 
         const start = this.paintVertexArray.length;
         this.paintVertexArray.resize(newLength);
         this._setPaintValue(start, newLength, min, max, ignoreLut ? null : this.context.lut);
     }
 
-    updatePaintArray(start: number, end: number, feature: Feature, featureState: FeatureState, availableImages: ImageId[], spritePositions: SpritePositions, brightness: number) {
-        const min = this.expression.evaluate({zoom: this.context.zoom, brightness}, feature, featureState, undefined, availableImages);
-        const max = this.expression.evaluate({zoom: this.context.zoom + 1, brightness}, feature, featureState, undefined, availableImages);
-        const ignoreLut = this.lutExpression ? (this.lutExpression.kind === 'composite' || this.lutExpression.kind === 'source' ? this.lutExpression.evaluate(new EvaluationParameters(0, {brightness}), feature, featureState, undefined, availableImages) : this.lutExpression.value) === 'none' : false;
+    updatePaintArray(start: number, end: number, feature: Feature, featureState: FeatureState, availableImages: ImageId[], spritePositions: SpritePositions, brightness: number, worldview: string) {
+        const min = this.expression.evaluate({zoom: this.context.zoom, brightness, worldview}, feature, featureState, undefined, availableImages);
+        const max = this.expression.evaluate({zoom: this.context.zoom + 1, brightness, worldview}, feature, featureState, undefined, availableImages);
+        const ignoreLut = shouldIgnoreLut(this.lutExpression, feature, featureState, availableImages, undefined, brightness, undefined, worldview);
 
         this._setPaintValue(start, end, min, max, ignoreLut ? null : this.context.lut);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    _setPaintValue(start: number, end: number, min: any, max: any, lut: LUT) {
+    _setPaintValue(start: number, end: number, min: any, max: any, lut?: LUT) {
         if (this.type === 'color') {
-            const minColor = packColor(min.toRenderColor(lut));
-            const maxColor = packColor(min.toRenderColor(lut));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const minColor = packColor(min.toPremultipliedRenderColor(lut));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const maxColor = packColor(min.toPremultipliedRenderColor(lut));
             for (let i = start; i < end; i++) {
                 this.paintVertexArray.emplace(i, minColor[0], minColor[1], maxColor[0], maxColor[1]);
             }
         } else {
             for (let i = start; i < end; i++) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 this.paintVertexArray.emplace(i, min, max);
             }
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             this.maxValue = Math.max(this.maxValue, Math.abs(min), Math.abs(max));
         }
     }
@@ -404,7 +434,7 @@ class PatternCompositeBinder implements AttributeBinder {
     paintVertexBuffer: VertexBuffer | null | undefined;
     paintVertexAttributes: Array<StructArrayMember>;
 
-    paintTransitionVertexArray: PatternLayoutArray;
+    paintTransitionVertexArray: StructArray;
     paintTransitionVertexBuffer: VertexBuffer | null | undefined;
 
     constructor(expression: CompositeExpression, names: Array<string>, type: string, PaintVertexArray: Class<StructArray>, layerId: string) {
@@ -417,7 +447,7 @@ class PatternCompositeBinder implements AttributeBinder {
         }
 
         this.paintVertexArray = new PaintVertexArray();
-        this.paintTransitionVertexArray = new PatternLayoutArray();
+        this.paintTransitionVertexArray = new StructArrayLayout4ui8();
     }
 
     populatePaintArray(length: number, feature: Feature, imagePositions: SpritePositions, _availableImages: ImageId[]) {
@@ -446,9 +476,10 @@ class PatternCompositeBinder implements AttributeBinder {
 
         if (secondaryPos) {
             this.paintTransitionVertexArray.resize(this.paintVertexArray.length);
-            const {tl, br, pixelRatio} = secondaryPos;
+            const {tl, br} = secondaryPos;
+
             for (let i = start; i < end; i++) {
-                this.paintTransitionVertexArray.emplace(i, tl[0], tl[1], br[0], br[1], pixelRatio);
+                this.paintTransitionVertexArray.emplace(i, tl[0], tl[1], br[0], br[1]);
             }
         }
 
@@ -508,6 +539,7 @@ export default class ProgramConfiguration {
         const keys = [];
         for (const property in layer.paint._values) {
             // @ts-expect-error - TS2349 - This expression is not callable.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             const value = layer.paint.get(property);
 
             if (property.endsWith('-use-theme')) continue;
@@ -521,10 +553,11 @@ export default class ProgramConfiguration {
             const useIntegerZoom = !!value.property.useIntegerZoom;
             const isPattern = property === 'line-dasharray' || property.endsWith('pattern');
 
-            // @ts-expect-error - TS2345: Argument of type 'string' is not assignable to parameter of type ...
-            const valueUseTheme = layer.paint.get(`${property}-use-theme`);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const sourceException = (property === 'line-dasharray' && (layer.layout as any).get('line-cap').value.kind !== 'constant') || (valueUseTheme && valueUseTheme.value.kind !== 'constant');
+            // @ts-expect-error - TS2349 - This expression is not callable.
+            const valueUseTheme = layer.paint.get(`${property}-use-theme`) as PossiblyEvaluatedPropertyValue<string>;
+            // @ts-expect-error - TS2349 - This expression is not callable.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            const sourceException = (property === 'line-dasharray' && layer.layout.get('line-cap').value.kind !== 'constant') || (valueUseTheme && valueUseTheme.value.kind !== 'constant');
 
             if (expression.kind === 'constant' && !sourceException) {
                 this.binders[property] = isPattern ?
@@ -543,8 +576,7 @@ export default class ProgramConfiguration {
 
             } else {
                 const StructArrayLayout = layoutType(property, type, 'composite');
-                // @ts-expect-error - TS2345 - Argument of type 'CompositeExpression | { kind: "constant"; value: any; }' is not assignable to parameter of type 'CompositeExpression'.
-                this.binders[property] = new CompositeExpressionBinder(expression, names, type, useIntegerZoom, context, StructArrayLayout);
+                this.binders[property] = new CompositeExpressionBinder(expression as CompositeExpression, names, type, useIntegerZoom, context, StructArrayLayout);
                 keys.push(`/z_${property}`);
             }
 
@@ -561,12 +593,12 @@ export default class ProgramConfiguration {
         return binder instanceof SourceExpressionBinder || binder instanceof CompositeExpressionBinder ? binder.maxValue : 0;
     }
 
-    populatePaintArrays(newLength: number, feature: Feature, imagePositions: SpritePositions, availableImages: ImageId[], canonical?: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection) {
+    populatePaintArrays(newLength: number, feature: Feature, imagePositions: SpritePositions, availableImages: ImageId[], canonical?: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection, worldview?: string) {
         for (const property in this.binders) {
             const binder = this.binders[property];
             binder.context = this.context;
             if (binder instanceof SourceExpressionBinder || binder instanceof CompositeExpressionBinder || binder instanceof PatternCompositeBinder)
-                (binder as AttributeBinder).populatePaintArray(newLength, feature, imagePositions, availableImages, canonical, brightness, formattedSection);
+                (binder as AttributeBinder).populatePaintArray(newLength, feature, imagePositions, availableImages, canonical, brightness, formattedSection, worldview);
         }
     }
 
@@ -598,6 +630,7 @@ export default class ProgramConfiguration {
         imagePositions: SpritePositions,
         isBrightnessChanged: boolean,
         brightness: number,
+        worldview: string | undefined
     ): boolean {
         let dirty: boolean = false;
         const keys = Object.keys(featureStates);
@@ -607,22 +640,23 @@ export default class ProgramConfiguration {
         for (const property in this.binders) {
             const binder = this.binders[property];
             binder.context = this.context;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
             const isExpressionNotConst = (binder as any).expression && (binder as any).expression.kind && (binder as any).expression.kind !== 'constant';
             if ((binder instanceof SourceExpressionBinder || binder instanceof CompositeExpressionBinder ||
-                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
                  binder instanceof PatternCompositeBinder) && isExpressionNotConst && ((binder as any).expression.isStateDependent === true || (binder as any).expression.isLightConstant === false)) {
                 //AHM: Remove after https://github.com/mapbox/mapbox-gl-js/issues/6255
                 // @ts-expect-error - TS2349 - This expression is not callable.
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 const value = layer.paint.get(property);
 
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
                 (binder as any).expression = value.value;
                 for (const id of ids) {
                     const state = featureStates[id.toString()];
                     featureMap.eachPosition(id, (index, start, end) => {
                         const feature = vtLayer.feature(index);
-                        (binder as AttributeBinder).updatePaintArray(start, end, feature, state, availableImages, imagePositions, brightness);
+                        (binder as AttributeBinder).updatePaintArray(start, end, feature, state, availableImages, imagePositions, brightness, worldview);
                     });
                 }
                 if (!featureStateUpdate) {
@@ -630,7 +664,7 @@ export default class ProgramConfiguration {
                         const state = featureStates[id.toString()];
                         featureMapWithoutIds.eachPosition(id, (index, start, end) => {
                             const feature = vtLayer.feature(index);
-                            (binder as AttributeBinder).updatePaintArray(start, end, feature, state, availableImages, imagePositions, brightness);
+                            (binder as AttributeBinder).updatePaintArray(start, end, feature, state, availableImages, imagePositions, brightness, worldview);
                         });
                     }
                 }
@@ -651,39 +685,9 @@ export default class ProgramConfiguration {
         return result;
     }
 
-    getBinderAttributes(): Array<string> {
-        const result: string[] = [];
-        for (const property in this.binders) {
-            const binder = this.binders[property];
-            if (binder instanceof SourceExpressionBinder || binder instanceof CompositeExpressionBinder || binder instanceof PatternCompositeBinder) {
-                for (let i = 0; i < binder.paintVertexAttributes.length; i++) {
-                    result.push(binder.paintVertexAttributes[i].name);
-                }
-            }
-
-            if (binder instanceof PatternCompositeBinder) {
-                for (let i = 0; i < patternTransitionAttributes.members.length; i++) {
-                    result.push(patternTransitionAttributes.members[i].name);
-                }
-            }
-        }
-        return result;
-    }
-
-    getBinderUniforms(): Array<string> {
-        const uniforms: string[] = [];
-        for (const property in this.binders) {
-            const binder = this.binders[property];
-            if (binder instanceof ConstantBinder || binder instanceof PatternConstantBinder || binder instanceof CompositeExpressionBinder) {
-                for (const uniformName of binder.uniformNames) {
-                    uniforms.push(uniformName);
-                }
-            }
-        }
-        return uniforms;
-    }
-
     getPaintVertexBuffers(): Array<VertexBuffer> {
+        // _buffers will be undefined here if updatePaintBuffers hasn't been called on the main thread yet
+        assert(this._buffers);
         return this._buffers;
     }
 
@@ -700,8 +704,7 @@ export default class ProgramConfiguration {
         return uniforms;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setUniforms<Properties extends any>(
+    setUniforms<Properties>(
         program: WebGLProgram,
         context: Context,
         binderUniforms: Array<BinderUniform>,
@@ -711,7 +714,7 @@ export default class ProgramConfiguration {
         // Uniform state bindings are owned by the Program, but we set them
         // from within the ProgramConfiguration's binder members.
         for (const {name, property, binding} of binderUniforms) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             (this.binders[property] as any).setUniform(program, binding, globals, properties.get(property as keyof Properties), name);
         }
     }
@@ -774,9 +777,9 @@ export class ProgramConfigurationSet<Layer extends TypedStyleLayer> {
         this._idlessCounter = 0;
     }
 
-    populatePaintArrays(length: number, feature: Feature, index: number, imagePositions: SpritePositions, availableImages: ImageId[], canonical: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection) {
+    populatePaintArrays(length: number, feature: Feature, index: number, imagePositions: SpritePositions, availableImages: ImageId[], canonical: CanonicalTileID, brightness?: number | null, formattedSection?: FormattedSection, worldview?: string) {
         for (const key in this.programConfigurations) {
-            this.programConfigurations[key].populatePaintArrays(length, feature, imagePositions, availableImages, canonical, brightness, formattedSection);
+            this.programConfigurations[key].populatePaintArrays(length, feature, imagePositions, availableImages, canonical, brightness, formattedSection, worldview);
         }
 
         if (feature.id !== undefined) {
@@ -790,9 +793,9 @@ export class ProgramConfigurationSet<Layer extends TypedStyleLayer> {
         this.needsUpload = true;
     }
 
-    updatePaintArrays(featureStates: FeatureStates, vtLayer: VectorTileLayer, layers: ReadonlyArray<TypedStyleLayer>, availableImages: ImageId[], imagePositions: SpritePositions, isBrightnessChanged: boolean, brightness?: number | null) {
+    updatePaintArrays(featureStates: FeatureStates, vtLayer: VectorTileLayer, layers: ReadonlyArray<TypedStyleLayer>, availableImages: ImageId[], imagePositions: SpritePositions, isBrightnessChanged: boolean, brightness?: number | null, worldview?: string) {
         for (const layer of layers) {
-            this.needsUpload = this.programConfigurations[layer.id].updatePaintArrays(featureStates, this._featureMap, this._featureMapWithoutIds, vtLayer, layer, availableImages, imagePositions, isBrightnessChanged, brightness || 0) || this.needsUpload;
+            this.needsUpload = this.programConfigurations[layer.id].updatePaintArrays(featureStates, this._featureMap, this._featureMapWithoutIds, vtLayer, layer, availableImages, imagePositions, isBrightnessChanged, brightness || 0, worldview) || this.needsUpload;
         }
     }
 
@@ -835,7 +838,9 @@ const attributeNameExceptions: Record<string, string[]> = {
     'line-pattern': ['pattern', 'pixel_ratio', 'pattern_b'],
     'fill-pattern': ['pattern', 'pixel_ratio', 'pattern_b'],
     'fill-extrusion-pattern': ['pattern', 'pixel_ratio', 'pattern_b'],
-    'line-dasharray': ['dash']
+    'line-dasharray': ['dash'],
+    'fill-bridge-guard-rail-color': ['structure_color'],
+    'fill-tunnel-structure-color': ['structure_color']
 };
 
 function paintAttributeNames(property: string, type: string): string[] {
@@ -872,7 +877,7 @@ const defaultLayouts = {
     }
 } as const;
 
-type LayoutType = 'array' | 'boolean' | 'color' | 'enum' | 'number' | 'resolvedImage' | 'string';
+type LayoutType = 'array' | 'boolean' | 'color' | 'enum' | 'number' | 'resolvedImage' | 'string' | 'formatted';
 
 function layoutType(property: string, type: LayoutType, binderType: 'source' | 'composite'): Class<StructArray> {
     const layoutException = propertyExceptions[property as keyof typeof propertyExceptions];

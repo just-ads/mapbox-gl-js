@@ -1,7 +1,8 @@
 import ValidationError from '../error/validation_error';
-import getType from '../util/get_type';
+import {getType, isString} from '../util/get_type';
 
-import type {ValidationOptions} from './validate';
+import type {StyleReference} from '../reference/latest';
+import type {StyleSpecification} from '../types';
 
 // Allow any URL, use dummy base, if it's a relative URL
 export function isValidUrl(str: string, allowRelativeUrls: boolean): boolean {
@@ -9,32 +10,32 @@ export function isValidUrl(str: string, allowRelativeUrls: boolean): boolean {
     try {
         new URL(str, isRelative && allowRelativeUrls ? 'http://example.com' : undefined);
         return true;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (_: any) {
+    } catch (_: unknown) {
         return false;
     }
 }
 
-export default function validateModel(options: ValidationOptions): Array<ValidationError> {
+type ModelValidatorOptions = {
+    key: string;
+    value: unknown;
+    style: Partial<StyleSpecification>;
+    styleSpec: StyleReference;
+};
+
+export default function validateModel(options: ModelValidatorOptions): ValidationError[] {
     const url = options.value;
-    let errors = [];
 
     if (!url) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return errors;
+        return [];
     }
 
-    const type = getType(url);
-    if (type !== 'string') {
-        errors = errors.concat([new ValidationError(options.key, url, `string expected, "${type}" found`)]);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return errors;
+    if (!isString(url)) {
+        return [new ValidationError(options.key, url, `string expected, "${getType(url)}" found`)];
     }
 
     if (!isValidUrl(url, true)) {
-        errors = errors.concat([new ValidationError(options.key, url, `invalid url "${url}"`)]);
+        return [new ValidationError(options.key, url, `invalid url "${url}"`)];
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-    return errors;
+    return [];
 }

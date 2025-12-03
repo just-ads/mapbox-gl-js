@@ -20,6 +20,7 @@ import type {
     WorkerSourceTileRequest
 } from '../source/worker_source';
 import type {StyleModelMap} from '../style/style_mode';
+import type {IndoorData} from '../style/indoor_data';
 
 /**
  * Message registry maps message types to their data and result types.
@@ -71,7 +72,7 @@ export type ActorMessages = {
     };
 
     'getGlyphs': {
-        params: { scope: string; stacks: FontStacks; uid?: number };
+        params: {  stacks: FontStacks; uid?: number };
         callback: ActorCallback<GlyphMap>;
     };
 
@@ -141,6 +142,11 @@ export type ActorMessages = {
         callback: ActorCallback<void>;
     };
 
+    'setWorldview': {
+        params: string;
+        callback: ActorCallback<void>;
+    };
+
     'setDracoUrl': {
         params: string;
         callback: ActorCallback<void>;
@@ -173,6 +179,11 @@ export type ActorMessages = {
 
     'setReferrer': {
         params: string;
+        callback: void;
+    };
+
+    'setIndoorData': {
+        params: IndoorData;
         callback: void;
     };
 

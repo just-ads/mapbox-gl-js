@@ -304,6 +304,15 @@
     background-image: svg-inline(ctrl-geolocate);
 }
 
+.mapboxgl-ctrl button.mapboxgl-ctrl-buildings-toggle .mapboxgl-ctrl-icon {
+    background-image: svg-load("svg/mapboxgl-ctrl-buildings-toggle.svg");
+    background-size: 26px 26px;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-buildings-toggle.mapboxgl-ctrl-level-button-selected .mapboxgl-ctrl-icon {
+    filter: invert(1) brightness(1);
+}
+
 .mapboxgl-ctrl button.mapboxgl-ctrl-geolocate:disabled .mapboxgl-ctrl-icon {
     background-image: svg-inline(ctrl-geolocate-disabled);
 }
@@ -824,3 +833,40 @@ a.mapboxgl-ctrl-logo.mapboxgl-compact {
 .mapboxgl-canvas-container.mapboxgl-touch-pan-blocker-override.mapboxgl-scrollable-page .mapboxgl-canvas {
     touch-action: pan-x pan-y;
 }
+
+.mapboxgl-ctrl-separator {
+    height: 1px;
+    background-color: #e0e0e0;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-level-button {
+    color: #333;
+    font-size: 18px;
+    width: 50px;
+    height: 50px;
+    font-weight: bold;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-level-button:first-child {
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-level-button:last-child {
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-level-button:hover {
+    background-color: #f5f5f5;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-level-button-selected {
+    background-color: #4a5568;
+    color: #fff;
+}
+
+.mapboxgl-ctrl button.mapboxgl-ctrl-level-button-selected:hover {
+    background-color: #2d3748;
+}
+

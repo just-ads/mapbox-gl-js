@@ -1,4 +1,8 @@
 
+/**
+ * NOTE: When skipping a GL JS test, it also needs to be skipped in Native at projects/gl-native/metrics/ignores/platform-all.json
+ */
+
 const todo = [
     // "https://github.com/mapbox/mapbox-gl-js/issues/2716
     "query-tests/regressions/mapbox-gl-js#4494",
@@ -133,6 +137,16 @@ const skip = [
     // Current behavior is arbitrary
     "render-tests/geojson/inline-linestring-fill",
 
+    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3407
+    "render-tests/icon-size/small-stretch-area",
+
+    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3448
+    "render-tests/icon-size/depends-on-coalesce-image",
+    "render-tests/appearance/icon-size-depends-on-coalesce-image",
+
+    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3462
+    "render-tests/appearance/no-icon-size-in-appearance-non-default-layout-icon-size",
+
     // Mapbox-gl-js does not support tile-mode
     "render-tests/icon-text-fit/text-variable-anchor-tile-map-mode",
     "render-tests/map-mode/tile",
@@ -158,12 +172,6 @@ const skip = [
 
     // non-deterministic symbol placement on tile boundaries"
     "render-tests/text-variable-anchor/pitched",
-
-    // Flaky
-    // https://mapbox.atlassian.net/browse/GLJS-1226
-    // https://github.com/mapbox/mapbox-gl-js/issues/11234
-    "render-tests/video/projected",
-    "render-tests/video/default",
 
     // Non-deterministic
     "query-tests/terrain/draped/lines/slope-occlusion-box-query",
@@ -206,6 +214,39 @@ const skip = [
     // Dithering of fog is always enabled in GL-JS
     "render-tests/fog/dithering-runtime-off",
 
+    // Not implemented in gl-js
+    "render-tests/fill-extrusion-partial-rendering/partial-rendering-0",
+    "render-tests/fill-extrusion-partial-rendering/partial-rendering-1",
+    "render-tests/fill-extrusion-partial-rendering/partial-rendering-2",
+    "render-tests/fill-extrusion-partial-rendering/partial-rendering-3",
+
+    // Flaky in CI, covered by unit tests
+    "render-tests/terrain/camera-placement/elevation-not-yet-available",
+
+    // Flaky, https://mapbox.atlassian.net/browse/GLJS-608
+    "render-tests/model-layer/terrain-2-wheels-stunt",
+    "render-tests/model-layer/multiple-models-terrain",
+
+    // The algorithm for raster colour gradient texels stretching needs an adjustment
+    "render-tests/raster-color/categorical",
+
+    // Not working correctly
+    // https://github.com/mapbox/mapbox-gl-js-internal/pull/1909
+    "render-tests/lines-elevated-line-join-none",
+    "render-tests/lines-elevated-line-joins-linear-elevation",
+
+    // Support image updates with different size
+    "render-tests/background-pattern/image-update/delayed/different-size",
+    "render-tests/background-pattern/image-update/delayed/different-size-before-color-theme-change",
+    "render-tests/background-pattern/image-update/delayed/different-size-with-color-theme",
+
+    // https://mapbox.atlassian.net/browse/GLJS-1295
+    "render-tests/placement/icon-optional",
+    "render-tests/placement/text-optional/basic",
+    "render-tests/placement/text-optional/text-variable-anchor",
+    // limit number of holes experimental for native
+    "render-tests/fill-limit-number-holes",
+
     // Needs updated model fixtures
     "render-tests/model-layer/landmark-conflation-border-overlapping-extrusion",
     "render-tests/model-layer/landmark-conflation-borders",
@@ -227,76 +268,19 @@ const skip = [
     "render-tests/model-layer/landmark-front-cutoff-terrain",
     "render-tests/clip-layer/clip-layer-default-below-one-batched-model",
 
-    // Not implemented in gl-js
-    "render-tests/fill-extrusion-partial-rendering/partial-rendering-0",
-    "render-tests/fill-extrusion-partial-rendering/partial-rendering-1",
-    "render-tests/fill-extrusion-partial-rendering/partial-rendering-2",
-    "render-tests/fill-extrusion-partial-rendering/partial-rendering-3",
-
-    // Flaky in CI, covered by unit tests
-    "render-tests/terrain/camera-placement/elevation-not-yet-available",
-
-    // Flaky, https://mapbox.atlassian.net/browse/GLJS-608
-    "render-tests/model-layer/terrain-2-wheels-stunt",
-    "render-tests/model-layer/multiple-models-terrain",
-
-    // The algorithm for raster colour gradient texels stretching needs an adjustment
-    "render-tests/raster-color/categorical",
-
     // fill-extrusions always get removed. This will be separated (similar to symbol and model) in future.
     "render-tests/clip-layer/clip-layer-keep-fill-extrusions",
 
-    // Not working correctly
-    // https://github.com/mapbox/mapbox-gl-js-internal/pull/1909
-    "render-tests/lines-elevated-line-join-none",
-    "render-tests/lines-elevated-line-joins-linear-elevation",
+    // Requires support for hd-roads-markup/elevationId - not yet supported in gl-js
+    "render-tests/model-layer/model-elevation-reference/hd-road-markup/with-elevation-id",
+    "render-tests/building/terrain/terrain-toggle-conflation-works",
+    "render-tests/building/terrain/terrain-unsupported",
+    "render-tests/building/globe-unsupported",
 
-    // Support image updates with different size
-    "render-tests/background-pattern/image-update/delayed/different-size",
-    "render-tests/background-pattern/image-update/delayed/different-size-before-color-theme-change",
-    "render-tests/background-pattern/image-update/delayed/different-size-with-color-theme",
-
-    // 3D intersections gl-js port
-    // https://mapbox.atlassian.net/browse/MAPS3D-1659
-    "render-tests/3d-intersections/elevated-circles",
-    "render-tests/3d-intersections/elevated-geojson-fill",
-    "render-tests/3d-intersections/elevated-geojson-line-trim-offset",
-    "render-tests/3d-intersections/elevated-geojson-line-wide",
-    "render-tests/3d-intersections/elevated-geojson-line",
-    "render-tests/3d-intersections/elevated-wireframe",
-    "render-tests/3d-intersections/guard-rail-color-feature-dependent",
-    "render-tests/3d-intersections/guard-rail-color",
-    "render-tests/3d-intersections/guard-rail-toggle",
-    "render-tests/3d-intersections/road-markups-clipping",
-    "render-tests/3d-intersections/tunnel-enterance-color",
-    "render-tests/3d-intersections/zLevel/sf-progress",
-    "render-tests/3d-intersections/zLevel/tokyo-nosplit-portals-same-id",
-    "render-tests/3d-intersections/zLevel/tokyo-simplified-line-progress",
-    "render-tests/3d-intersections/no-cross-beams",
-    "render-tests/3d-intersections/ortho-camera",
-    "render-tests/3d-intersections/road-extend-tilecover",
-    "render-tests/3d-intersections/max-zoom-mismatch",
-
-    // Procedural buildings gl-js port
-    // https://mapbox.atlassian.net/browse/MAPS3D-1664
-    "render-tests/building/conflation",
-    "render-tests/building/emissive-strength",
-    "render-tests/building/facades",
-    "render-tests/building/gabled",
-    "render-tests/building/ground-ao",
-    "render-tests/building/hipped",
-    "render-tests/building/mansard",
-    "render-tests/building/parapet",
-    "render-tests/building/property-update",
-    "render-tests/building/pyramidal",
-    "render-tests/building/skillion",
-    "render-tests/building/symbol-z-offset",
-    "render-tests/building/tile-border",
-    "render-tests/building/vertical-scale",
-    "render-tests/building/with-shadows",
-
-    // Flaky model test
-    "render-tests/model-layer/style-model-api-remove",
+    // Ignore procedural buiding clip layer render tests for now.
+    "render-tests/building/clip-layer/default",
+    "render-tests/building/clip-layer/lower-order-clipping-skipped",
+    "render-tests/building/clip-layer/with-FE-and-landmarks"
 ];
 
 export default {todo, skip};

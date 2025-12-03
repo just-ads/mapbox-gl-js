@@ -1,6 +1,6 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
-import {describe, test, expect} from '../../util/vitest';
+import {describe, test, beforeAll, expect} from '../../util/vitest';
 import Point from '@mapbox/point-geometry';
 import Transform from '../../../src/geo/transform';
 import LngLat, {LngLatBounds} from '../../../src/geo/lng_lat';
@@ -36,7 +36,7 @@ describe('transform', () => {
         expect(transform.size.equals(new Point(500, 500))).toEqual(true);
         expect(transform.centerPoint.equals(new Point(250, 250))).toEqual(true);
         expect(transform.scaleZoom(0)).toEqual(-Infinity);
-        expect(transform.scaleZoom(10)).toEqual(3.3219280948873626);
+        expect(transform.scaleZoom(10)).toEqual(3.321928094887362);
         expect(transform.point).toEqual(new Point(262144, 262144));
         expect(transform.height).toEqual(500);
         expect(fixedLngLat(transform.pointLocation(new Point(250, 250)))).toEqual({lng: 0, lat: -0});
@@ -275,7 +275,9 @@ describe('transform', () => {
 
     describe('pointCoordinate retains direction when point is offscreen', () => {
         function assertDueNorth(m1, m2) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             const dx = m2.x - m1.x;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             const dy = m2.y - m1.y;
             const l = Math.sqrt(dx * dx + dy * dy);
             const ndx = dx / l;
@@ -369,13 +371,16 @@ describe('transform', () => {
         function toFixed(bounds) {
             const n = 10;
             return [
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 [normalizeFixed(bounds[0][0], n), normalizeFixed(bounds[0][1], n)],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 [normalizeFixed(bounds[1][0], n), normalizeFixed(bounds[1][1], n)]
             ];
         }
 
         function normalizeFixed(num, n) {
             // workaround for "-0.0000000000" ≠ "0.0000000000"
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             return parseFloat(num.toFixed(n)).toFixed(n);
         }
     });
@@ -658,22 +663,30 @@ describe('transform', () => {
         });
 
         test('Extend tile coverage for roads', () => {
-            transform.resize(512, 512);
-            transform.center = new LngLat(-122.156884, 37.709877);
-            transform.zoom = 18;
-            transform.pitch = 79;
-            transform.bearing = 0;
+            transform.resize(1024, 1024);
+            transform.center = new LngLat(-96.830256, 33.088666);
+            transform.zoom = 20.54;
+            transform.pitch = 79.50;
+            transform.bearing = 71.73;
 
-            const visibleTiles = transform.coveringTiles({tileSize: 512, minzoom: 14, maxzoom: 14, roundZoom: true, calculateQuadrantVisibility: false});
+            const visibleTiles = transform.coveringTiles({tileSize: 512, maxzoom: 18, reparseOverscaled: true, roundZoom: false, calculateQuadrantVisibility: false});
 
             expect(visibleTiles).toStrictEqual([
-                Object.assign(new OverscaledTileID(14, 0, 14, 2632, 6336))
+                Object.assign(new OverscaledTileID(20, 0, 18, 60562, 105514)),
+                Object.assign(new OverscaledTileID(20, 0, 18, 60562, 105513)),
+                Object.assign(new OverscaledTileID(20, 0, 18, 60563, 105514)),
+                Object.assign(new OverscaledTileID(20, 0, 18, 60563, 105513)),
+                Object.assign(new OverscaledTileID(17, 0, 17, 30282, 52757)),
+                Object.assign(new OverscaledTileID(17, 0, 17, 30283, 52757)),
+                Object.assign(new OverscaledTileID(17, 0, 17, 30282, 52756)),
+                Object.assign(new OverscaledTileID(17, 0, 17, 30283, 52756)),
+                Object.assign(new OverscaledTileID(16, 0, 16, 15141, 26377))
             ]);
 
-            const tileExtension = transform.extendTileCover(visibleTiles, 14, transform._camera.forward());
+            const tileExtension = transform.extendTileCoverToNearPlane(visibleTiles, transform.getFrustum(18), 18);
 
             expect(tileExtension).toStrictEqual([
-                Object.assign(new OverscaledTileID(14, 0, 14, 2632, 6337))
+                Object.assign(new OverscaledTileID(20, 0, 18, 60561, 105514))
             ]);
         });
     });
@@ -749,6 +762,7 @@ describe('transform', () => {
                 return true;
             },
             getAtPointOrZero(p) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 if (p.x === 0.5 && p.y === 0.5)
                     return 0;
                 return elevation * this.exaggeration();
@@ -758,6 +772,7 @@ describe('transform', () => {
             },
             getForTilePoints(tileID, points) {
                 for (const p of points) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                     p[2] = elevation * this.exaggeration();
                 }
                 return true;
@@ -803,6 +818,7 @@ describe('transform', () => {
             },
             getForTilePoints(tileID, points) {
                 for (const p of points) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                     p[2] = elevation * this.exaggeration();
                 }
                 return true;
@@ -822,6 +838,7 @@ describe('transform', () => {
                 return true;
             },
             getAtPointOrZero(p) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 return scale * (p.x + p.y - 1.0);
             },
             getAtPoint(p) {
@@ -829,6 +846,7 @@ describe('transform', () => {
             },
             getForTilePoints(tileID, points) {
                 for (const p of points) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                     p[2] = scale * (p.x + p.y - 1.0);
                 }
                 return true;
@@ -967,6 +985,15 @@ describe('transform', () => {
         expect(transform._seaLevelZoom).toEqual(transformBefore._seaLevelZoom);
     });
 
+    test('Zoom from negative altitude is valid', () => {
+        const transform = new Transform();
+        transform.resize(200, 200);
+
+        const zoom = transform._zoomFromMercatorZ(-100);
+
+        expect(isNaN(zoom)).toBeFalsy();
+    });
+
     test('Compute zoom from camera height', () => {
         const transform = new Transform();
         transform.resize(200, 200);
@@ -1027,120 +1054,172 @@ describe('transform', () => {
             maxzoom: 10,
             tileSize: 512
         };
-
-        const transform = new Transform();
+        let transform;
         let centerElevation = 0;
+        let elevation;
         let tilesDefaultElevation = 0;
         const tileElevation: Record<string, any> = {};
-        const elevation = {
-            isDataAvailableAtPoint(_) {
-                return true;
-            },
-            getAtPointOrZero(_) {
-                return this.exaggeration() * centerElevation;
-            },
-            getAtPoint(_) {
-                return this.getAtPointOrZero();
-            },
-            getMinMaxForTile(tileID) {
-                const ele = tileElevation[tileID.key] !== undefined ? tileElevation[tileID.key] : tilesDefaultElevation;
-                if (ele === null) return null;
-                return {min: this.exaggeration() * ele, max: this.exaggeration() * ele};
-            },
-            exaggeration() {
-                return 10; // Low tile zoom used, exaggerate elevation to make impact.
-            },
-            getMinElevationBelowMSL: () => 0,
-            getMinMaxForVisibleTiles: () => null
-        };
-        transform.elevation = elevation;
-        transform.resize(200, 200);
 
-        // make slightly off center so that sort order is not subject to precision issues
-        transform.center = {lng: -0.01, lat: 0.01};
+        beforeAll(() => {
+            transform = new Transform();
+            elevation = {
+                isDataAvailableAtPoint(_) {
+                    return true;
+                },
+                getAtPointOrZero(_) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                    return this.exaggeration() * centerElevation;
+                },
+                getAtPoint(_) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                    return this.getAtPointOrZero();
+                },
+                getMinMaxForTile(tileID) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+                    const ele = tileElevation[tileID.key] !== undefined ? tileElevation[tileID.key] : tilesDefaultElevation;
+                    if (ele === null) return null;
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                    return {min: this.exaggeration() * ele, max: this.exaggeration() * ele};
+                },
+                exaggeration() {
+                    return 10; // Low tile zoom used, exaggerate elevation to make impact.
+                },
+                getMinElevationBelowMSL: () => 0,
+                getMinMaxForVisibleTiles: () => null
+            };
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            transform.elevation = elevation;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            transform.resize(200, 200);
 
-        transform.zoom = 0;
-        expect(transform.coveringTiles(options)).toEqual([]);
+            // make slightly off center so that sort order is not subject to precision issues
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.center = {lng: -0.01, lat: 0.01};
 
-        transform.zoom = 1;
-        expect(transform.coveringTiles(options)).toEqual([
-            new OverscaledTileID(1, 0, 1, 0, 0),
-            new OverscaledTileID(1, 0, 1, 1, 0),
-            new OverscaledTileID(1, 0, 1, 0, 1),
-            new OverscaledTileID(1, 0, 1, 1, 1)]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 0;
+        });
 
-        transform.zoom = 2.4;
-        expect(transform.coveringTiles(options)).toEqual([
-            new OverscaledTileID(2, 0, 2, 1, 1),
-            new OverscaledTileID(2, 0, 2, 2, 1),
-            new OverscaledTileID(2, 0, 2, 1, 2),
-            new OverscaledTileID(2, 0, 2, 2, 2)]);
+        test('general expectations', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([]);
 
-        transform.zoom = 10;
-        expect(transform.coveringTiles(options)).toEqual([
-            new OverscaledTileID(10, 0, 10, 511, 511),
-            new OverscaledTileID(10, 0, 10, 512, 511),
-            new OverscaledTileID(10, 0, 10, 511, 512),
-            new OverscaledTileID(10, 0, 10, 512, 512)]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 1;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([
+                new OverscaledTileID(1, 0, 1, 0, 0),
+                new OverscaledTileID(1, 0, 1, 1, 0),
+                new OverscaledTileID(1, 0, 1, 0, 1),
+                new OverscaledTileID(1, 0, 1, 1, 1)]);
 
-        transform.zoom = 11;
-        expect(transform.coveringTiles(options)).toEqual([
-            new OverscaledTileID(10, 0, 10, 511, 511),
-            new OverscaledTileID(10, 0, 10, 512, 511),
-            new OverscaledTileID(10, 0, 10, 511, 512),
-            new OverscaledTileID(10, 0, 10, 512, 512)]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 2.4;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([
+                new OverscaledTileID(2, 0, 2, 1, 1),
+                new OverscaledTileID(2, 0, 2, 2, 1),
+                new OverscaledTileID(2, 0, 2, 1, 2),
+                new OverscaledTileID(2, 0, 2, 2, 2)]);
 
-        transform.zoom = 9.1;
-        transform.pitch = 60.0;
-        transform.bearing = 32.0;
-        transform.center = new LngLat(56.90, 48.20);
-        transform.resize(1024, 768);
-        transform.elevation = null;
-        const cover2D = transform.coveringTiles(options);
-        // No LOD as there is no elevation data.
-        expect(cover2D[0].overscaledZ === cover2D[cover2D.length - 1].overscaledZ).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 10;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([
+                new OverscaledTileID(10, 0, 10, 511, 511),
+                new OverscaledTileID(10, 0, 10, 512, 511),
+                new OverscaledTileID(10, 0, 10, 511, 512),
+                new OverscaledTileID(10, 0, 10, 512, 512)]);
 
-        transform.pitch = 65.0;
-        transform.elevation = elevation;
-        const cover = transform.coveringTiles(options);
-        // First part of the cover should be the same as for 60 degrees no elevation case.
-        expect(cover.slice(0, 6)).toEqual(cover2D.slice(0, 6));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 11;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([
+                new OverscaledTileID(10, 0, 10, 511, 511),
+                new OverscaledTileID(10, 0, 10, 512, 511),
+                new OverscaledTileID(10, 0, 10, 511, 512),
+                new OverscaledTileID(10, 0, 10, 512, 512)]);
 
-        // Even though it is larger pitch, less tiles are expected as LOD kicks in.
-        expect(cover.length < cover2D.length).toBeTruthy();
-        expect(cover[0].overscaledZ > cover[cover.length - 1].overscaledZ).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 9.1;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.pitch = 60.0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.bearing = 32.0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.center = new LngLat(56.90, 48.20);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            transform.resize(1024, 768);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.elevation = null;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const cover2D = transform.coveringTiles(options);
+            // No LOD as there is no elevation data.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(cover2D[0].overscaledZ === cover2D[cover2D.length - 1].overscaledZ).toBeTruthy();
 
-        // Elevated LOD with elevated center returns the same
-        tilesDefaultElevation = centerElevation = 10000;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.pitch = 65.0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            transform.elevation = elevation;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const cover = transform.coveringTiles(options);
+            // First part of the cover should be the same as for 60 degrees no elevation case.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(cover.slice(0, 6)).toEqual(cover2D.slice(0, 6));
 
-        transform.elevation = null;
-        transform.elevation = elevation;
+            // Even though it is larger pitch, less tiles are expected as LOD kicks in.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(cover.length < cover2D.length).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(cover[0].overscaledZ > cover[cover.length - 1].overscaledZ).toBeTruthy();
 
-        const cover10k = transform.coveringTiles(options);
-        expect(cover).toEqual(cover10k);
+            // Elevated LOD with elevated center returns the same
+            tilesDefaultElevation = centerElevation = 10000;
 
-        // Lower tiles on side get clipped.
-        const lowTiles = [
-            new OverscaledTileID(9, 0, 9, 335, 178).key,
-            new OverscaledTileID(9, 0, 9, 337, 178).key
-        ];
-        expect(cover.filter(t => lowTiles.includes(t.key)).length === lowTiles.length).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.elevation = null;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            transform.elevation = elevation;
 
-        for (const t of lowTiles) {
-            tileElevation[t] = 0;
-        }
-        const coverLowSide = transform.coveringTiles(options);
-        expect(coverLowSide.filter(t => lowTiles.includes(t.key)).length === 0).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const cover10k = transform.coveringTiles(options);
+            expect(cover).toEqual(cover10k);
 
-        tileElevation[lowTiles[0]] = null; // missing elevation information gets to cover.
-        expect(transform.coveringTiles(options).find(t => t.key === lowTiles[0])).toBeTruthy();
+            // Lower tiles on side get clipped.
+            const lowTiles = [
+                new OverscaledTileID(9, 0, 9, 335, 178).key,
+                new OverscaledTileID(9, 0, 9, 337, 178).key
+            ];
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
+            expect(cover.filter(t => lowTiles.includes(t.key)).length === lowTiles.length).toBeTruthy();
 
-        transform.zoom = 2;
-        transform.pitch = 0;
-        transform.bearing = 0;
-        transform.resize(300, 300);
+            for (const t of lowTiles) {
+                tileElevation[t] = 0;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const coverLowSide = transform.coveringTiles(options);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
+            expect(coverLowSide.filter(t => lowTiles.includes(t.key)).length === 0).toBeTruthy();
+
+            tileElevation[lowTiles[0]] = null; // missing elevation information gets to cover.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options).find(t => t.key === lowTiles[0])).toBeTruthy();
+
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 2;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.pitch = 0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.bearing = 0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            transform.resize(300, 300);
+        });
+
         test('calculates tile coverage at w > 0', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.center = {lng: 630.02, lat: 0.01};
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             expect(transform.coveringTiles(options)).toEqual([
                 new OverscaledTileID(2, 2, 2, 1, 1),
                 new OverscaledTileID(2, 2, 2, 1, 2),
@@ -1150,7 +1229,9 @@ describe('transform', () => {
         });
 
         test('calculates tile coverage at w = -1', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.center = {lng: -360.01, lat: 0.02};
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             expect(transform.coveringTiles(options)).toEqual([
                 new OverscaledTileID(2, -1, 2, 1, 1),
                 new OverscaledTileID(2, -1, 2, 2, 1),
@@ -1160,8 +1241,11 @@ describe('transform', () => {
         });
 
         test('calculates tile coverage across meridian', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.zoom = 1;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.center = {lng: -180.01, lat: 0.02};
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             expect(transform.coveringTiles(options)).toEqual([
                 new OverscaledTileID(1, -1, 1, 1, 0),
                 new OverscaledTileID(1, 0, 1, 0, 0),
@@ -1169,49 +1253,61 @@ describe('transform', () => {
                 new OverscaledTileID(1, 0, 1, 0, 1)
             ]);
         });
-        test(
-            'only includes tiles for a single world, if renderWorldCopies is set to false',
-            () => {
-                transform.zoom = 1;
-                transform.center = {lng: -180.01, lat: 0.01};
-                transform.renderWorldCopies = false;
-                expect(transform.coveringTiles(options)).toEqual([
-                    new OverscaledTileID(1, 0, 1, 0, 0),
-                    new OverscaledTileID(1, 0, 1, 0, 1)
-                ]);
-            }
-        );
+        test('only includes tiles for a single world, if renderWorldCopies is set to false', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = 1;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.center = {lng: -180.01, lat: 0.01};
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.renderWorldCopies = false;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([
+                new OverscaledTileID(1, 0, 1, 0, 0),
+                new OverscaledTileID(1, 0, 1, 0, 1)
+            ]);
+        });
         test('proper distance to center with wrap. Zoom drop at the end.', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             transform.resize(2000, 2000);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.zoom = 3.29;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.pitch = 57;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.bearing = 91.8;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             transform.center = {lng: -134.66, lat: 20.52};
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             const cover = transform.coveringTiles(options);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(cover[0].overscaledZ === 3).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(cover[cover.length - 1].overscaledZ <= 2).toBeTruthy();
         });
 
-        test(
-            'zoom 22 somewhere in Mile High City should load only visible tiles',
-            () => {
-                tilesDefaultElevation = null;
-                centerElevation = 1600;
-                tileElevation[new OverscaledTileID(14, 0, 14, 3413, 6218).key] = 1600;
-                transform.pitch = 0;
-                transform.bearing = 0;
-                transform.resize(768, 768);
-                transform.zoom = options.maxzoom = 22;
-                transform.center = {lng: -104.99813327, lat: 39.72784465999999};
-                options.roundZoom = true;
-                expect(transform.coveringTiles(options)).toEqual([
-                    new OverscaledTileID(22, 0, 22, 873835, 1592007),
-                    new OverscaledTileID(22, 0, 22, 873834, 1592007),
-                    new OverscaledTileID(22, 0, 22, 873835, 1592006),
-                    new OverscaledTileID(22, 0, 22, 873834, 1592006)
-                ]);
-            }
-        );
+        test('zoom 22 somewhere in Mile High City should load only visible tiles', {timeout: 10000}, () => {
+            tilesDefaultElevation = null;
+            centerElevation = 1600;
+            tileElevation[new OverscaledTileID(14, 0, 14, 3413, 6218).key] = 1600;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.pitch = 0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.bearing = 0;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            transform.resize(768, 768);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.zoom = options.maxzoom = 22;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            transform.center = {lng: -104.99813327, lat: 39.72784465999999};
+            options.roundZoom = true;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            expect(transform.coveringTiles(options)).toEqual([
+                new OverscaledTileID(22, 0, 22, 873835, 1592007),
+                new OverscaledTileID(22, 0, 22, 873834, 1592007),
+                new OverscaledTileID(22, 0, 22, 873835, 1592006),
+                new OverscaledTileID(22, 0, 22, 873834, 1592006)
+            ]);
+        });
     });
 
     test('loads only visible on terrain', () => {
@@ -1252,6 +1348,7 @@ describe('transform', () => {
                 for (let z = tileID.canonical.z - 1; z >= 9; z--) {
                     const id = tileID.calculateScaledKey(z);
                     if (demTiles.hasOwnProperty(id)) {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                         return {min: 0, max: demTiles[id]};
                     }
                 }
@@ -1410,22 +1507,27 @@ describe('transform', () => {
 
             p0 = new Point(0, 0);
             p1 = new Point(10, 10);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             expect(transform.anyCornerOffEdge(p0, p1)).toBeTruthy();
 
             p0 = new Point(0, 250);
             p1 = new Point(10, 350);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             expect(transform.anyCornerOffEdge(p0, p1)).toBeTruthy();
 
             p0 = new Point(0, transform.horizonLineFromTop() - 10);
             p1 = new Point(10, transform.horizonLineFromTop() + 10);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             expect(transform.anyCornerOffEdge(p0, p1)).toBeTruthy();
 
             p0 = new Point(0, 700);
             p1 = new Point(10, 710);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             expect(transform.anyCornerOffEdge(p0, p1)).toBeFalsy();
 
             p0 = new Point(0, transform.horizonLineFromTop());
             p1 = new Point(10, transform.horizonLineFromTop() + 10);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             expect(transform.anyCornerOffEdge(p0, p1)).toBeFalsy();
         });
 
@@ -1485,9 +1587,12 @@ describe('transform', () => {
     describe('freeCamera', () => {
         const rotatedFrame = (quaternion) => {
             return {
-                up: vec3.transformQuat([] as unknown as vec3, [0, -1, 0], quaternion),
-                forward: vec3.transformQuat([] as unknown as vec3, [0, 0, -1], quaternion),
-                right: vec3.transformQuat([] as unknown as vec3, [1, 0, 0], quaternion)
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                up: vec3.transformQuat([], [0, -1, 0], quaternion),
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                forward: vec3.transformQuat([], [0, 0, -1], quaternion),
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                right: vec3.transformQuat([], [1, 0, 0], quaternion)
             };
         };
 
@@ -1622,8 +1727,11 @@ describe('transform', () => {
             expect(transform.pitch).toEqual(transform.maxPitch);
             frame = rotatedFrame(transform.getFreeCameraOptions().orientation);
 
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.right, 5)).toEqual([1, 0, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.up, 5)).toEqual([0, -0.5, 0.86603]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.forward, 5)).toEqual([0, -0.86603, -0.5]);
         });
 
@@ -1636,7 +1744,7 @@ describe('transform', () => {
 
             // Place the camera to an arbitrary position looking away from the map
             options.position = new MercatorCoordinate(-100.0, -10000.0, 1000.0);
-            options.orientation = quat.rotateX([] as unknown as quat, [0, 0, 0, 1], -45.0 * Math.PI / 180.0);
+            options.orientation = quat.rotateX([], [0, 0, 0, 1], -45.0 * Math.PI / 180.0);
             transform.setFreeCameraOptions(options);
 
             expect(fixedPoint(transform.point, 5)).toEqual(new Point(50, 50));
@@ -1660,8 +1768,8 @@ describe('transform', () => {
             transform.resize(100, 100);
             let options = new FreeCameraOptions();
 
-            const orientationWithoutRoll = quat.rotateX([] as unknown as quat, [0, 0, 0, 1], -Math.PI / 4);
-            const orientationWithRoll = quat.rotateZ([] as unknown as quat, orientationWithoutRoll, Math.PI / 4);
+            const orientationWithoutRoll = quat.rotateX([], [0, 0, 0, 1], -Math.PI / 4);
+            const orientationWithRoll = quat.rotateZ([], orientationWithoutRoll, Math.PI / 4);
 
             options.orientation = orientationWithRoll;
             transform.setFreeCameraOptions(options);
@@ -1682,8 +1790,11 @@ describe('transform', () => {
             transform.bearing = 0.0;
             frame = rotatedFrame(transform.getFreeCameraOptions().orientation);
             expect(transform.getFreeCameraOptions().position).toEqual(new MercatorCoordinate(0.5, 0.5, 0.29296875));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(frame.right).toEqual([1, 0, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(frame.up).toEqual([0, -1, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(frame.forward).toEqual([0, 0, -1]);
 
             transform.center = new LngLat(24.9384, 60.1699);
@@ -1697,8 +1808,11 @@ describe('transform', () => {
             transform.pitch = 0;
             transform.bearing = 90;
             frame = rotatedFrame(transform.getFreeCameraOptions().orientation);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.right)).toEqual([0, 1, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.up)).toEqual([1, -0, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.forward)).toEqual([0, 0, -1]);
 
             // Invalid pitch
@@ -1706,8 +1820,11 @@ describe('transform', () => {
             transform.pitch = -10;
             frame = rotatedFrame(transform.getFreeCameraOptions().orientation);
             expect(fixedCoord(transform.getFreeCameraOptions().position, 5)).toEqual(new MercatorCoordinate(0.55556, 0.55672, 0.29297));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(frame.right).toEqual([1, 0, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(frame.up).toEqual([0, -1, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(frame.forward).toEqual([0, 0, -1]);
 
             transform.bearing = 0;
@@ -1715,8 +1832,11 @@ describe('transform', () => {
             transform.center = new LngLat(0, -80);
             frame = rotatedFrame(transform.getFreeCameraOptions().orientation);
             expect(fixedCoord(transform.getFreeCameraOptions().position, 5)).toEqual(new MercatorCoordinate(0.5, 1.14146, 0.14648));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.right, 5)).toEqual([1, 0, 0]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.up, 5)).toEqual([0, -0.5, 0.86603]);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(fixedVec3(frame.forward, 5)).toEqual([0, -0.86603, -0.5]);
         });
 
@@ -1893,5 +2013,242 @@ describe('transform', () => {
         expect(transform.setProjection({name: 'albers', center: [-100, 37.5]})).toBeTruthy();
         expect(transform.setProjection({name: 'mercator'})).toBeTruthy();
         expect(transform.setProjection()).toBeFalsy();
+    });
+
+    describe('equals', () => {
+        const createTransform = () => {
+            const transform = new Transform();
+            transform.resize(500, 500);
+            transform.zoom = 10;
+            transform.center = new LngLat(0, 0);
+            return transform;
+        };
+
+        const createConstantElevation = (elevation) => {
+            return {
+                isDataAvailableAtPoint(_) {
+                    return true;
+                },
+                getAtPointOrZero(_) {
+                    return elevation * this.exaggeration();
+                },
+                getAtPoint(_) {
+                    return this.getAtPointOrZero();
+                },
+                getForTilePoints(tileID, points) {
+                    for (const p of points) {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        p[2] = elevation * this.exaggeration();
+                    }
+                    return true;
+                },
+                exaggeration() {
+                    return this._exaggeration !== undefined ? this._exaggeration : 1;
+                },
+                getMinElevationBelowMSL: () => 0,
+                visibleDemTiles: () => [],
+                _exaggeration: 1
+            };
+        };
+
+        // Category 1: Basic Equality
+        test('returns true for identical transforms', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            expect(transform1.equals(transform2)).toEqual(true);
+        });
+
+        test('returns true when comparing transform to itself', () => {
+            const transform = createTransform();
+            expect(transform.equals(transform)).toEqual(true);
+        });
+
+        // Category 2: Individual Property Differences
+        test('returns false when width differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.resize(600, 500);
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when height differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.resize(500, 600);
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when center.lng differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.center = new LngLat(10, 0);
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when center.lat differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.center = new LngLat(0, 10);
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when zoom differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.zoom = 15;
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when bearing differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.bearing = 45;
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when pitch differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.pitch = 60;
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when fov differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.fov = 1.0;
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when projection differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.setProjection({name: 'mercator'});
+            transform2.setProjection({name: 'globe'});
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        // Category 3: Padding Comparison
+        test('returns true when padding is identical', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            transform2.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            expect(transform1.equals(transform2)).toEqual(true);
+        });
+
+        test('returns true when padding is default (0,0,0,0)', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            expect(transform1.equals(transform2)).toEqual(true);
+        });
+
+        test('returns false when padding.top differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            transform2.padding = {top: 15, bottom: 20, left: 30, right: 40};
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when padding.bottom differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            transform2.padding = {top: 10, bottom: 25, left: 30, right: 40};
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when padding.left differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            transform2.padding = {top: 10, bottom: 20, left: 35, right: 40};
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns false when padding.right differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            transform2.padding = {top: 10, bottom: 20, left: 30, right: 45};
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        // Category 4: Elevation Comparison
+        test('returns true when both have no elevation', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            expect(transform1.equals(transform2)).toEqual(true);
+        });
+
+        test('returns false when one has elevation and other does not', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform1.elevation = createConstantElevation(10);
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        test('returns true when both have elevation with same exaggeration', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            const elevation1 = createConstantElevation(10);
+            const elevation2 = createConstantElevation(10);
+            elevation1._exaggeration = 1.5;
+            elevation2._exaggeration = 1.5;
+            transform1.elevation = elevation1;
+            transform2.elevation = elevation2;
+            expect(transform1.equals(transform2)).toEqual(true);
+        });
+
+        test('returns false when both have elevation but exaggeration differs', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            const elevation1 = createConstantElevation(10);
+            const elevation2 = createConstantElevation(10);
+            elevation1._exaggeration = 1.5;
+            elevation2._exaggeration = 2.0;
+            transform1.elevation = elevation1;
+            transform2.elevation = elevation2;
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
+
+        // Category 5: Integration Tests
+        test('returns true when all properties match exactly', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+
+            // Set complex state
+            transform1.resize(500, 500);
+            transform2.resize(500, 500);
+            transform1.center = new LngLat(10, 20);
+            transform2.center = new LngLat(10, 20);
+            transform1.zoom = 12;
+            transform2.zoom = 12;
+            transform1.bearing = 45;
+            transform2.bearing = 45;
+            transform1.pitch = 60;
+            transform2.pitch = 60;
+            transform1.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            transform2.padding = {top: 10, bottom: 20, left: 30, right: 40};
+
+            const elevation1 = createConstantElevation(10);
+            const elevation2 = createConstantElevation(10);
+            elevation1._exaggeration = 2.0;
+            elevation2._exaggeration = 2.0;
+            transform1.elevation = elevation1;
+            transform2.elevation = elevation2;
+
+            expect(transform1.equals(transform2)).toEqual(true);
+        });
+
+        test('returns false when multiple properties differ', () => {
+            const transform1 = createTransform();
+            const transform2 = createTransform();
+            transform2.zoom = 15;
+            transform2.bearing = 45;
+            transform2.padding = {top: 10, bottom: 20, left: 30, right: 40};
+            expect(transform1.equals(transform2)).toEqual(false);
+        });
     });
 });

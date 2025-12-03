@@ -1,12 +1,11 @@
 import {VectorTile} from '@mapbox/vector-tile';
 import Protobuf from 'pbf';
 import WorkerTile from './worker_tile';
-import {extend} from '../util/util';
 import {getPerformanceMeasurement} from '../util/performance';
 import {Evented} from '../util/evented';
-import tileTransform from '../geo/projection/tile_transform';
 import {loadVectorTile} from './load_vector_tile';
 import {DedupedRequest} from "./deduped_request";
+import {getExpiryDataFromHeaders} from '../util/util';
 
 import type {
     WorkerSource,
@@ -96,8 +95,9 @@ class VectorTileWorkerSource extends Evented implements WorkerSource {
             const rawTileData = response.rawData;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const cacheControl: Record<string, any> = {};
-            if (response.expires) cacheControl.expires = response.expires;
-            if (response.cacheControl) cacheControl.cacheControl = response.cacheControl;
+            const expiryData = getExpiryDataFromHeaders(response.responseHeaders);
+            if (expiryData && expiryData.expires) cacheControl.expires = expiryData.expires;
+            if (expiryData && expiryData.cacheControl) cacheControl.cacheControl = expiryData.cacheControl;
 
             // response.vectorTile will be present in the GeoJSON worker case (which inherits from this class)
             // because we stub the vector tile interface around JSON data instead of parsing it directly
@@ -109,7 +109,7 @@ class VectorTileWorkerSource extends Evented implements WorkerSource {
                     if (reloadCallback) {
                         delete workerTile.reloadCallback;
                         workerTile.parse(workerTile.vectorTile, this.layerIndex, this.availableImages, this.availableModels, this.actor, (err, data) => {
-                            if (data) data = extend({rawTileData: rawTileData.slice(0)}, data);
+                            if (data) data = Object.assign({rawTileData: rawTileData.slice(0)}, data);
                             reloadCallback(err, data);
                         });
                     }
@@ -123,10 +123,11 @@ class VectorTileWorkerSource extends Evented implements WorkerSource {
                         // it's necessary to eval the result of getEntriesByName() here via parse/stringify
                         // late evaluation in the main thread causes TypeError: illegal invocation
                         if (resourceTimingData.length > 0) {
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                             resourceTiming.resourceTiming = JSON.parse(JSON.stringify(resourceTimingData));
                         }
                     }
-                    callback(null, extend({rawTileData: rawTileData.slice(0)}, result, cacheControl, resourceTiming));
+                    callback(null, Object.assign({rawTileData: rawTileData.slice(0), responseHeaders: response.responseHeaders}, result, cacheControl, resourceTiming));
                 };
                 workerTile.parse(workerTile.vectorTile, this.layerIndex, this.availableImages, this.availableModels, this.actor, WorkerSourceVectorTileCallback);
             };
@@ -160,13 +161,7 @@ class VectorTileWorkerSource extends Evented implements WorkerSource {
 
         if (loaded && loaded[uid]) {
             const workerTile = loaded[uid];
-            workerTile.scaleFactor = params.scaleFactor;
-            workerTile.showCollisionBoxes = params.showCollisionBoxes;
-            workerTile.projection = params.projection;
-            workerTile.brightness = params.brightness;
-            workerTile.tileTransform = tileTransform(params.tileID.canonical, params.projection);
-            workerTile.extraShadowCaster = params.extraShadowCaster;
-            workerTile.lut = params.lut;
+            workerTile.updateParameters(params);
             const done = (err?: Error | null, data?: WorkerSourceVectorTileResult | null) => {
                 const reloadCallback = workerTile.reloadCallback;
                 if (reloadCallback) {

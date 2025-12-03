@@ -2,6 +2,7 @@ import {Event} from '../util/evented';
 import {TargetFeature} from '../util/vectortile_to_geojson';
 import featureFilter from '../style-spec/feature_filter/index';
 import {shouldSkipFeatureVariant, getFeatureTargetKey, type QrfTarget} from '../source/query_features';
+import {warnOnce} from '../util/util';
 
 import type Point from '@mapbox/point-geometry';
 import type LngLat from '../geo/lng_lat';
@@ -101,13 +102,17 @@ export class InteractionSet {
     prevHoveredFeatures: Map<string, {feature: Feature; stop: boolean | void}>;
 
     constructor(map) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         this.map = map;
         this.interactionsByType = new Map(); // sort interactions into type buckets for fast handling
         this.delegatedInteractions = new Map();
         this.typeById = new Map(); // keep track of each id type for easy removal
         this.filters = new Map(); // cache compiled filter expressions for each interaction
+
         this.handleType = this.handleType.bind(this);
+
         this.handleMove = this.handleMove.bind(this);
+
         this.handleOut = this.handleOut.bind(this);
         this.hoveredFeatures = new Map();
         this.prevHoveredFeatures = new Map();
@@ -145,6 +150,7 @@ export class InteractionSet {
         }
 
         if (interactions.size === 0) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             this.interactionsByType.set(type, interactions);
         }
         interactions.set(id, interaction);
@@ -214,6 +220,7 @@ export class InteractionSet {
         }
         if (featuresLeaving.size) {
             event.type = 'mouseleave';
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             this.handleType(event, Array.from(featuresLeaving.values()));
         }
     }
@@ -228,12 +235,18 @@ export class InteractionSet {
     }
 
     handleType(event: MapMouseEvent, features?: Feature[]) {
+        const isMouseEnter = event.type === 'mouseenter';
+
+        if (isMouseEnter && !this.interactionsByType.has(event.type)) {
+            warnOnce(`mouseenter interaction required for mouseleave to work.`);
+            return;
+        }
+
         // The interactions are handled in reverse order of addition,
         // so that the last added interaction to the same target handles it first.
         const interactions = Array.from(this.interactionsByType.get(event.type)).reverse();
         const delegated = !!features;
         features = features || this.queryTargets(event.point, interactions);
-        const isMouseEnter = event.type === 'mouseenter';
 
         let eventHandled = false;
         const uniqueFeatureSet = new Set<string>();
@@ -254,7 +267,7 @@ export class InteractionSet {
                     const targetFeatureId = getFeatureTargetKey(variant, feature, id);
 
                     // refresh feature state for features from delegated events (they're cached from previous move event)
-                    if (delegated) targetFeature.state = this.map.getFeatureState(targetFeature);
+                    if (delegated && targetFeature.id !== undefined) targetFeature.state = this.map.getFeatureState(targetFeature);
 
                     const hovered = isMouseEnter ? this.prevHoveredFeatures.get(targetFeatureId) : null;
                     const interactionEvent = new InteractionEvent(event, id, interaction, targetFeature);

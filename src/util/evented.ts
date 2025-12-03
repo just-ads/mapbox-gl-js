@@ -1,4 +1,3 @@
-import {extend} from './util';
 
 export type EventData = object;
 
@@ -7,7 +6,7 @@ export class Event<R extends EventRegistry = EventRegistry, T extends keyof R = 
     readonly type: T;
 
     constructor(type: T, ...eventData: R[T] extends void ? [] : [R[T]]) {
-        extend(this, eventData[0] || {});
+        Object.assign(this, eventData[0] || {});
         this.type = type;
     }
 }
@@ -20,7 +19,7 @@ export class ErrorEvent extends Event<EventRegistry, 'error'> {
     error: ErrorLike;
 
     constructor(error: ErrorLike, data: EventData = {} as EventData) {
-        super('error', extend({error}, data));
+        super('error', Object.assign({error}, data));
     }
 }
 
@@ -149,22 +148,23 @@ export class Evented<R extends EventRegistry = EventRegistry> {
             const listeners = this._listeners && this._listeners[type] ? this._listeners[type].slice() : [];
 
             for (const listener of listeners) {
-                listener.call(this, event);
+                listener.call(this, event as EventOf<R, T, this>);
             }
 
             const oneTimeListeners = this._oneTimeListeners && this._oneTimeListeners[type] ? this._oneTimeListeners[type].slice() : [];
             for (const listener of oneTimeListeners) {
                 _removeEventListener(type, listener, this._oneTimeListeners);
-                listener.call(this, event);
+                listener.call(this, event as EventOf<R, T, this>);
             }
 
             const parent = this._eventedParent;
             if (parent) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 const eventedParentData = typeof this._eventedParentData === 'function' ?
                     this._eventedParentData() :
                     this._eventedParentData;
 
-                extend(event, eventedParentData);
+                Object.assign(event, eventedParentData);
                 parent.fire(event as Event);
             }
 

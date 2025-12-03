@@ -1,6 +1,6 @@
 import {Event, Evented} from '../../util/evented';
 import * as DOM from '../../util/dom';
-import {extend, bindAll, warnOnce} from '../../util/util';
+import {bindAll, warnOnce} from '../../util/util';
 import assert from 'assert';
 import Marker from '../marker';
 import LngLat from '../../geo/lng_lat';
@@ -118,7 +118,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
     constructor(options: GeolocateControlOptions = {}) {
         super();
         const geolocation = navigator.geolocation;
-        this.options = extend({geolocation}, defaultOptions, options);
+        this.options = Object.assign({geolocation}, defaultOptions, options);
 
         bindAll([
             '_onSuccess',
@@ -298,7 +298,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
             this._userLocationDotMarker.removeClassName('mapboxgl-user-location-dot-stale');
         }
 
-        this.fire(new Event('geolocate', position));
+        this.fire(new Event('geolocate', Object.assign({coords: position.coords, timestamp: position.timestamp}, position.toJSON ? {toJSON: position.toJSON.bind(position)} : {}) as GeolocationPosition));
         this._finish();
     }
 
@@ -312,7 +312,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
         const center = new LngLat(position.coords.longitude, position.coords.latitude);
         const radius = position.coords.accuracy;
         const bearing = this._map.getBearing();
-        const options = extend({bearing}, this.options.fitBoundsOptions);
+        const options = Object.assign({bearing}, this.options.fitBoundsOptions);
 
         this._map.fitBounds(center.toBounds(radius), options, {
             geolocateSource: true // tag this camera change so it won't cause the control to change to background state
@@ -627,7 +627,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
                 this._geolocateButton.setAttribute('aria-pressed', 'true');
 
                 this._numberOfWatches++;
-                let positionOptions;
+                let positionOptions: PositionOptions | undefined;
                 if (this._numberOfWatches > 1) {
                     positionOptions = {maximumAge: 600000, timeout: 0};
                     this._noTimeout = true;
@@ -661,6 +661,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
                 window.addEventListener('deviceorientationabsolute', this._onDeviceOrientation);
             } else {
                 // @ts-expect-error - TS2769 - No overload matches this call.
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                 window.addEventListener('deviceorientation', this._onDeviceOrientation);
             }
         };
@@ -668,12 +669,15 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
         // @ts-expect-error - TS2339 - Property 'requestPermission' does not exist on type '{ new (type: string, eventInitDict?: DeviceMotionEventInit): DeviceMotionEvent; prototype: DeviceMotionEvent; }'.
         if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === 'function') {
             // @ts-expect-error - TS2339 - Property 'requestPermission' does not exist on type '{ new (type: string, eventInitDict?: DeviceOrientationEventInit): DeviceOrientationEvent; prototype: DeviceOrientationEvent; }'.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             DeviceOrientationEvent.requestPermission()
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 .then(response => {
                     if (response === 'granted') {
                         addListener();
                     }
                 })
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 .catch(console.error);
         } else {
             addListener();

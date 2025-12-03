@@ -8,7 +8,7 @@ import {ClearColor, ClearDepth, ClearStencil, ColorMask, DepthMask, StencilMask,
 import type DepthMode from './depth_mode';
 import type StencilMode from './stencil_mode';
 import type CullFaceMode from './cull_face_mode';
-import type {DepthBufferType, ColorMaskType} from './types';
+import type {DepthBufferType, ColorMaskType, WebGL2BlendFuncExtended} from './types';
 import type {TriangleIndexArray, LineIndexArray, LineStripIndexArray} from '../data/index_array_type';
 import type {
     StructArray,
@@ -32,7 +32,6 @@ export type ContextOptions = {
 
 class Context {
     gl: WebGL2RenderingContext;
-    currentNumAttributes: number | null | undefined;
     maxTextureSize: number;
 
     clearColor: ClearColor;
@@ -69,22 +68,24 @@ class Context {
     renderer: string | null | undefined;
     vendor: string | null | undefined;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extTextureFilterAnisotropic: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extTextureFilterAnisotropicMax: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extTextureHalfFloat: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extRenderToTextureHalfFloat: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extDebugRendererInfo: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extTimerQuery: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extTextureFloatLinear: any;
+    // eslint-disable-next-line camelcase
+    extTextureFilterAnisotropic: EXT_texture_filter_anisotropic;
+    extTextureFilterAnisotropicMax: GLfloat;
+    // eslint-disable-next-line camelcase
+    extRenderToTextureHalfFloat: EXT_color_buffer_half_float;
+    // eslint-disable-next-line camelcase
+    extDebugRendererInfo: WEBGL_debug_renderer_info;
+    extTimerQuery: {
+        /* EXT_disjoint_timer_query is not yet available as a TypeScript type */
+        TIME_ELAPSED_EXT: number;
+        getQueryParameter: (query: WebGLQuery, pname: GLenum) => GLuint;
+        deleteQueryEXT: (query: WebGLQuery) => void;
+    };
+    // eslint-disable-next-line camelcase
+    extTextureFloatLinear: OES_texture_float_linear;
     options: ContextOptions;
     maxPointSize: number;
+    extBlendFuncExtended: WebGL2BlendFuncExtended | null;
 
     forceManualRenderingForInstanceIDShaders: boolean;
 
@@ -125,19 +126,23 @@ class Context {
         this.options = options ? Object.assign({}, options) : {};
 
         if (!this.options.extTextureFilterAnisotropicForceOff) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             this.extTextureFilterAnisotropic = (
                 gl.getExtension('EXT_texture_filter_anisotropic') ||
             gl.getExtension('MOZ_EXT_texture_filter_anisotropic') ||
             gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
             );
             if (this.extTextureFilterAnisotropic) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 this.extTextureFilterAnisotropicMax = gl.getParameter(this.extTextureFilterAnisotropic.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
             }
         }
 
         this.extDebugRendererInfo = gl.getExtension('WEBGL_debug_renderer_info');
         if (this.extDebugRendererInfo) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             this.renderer = gl.getParameter(this.extDebugRendererInfo.UNMASKED_RENDERER_WEBGL);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             this.vendor = gl.getParameter(this.extDebugRendererInfo.UNMASKED_VENDOR_WEBGL);
         }
 
@@ -149,9 +154,12 @@ class Context {
         }
         this.extRenderToTextureHalfFloat = gl.getExtension('EXT_color_buffer_half_float');
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         this.extTimerQuery = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-        this.maxPointSize = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        this.extBlendFuncExtended = gl.getExtension('WEBGL_blend_func_extended');
     }
 
     setDefault() {
@@ -250,10 +258,10 @@ class Context {
     createFramebuffer(
         width: number,
         height: number,
-        hasColor: boolean,
-        depthType?: DepthBufferType | null,
+        numColorAttachments: number,
+        depthType?: DepthBufferType | null
     ): Framebuffer {
-        return new Framebuffer(this, width, height, hasColor, depthType);
+        return new Framebuffer(this, width, height, numColorAttachments, depthType);
     }
 
     clear({
@@ -267,7 +275,7 @@ class Context {
 
         if (color) {
             mask |= gl.COLOR_BUFFER_BIT;
-            this.clearColor.set(color);
+            this.clearColor.set(color.toNonPremultipliedRenderColor(null));
             if (colorMask) {
                 this.colorMask.set(colorMask);
             } else {

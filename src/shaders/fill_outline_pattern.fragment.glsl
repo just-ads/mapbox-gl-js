@@ -11,6 +11,10 @@ uniform float u_pattern_transition;
 
 uniform float u_emissive_strength;
 
+#ifdef APPLY_LUT_ON_GPU
+uniform highp sampler3D u_lutTexture;
+#endif
+
 #ifdef RENDER_SHADOWS
 uniform vec3 u_ground_shadow_factor;
 
@@ -49,6 +53,10 @@ void main() {
 
     vec4 out_color = textureLodCustom(u_image, pos, lod_pos);
 
+#ifdef APPLY_LUT_ON_GPU
+    out_color = applyLUT(u_lutTexture, out_color);
+#endif
+
 #ifdef FILL_PATTERN_TRANSITION
     vec2 pattern_b_tl = pattern_b.xy;
     vec2 pattern_b_br = pattern_b.zw;
@@ -65,11 +73,18 @@ void main() {
 #endif // RENDER_SHADOWS
 #endif // LIGHTING_3D_MODE
 
+#ifdef FEATURE_CUTOUT
+    out_color = apply_feature_cutout(out_color, gl_FragCoord);
+#endif
+
 #ifdef FOG
     out_color = fog_dither(fog_apply_premultiplied(out_color, v_fog_pos));
 #endif
 
     glFragColor = out_color * (alpha * opacity);
+#ifdef USE_MRT1
+    out_Target1 = vec4(u_emissive_strength * glFragColor.a, 0.0, 0.0, glFragColor.a);
+#endif
 
 #ifdef OVERDRAW_INSPECTOR
     glFragColor = vec4(1.0);

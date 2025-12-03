@@ -2,9 +2,9 @@ import ResolvedImage from '../types/resolved_image';
 import {ImageId} from '../types/image_id';
 import {ColorType, ResolvedImageType, StringType} from '../types';
 
+import type EvaluationContext from '../evaluation_context';
 import type Color from '../../util/color';
 import type ParsingContext from '../parsing_context';
-import type EvaluationContext from '../evaluation_context';
 import type {Type} from '../types';
 import type {Expression, SerializedExpression} from '../expression';
 
@@ -14,7 +14,7 @@ export type IconsetParams = {id: string};
 export type ImageOptions = {
     params?: ImageParams;
     iconset?: IconsetParams;
-}
+};
 
 type SerializedImageOptions = {
     params?: Record<string, SerializedExpression>;
@@ -167,6 +167,7 @@ export default class ImageExpression implements Expression {
             for (const key in params) {
                 if (params[key]) {
                     try {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                         result[key] = params[key].evaluate(ctx);
                     } catch (err) {
                         continue;
@@ -186,11 +187,13 @@ export default class ImageExpression implements Expression {
 
     evaluate(ctx: EvaluationContext): null | ResolvedImage {
         const primaryId = {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             name: this.namePrimary.evaluate(ctx),
             iconsetId: this.iconsetIdPrimary
         };
 
         const secondaryId = this.nameSecondary ? {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             name: this.nameSecondary.evaluate(ctx),
             iconsetId: this.iconsetIdSecondary
         } : undefined;

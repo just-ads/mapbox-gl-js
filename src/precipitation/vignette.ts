@@ -6,27 +6,26 @@ import SegmentVector from '../data/segment';
 import {TriangleIndexArray, VignetteVertexArray} from '../data/array_types';
 import {vignetteUniformValues} from './vignette_program';
 import {vignetteLayout} from "./vignette_attributes";
+import {DevTools} from '../ui/devtools';
 
 import type Painter from '../render/painter';
 import type IndexBuffer from '../gl/index_buffer';
 import type VertexBuffer from '../gl/vertex_buffer';
 
-export type VignetteParams={
+export type VignetteParams = {
     strength: number,
     start: number,
     range: number,
     fadePower: number,
-    color: { r: number, g: number, b: number, a: number },
+    color: {r: number, g: number, b: number, a: number},
 };
 
-export function createTpBindings(params: VignetteParams, painter: Painter, scope: string[]) {
-    const tp = painter.tp;
-
-    tp.registerParameter(params, scope, 'start', {min: 0.0, max: 2.0});
-    tp.registerParameter(params, scope, 'range', {min: 0.0, max: 2.0});
-    tp.registerParameter(params, scope, 'fadePower', {min: -1.0, max: 1.0, step: 0.01});
-    tp.registerParameter(params, scope, 'strength', {min: 0.0, max: 1.0});
-    tp.registerParameter(params, scope, 'color', {
+export function createDevToolsBindings(params: VignetteParams, painter: Painter, folder: string) {
+    DevTools.addParameter(params, 'start', folder, {min: 0.0, max: 2.0});
+    DevTools.addParameter(params, 'range', folder, {min: 0.0, max: 2.0});
+    DevTools.addParameter(params, 'fadePower', folder, {min: -1.0, max: 1.0, step: 0.01});
+    DevTools.addParameter(params, 'strength', folder, {min: 0.0, max: 1.0});
+    DevTools.addParameter(params, 'color', folder, {
         color: {type: 'float'},
     });
 }

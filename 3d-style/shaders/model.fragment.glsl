@@ -92,6 +92,11 @@ uniform highp vec2 u_depth_range_unpack;
 bool isOccluded() {
     highp vec2 coord = gl_FragCoord.xy * u_inv_depth_size;
 
+    #ifdef FLIP_Y
+        coord.y = 1.0 - coord.y;
+    #endif
+
+
     #ifdef DEPTH_D24
         highp float depth = unpack_depth(texture(u_depthTexture, coord).r);
     #else
@@ -209,6 +214,11 @@ highp mat3 cotangentFrame(highp vec3 N, highp vec3 p, highp vec2 uv ) {
     highp vec3 dp1perp = cross( N, dp1 );
     highp vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
     highp vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+#ifdef FLIP_Y
+    T = -T;
+    B = -B;
+#endif
+
     // construct a scale-invariant frame
     // Some Adrenos GPU needs to set explicitely highp
     highp float lengthT = dot(T,T);
@@ -232,7 +242,11 @@ highp vec3 getNormal(){
     highp vec3 fdx = vec3(dFdx(v_position_height.x), dFdx(v_position_height.y), dFdx(v_position_height.z));
     highp vec3 fdy = vec3(dFdy(v_position_height.x), dFdy(v_position_height.y), dFdy(v_position_height.z));
     // Z flipped so it is towards the camera.
+#ifdef FLIP_Y
+    n = normalize(cross(fdx,fdy));
+#else
     n = normalize(cross(fdx,fdy)) * -1.0;
+#endif
 #endif
 
 #if defined(HAS_TEXTURE_u_normalTexture) && defined(HAS_ATTRIBUTE_a_uv_2f)
@@ -542,6 +556,10 @@ vec4 finalColor;
 
 #ifdef INDICATOR_CUTOUT
     finalColor = applyCutout(finalColor, v_position_height.w);
+#endif
+
+#ifdef FEATURE_CUTOUT
+    finalColor = apply_feature_cutout(finalColor, gl_FragCoord);
 #endif
 
     glFragColor = finalColor;

@@ -111,6 +111,7 @@ export function typeOf(value: Value): Type {
         let itemType: Type;
 
         for (const item of value) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             const t = typeOf(item);
             if (!itemType) {
                 itemType = t;
@@ -135,9 +136,7 @@ export function toString(value: Value): string {
         return '';
     } else if (type === 'string' || type === 'number' || type === 'boolean') {
         return String(value as string | number | boolean);
-    } else if (value instanceof Color) {
-        return value.toStringPremultipliedAlpha();
-    } else if (value instanceof Formatted || value instanceof ResolvedImage) {
+    } else if (value instanceof Formatted || value instanceof ResolvedImage || value instanceof Color) {
         return value.toString();
     } else {
         return JSON.stringify(value);

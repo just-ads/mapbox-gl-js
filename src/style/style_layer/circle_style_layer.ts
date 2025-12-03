@@ -27,6 +27,8 @@ import type {LUT} from "../../util/lut";
 import type {ProgramName} from '../../render/program';
 
 class CircleStyleLayer extends StyleLayer {
+    override type: 'circle';
+
     override _unevaluatedLayout: Layout<LayoutProps>;
     override layout: PossiblyEvaluated<LayoutProps>;
 
@@ -91,6 +93,12 @@ class CircleStyleLayer extends StyleLayer {
         };
     }
 
+    override is3D(terrainEnabled?: boolean): boolean {
+        if (terrainEnabled) return false;
+
+        return !!this.layout && this.layout.get('circle-elevation-reference') !== 'none';
+    }
+
     override hasElevation(): boolean {
         return this.layout && this.layout.get('circle-elevation-reference') !== 'none';
     }
@@ -140,7 +148,7 @@ export function queryIntersectsCircle(
                 queryGeometry.tilespaceRays.map((r) => intersectAtHeight(r, z)) :
                 queryGeometry.queryGeometry.screenGeometry;
 
-            const projectedCenter = vec4.transformMat4([] as unknown as vec4, [reproj.x, reproj.y, reproj.z, 1], pixelPosMatrix);
+            const projectedCenter = vec4.transformMat4([], [reproj.x, reproj.y, reproj.z, 1], pixelPosMatrix);
             if (!scaleWithMap && alignWithMap) {
                 size *= projectedCenter[3] / transform.cameraToCenterDistance;
             } else if (scaleWithMap && !alignWithMap) {
@@ -163,7 +171,7 @@ export function queryIntersectsCircle(
 }
 
 function projectPoint(x: number, y: number, z: number, pixelPosMatrix: Float32Array) {
-    const point = vec4.transformMat4([] as unknown as vec4, [x, y, z, 1], pixelPosMatrix);
+    const point = vec4.transformMat4([], [x, y, z, 1], pixelPosMatrix);
     return new Point(point[0] / point[3], point[1] / point[3]);
 }
 

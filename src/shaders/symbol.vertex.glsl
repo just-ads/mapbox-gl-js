@@ -1,6 +1,8 @@
 #include "_prelude_terrain.vertex.glsl"
 #include "_prelude_shadow.vertex.glsl"
 
+#define APPEARANCE_ICON 1.0
+
 in vec4 a_pos_offset;
 in vec4 a_tex_size;
 in vec4 a_pixeloffset;
@@ -33,10 +35,8 @@ uniform float u_normal_scale;
 #ifdef INDICATOR_CUTOUT
 out highp float v_z_offset;
 #else
-#ifdef Z_OFFSET
 #ifdef RENDER_SHADOWS
 out highp float v_z_offset;
-#endif
 #endif
 #endif
 
@@ -89,7 +89,6 @@ out float is_sdf;
 out vec2 v_tex_a_icon;
 #endif
 
-#ifdef Z_OFFSET
 #ifdef RENDER_SHADOWS
 uniform mat4 u_light_matrix_0;
 uniform mat4 u_light_matrix_1;
@@ -97,7 +96,6 @@ uniform mat4 u_light_matrix_1;
 out highp vec4 v_pos_light_view_0;
 out highp vec4 v_pos_light_view_1;
 out highp float v_depth;
-#endif
 #endif
 
 #pragma mapbox: define highp vec4 fill_color
@@ -126,14 +124,19 @@ void main() {
     vec2 a_size = a_tex_size.zw;
 
     float a_size_min = floor(a_size[0] * 0.5);
+    float a_size_max =  floor(a_size[1] * 0.5);
+    float a_apperance_icon = a_size[1] - 2.0 * a_size_max;
     vec2 a_pxoffset = a_pixeloffset.xy;
     vec2 a_min_font_scale = a_pixeloffset.zw / 256.0;
 
     highp float segment_angle = -a_projected_pos[3];
     float size;
 
-    if (!u_is_size_zoom_constant && !u_is_size_feature_constant) {
-        size = mix(a_size_min, a_size[1], u_size_t) / 128.0;
+    // When rendering icons for appearances, we use a_size_max to store the icon size
+    if (a_apperance_icon == APPEARANCE_ICON) {
+        size = a_size_max / 128.0;
+    } else if (!u_is_size_zoom_constant && !u_is_size_feature_constant) {
+        size = mix(a_size_min, a_size_max, u_size_t) / 128.0;
     } else if (u_is_size_zoom_constant && !u_is_size_feature_constant) {
         size = a_size_min / 128.0;
     } else {
@@ -259,6 +262,10 @@ void main() {
     out_fade_opacity *= occludedFadeMultiplier;
 #endif
 
+#ifdef Z_TEST_OCCLUSION
+    out_fade_opacity *= occlusion_opacity;
+#endif
+
     float alpha = opacity * out_fade_opacity;
     float hidden = float(alpha == 0.0 || projected_point.w <= 0.0 || occlusion_fade == 0.0);
 
@@ -295,7 +302,6 @@ void main() {
     v_tex_b = a_texb / u_texsize;
 #endif
 
-#ifdef Z_OFFSET
 #ifdef RENDER_SHADOWS
     vec4 shd_pos = u_inv_matrix * vec4(pos, 1.0);
     vec3 shd_pos0 = shd_pos.xyz;
@@ -309,15 +315,12 @@ void main() {
     v_pos_light_view_1 = u_light_matrix_1 * vec4(shd_pos1, 1);
     v_depth = gl_Position.w;
 #endif
-#endif
 
 #ifdef INDICATOR_CUTOUT
     v_z_offset = e;
 #else
-#ifdef Z_OFFSET
 #ifdef RENDER_SHADOWS
     v_z_offset = e;
-#endif
 #endif
 #endif
 }

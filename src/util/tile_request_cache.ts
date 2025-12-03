@@ -66,7 +66,7 @@ function prepareBody(response: Response, callback: (body?: Blob | ReadableStream
     if (responseConstructorSupportsReadableStream) {
         callback(response.body);
     } else {
-        response.blob().then(callback).catch(e => warnOnce(e.message));
+        response.blob().then(callback).catch((e: Error) => warnOnce(e.message));
     }
 }
 
@@ -126,7 +126,7 @@ export function cachePut(request: Request, response: Response, requestTime: numb
         if (sharedCache == null) return;
         sharedCache
             .then(cache => cache.put(strippedURL, clonedResponse))
-            .catch(e => warnOnce(e.message));
+            .catch((e: Error) => warnOnce(e.message));
     });
 }
 
@@ -218,11 +218,11 @@ export function enforceCacheSizeLimit(limit: number) {
             cache.keys().then(keys => {
                 for (let i = 0; i < keys.length - limit; i++) {
                     if (keys[i].headers.get('Persistence')) continue;
-                    cache.delete(keys[i]).catch(e => warnOnce(e.message));
+                    cache.delete(keys[i]).catch((e: Error) => warnOnce(e.message));
                 }
-            }).catch(e => warnOnce(e.message));
+            }).catch((e: Error) => warnOnce(e.message));
         })
-        .catch(e => warnOnce(e.message));
+        .catch((e: Error) => warnOnce(e.message));
 }
 
 export function clearTileCache(callback?: (err?: Error | null) => void) {

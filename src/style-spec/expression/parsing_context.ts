@@ -29,6 +29,7 @@ class ParsingContext {
     errors: Array<ParsingError>;
     _scope: string | null | undefined;
     options: ConfigOptions | null | undefined;
+    iconImageUseTheme: string;
 
     // The expected type of this expression. Provided only to allow Expression
     // implementations to infer argument types: Expression#parse() need not
@@ -43,7 +44,8 @@ class ParsingContext {
         scope: Scope = new Scope(),
         errors: Array<ParsingError> = [],
         _scope?: string | null,
-        options?: ConfigOptions | null
+        options?: ConfigOptions | null,
+        iconImageUseTheme?: string
     ) {
         this.registry = registry;
         this.path = path;
@@ -53,6 +55,7 @@ class ParsingContext {
         this.expectedType = expectedType;
         this._scope = _scope;
         this.options = options;
+        this.iconImageUseTheme = iconImageUseTheme;
     }
 
     /**
@@ -154,11 +157,12 @@ class ParsingContext {
                 // parsed/compiled result. Expressions that expect an image should
                 // not be resolved here so we can later get the available images.
                 if (!(parsed instanceof Literal) && (parsed.type.kind !== 'resolvedImage') && isConstant(parsed)) {
-                    const ec = new EvaluationContext(this._scope, this.options);
+                    const ec = new EvaluationContext(this._scope, this.options, this.iconImageUseTheme);
                     try {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                         parsed = new Literal(parsed.type, parsed.evaluate(ec));
                     } catch (e) {
-                        this.error(e.message);
+                        this.error((e as Error).message);
                         return null;
                     }
                 }
@@ -201,7 +205,8 @@ class ParsingContext {
             scope,
             this.errors,
             this._scope,
-            this.options
+            this.options,
+            this.iconImageUseTheme
         );
     }
 
@@ -271,5 +276,5 @@ function isConstant(expression: Expression) {
     }
 
     return isFeatureConstant(expression) &&
-        isGlobalPropertyConstant(expression, ['zoom', 'heatmap-density', 'line-progress', 'raster-value', 'sky-radial-progress', 'accumulated', 'is-supported-script', 'pitch', 'distance-from-center', 'measure-light', 'raster-particle-speed']);
+        isGlobalPropertyConstant(expression, ['zoom', 'heatmap-density', 'worldview', 'line-progress', 'raster-value', 'sky-radial-progress', 'accumulated', 'is-supported-script', 'pitch', 'distance-from-center', 'measure-light', 'raster-particle-speed']);
 }

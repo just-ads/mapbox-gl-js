@@ -26,7 +26,7 @@ type Rect = {
 type ImagePositionScale = {
     x: number;
     y: number;
-}
+};
 
 export type ImagePositionMap = Map<StringifiedImageVariant, ImagePosition>;
 
@@ -39,14 +39,15 @@ export class ImagePosition implements SpritePosition {
     content: [number, number, number, number] | null | undefined;
     padding: number;
     sdf: boolean;
+    usvg: boolean;
     scale: ImagePositionScale;
 
     static getImagePositionScale(imageVariant: ImageVariant | undefined, usvg: boolean, pixelRatio: number): ImagePositionScale {
-        if (usvg && imageVariant && imageVariant.options && imageVariant.options.transform) {
-            const transform = imageVariant.options.transform;
+        if (usvg && imageVariant) {
+            const {sx, sy} = imageVariant;
             return {
-                x: transform.a,
-                y: transform.d
+                x: sx,
+                y: sy
             };
         } else {
             return {
@@ -75,6 +76,7 @@ export class ImagePosition implements SpritePosition {
         this.version = version;
         this.padding = padding;
         this.sdf = sdf;
+        this.usvg = usvg;
         this.scale = ImagePosition.getImagePositionScale(imageVariant, usvg, pixelRatio);
     }
 
@@ -114,7 +116,7 @@ function getImageBin(image: StyleImage, padding: number, scale: [number, number]
 
 export function getImagePosition(id: StringifiedImageVariant, src: StyleImage, padding: number) {
     const imageVariant = ImageVariant.parse(id);
-    const bin = getImageBin(src, padding, [imageVariant.options.transform.a, imageVariant.options.transform.d]);
+    const bin = getImageBin(src, padding, [imageVariant.sx, imageVariant.sy]);
     return {bin, imagePosition: new ImagePosition(bin, src, padding, imageVariant), imageVariant};
 }
 
@@ -133,9 +135,12 @@ export default class ImageAtlas {
 
         const bins = [];
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this.addImages(icons, iconPositions, ICON_PADDING, bins);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this.addImages(patterns, patternPositions, PATTERN_PADDING, bins);
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         const {w, h} = potpack(bins);
         const image = new RGBAImage({width: w || 1, height: h || 1});
 
@@ -144,7 +149,8 @@ export default class ImageAtlas {
             // For SDF icons, we override the RGB channels with white.
             // This is because we read the red channel in the shader and RGB channels will get alpha-premultiplied on upload.
             const overrideRGB = src.sdf;
-            RGBAImage.copy(src.data, image, {x: 0, y: 0}, {x: bin.x + ICON_PADDING, y: bin.y + ICON_PADDING}, src.data, lut, overrideRGB);
+            // We don't use the LUT here because it's applied on the GPU
+            RGBAImage.copy(src.data, image, {x: 0, y: 0}, {x: bin.x + ICON_PADDING, y: bin.y + ICON_PADDING}, src.data, null, overrideRGB);
         }
 
         for (const [id, src] of patterns.entries()) {
@@ -200,7 +206,8 @@ export default class ImageAtlas {
                 const imageVariant = ImageVariant.parse(id);
                 if (ImageId.isEqual(imageVariant.id, imageId)) {
                     const image = imageManager.getImage(imageId, scope);
-                    this.patchUpdatedImage(this.iconPositions.get(id), image, texture);
+                    // We don't use the LUT here because it's applied on the GPU
+                    this.patchUpdatedImage(this.iconPositions.get(id), image, texture, null);
                 }
             }
 
@@ -208,13 +215,13 @@ export default class ImageAtlas {
                 const imageVariant = ImageVariant.parse(id);
                 if (ImageId.isEqual(imageVariant.id, imageId)) {
                     const image = imageManager.getImage(imageId, scope);
-                    this.patchUpdatedImage(this.patternPositions.get(id), image, texture);
+                    this.patchUpdatedImage(this.patternPositions.get(id), image, texture, this.lut);
                 }
             }
         }
     }
 
-    patchUpdatedImage(position: ImagePosition | null | undefined, image: StyleImage | null | undefined, texture: Texture) {
+    patchUpdatedImage(position: ImagePosition | null | undefined, image: StyleImage | null | undefined, texture: Texture, lut: LUT | null = null) {
         if (!position || !image) return;
 
         if (position.version === image.version) return;
@@ -225,7 +232,7 @@ export default class ImageAtlas {
         if (this.lut || overrideRGBWithWhite) {
             const size = {width: image.data.width, height: image.data.height};
             const imageToUpload = new RGBAImage(size);
-            RGBAImage.copy(image.data, imageToUpload, {x: 0, y: 0}, {x: 0, y: 0}, size, this.lut, overrideRGBWithWhite);
+            RGBAImage.copy(image.data, imageToUpload, {x: 0, y: 0}, {x: 0, y: 0}, size, lut, overrideRGBWithWhite);
             texture.update(imageToUpload, {position: {x, y}});
         } else {
             texture.update(image.data, {position: {x, y}});

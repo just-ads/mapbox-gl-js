@@ -116,8 +116,9 @@ function drawSkyboxFace(painter: Painter, layer: SkyLayer, program: Program<Skyb
         mat3.fromMat4(mat3.create(), faceRotate) as Float32Array,
         sunDirection,
         sunIntensity,
-        atmosphereColor,
-        atmosphereHaloColor);
+        atmosphereColor.toPremultipliedRenderColor(null),
+        atmosphereHaloColor.toPremultipliedRenderColor(null)
+    );
 
     const glFace = gl.TEXTURE_CUBE_MAP_POSITIVE_X + i;
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, glFace, layer.skyboxTexture, 0);
@@ -134,7 +135,7 @@ function captureSkybox(painter: Painter, layer: SkyLayer, width: number, height:
 
     // Using absence of fbo as a signal for lazy initialization of all resources, cache resources in layer object
     if (!fbo) {
-        fbo = layer.skyboxFbo = context.createFramebuffer(width, height, true, null);
+        fbo = layer.skyboxFbo = context.createFramebuffer(width, height, 1, null);
         layer.skyboxGeometry = new SkyboxGeometry(context);
         layer.skyboxTexture = context.gl.createTexture();
 
@@ -157,7 +158,7 @@ function captureSkybox(painter: Painter, layer: SkyLayer, width: number, height:
 
     const sunDirection = layer.getCenter(painter, true);
     const program = painter.getOrCreateProgram('skyboxCapture');
-    const faceRotate = new Float64Array(16) as unknown as mat4;
+    const faceRotate = new Float64Array(16);
 
     // +x;
     mat4.identity(faceRotate);

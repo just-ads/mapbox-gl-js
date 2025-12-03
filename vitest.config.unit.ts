@@ -1,8 +1,10 @@
 import {basename as pathBasename} from 'node:path';
-import {readFileSync} from 'node:fs';
+import {readFileSync, globSync} from 'node:fs';
 import {mergeConfig, defineConfig} from 'vitest/config';
-import {globSync} from 'glob';
+import {playwright} from '@vitest/browser-playwright';
 import baseConfig from './vitest.config.base';
+
+const isCI = process.env.CI === 'true';
 
 function styleSpecFixtures() {
     const virtualModuleId = 'virtual:style-spec/fixtures';
@@ -29,13 +31,19 @@ function styleSpecFixtures() {
 
 export default mergeConfig(baseConfig, defineConfig({
     test: {
+        browser: {
+            provider: playwright({launchOptions: {channel: 'chrome'}}),
+            instances: [
+                {browser: 'chromium'},
+            ],
+        },
         include: ['test/unit/**/*.test.ts'],
         setupFiles: ['test/unit/setup.ts'],
-        reporters: process.env.CI ? [
+        reporters: isCI ? [
             ['html', {outputFile: './test/unit/vitest/index.html'}],
-            ['junit', {outputFile: './test/unit/test-results.xml'}],
-            ['basic']
-        ] : ['basic'],
+            ['verbose', {summary: false}],
+            ['github-actions']
+        ] : [['default']],
     },
     plugins: [
         styleSpecFixtures()

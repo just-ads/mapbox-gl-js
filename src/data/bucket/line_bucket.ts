@@ -54,6 +54,7 @@ import type {TileFootprint} from '../../../3d-style/util/conflation';
 import type {PossiblyEvaluatedValue} from '../../style/properties';
 import type {TypedStyleLayer} from '../../style/style_layer/typed_style_layer';
 import type {ImageId} from '../../style-spec/expression/types/image_id';
+import type {GlobalProperties} from "../../style-spec/expression";
 
 // NOTE ON EXTRUDE SCALE:
 // scale the extrusion vector so that the normal length is this value.
@@ -139,8 +140,7 @@ class LineBucket implements Bucket {
     gradients: {
         [key: string]: GradientTexture;
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    stateDependentLayers: Array<any>;
+    stateDependentLayers: Array<LineStyleLayer>;
     stateDependentLayerIds: Array<string>;
     patternFeatures: Array<BucketFeature>;
     lineClipsArray: Array<LineClips>;
@@ -174,6 +174,9 @@ class LineBucket implements Bucket {
     elevationType: ElevationType = 'none';
     heightRange: Range | undefined;
 
+    worldview: string;
+    hasAppearances: boolean | null;
+
     constructor(options: BucketParameters<LineStyleLayer>) {
         this.zoom = options.zoom;
         this.evaluationGlobals.zoom = this.zoom;
@@ -205,9 +208,15 @@ class LineBucket implements Bucket {
         // should be enough since line elevation over terrain samples neighboring points.
         // options.tessellationStep override is used for testing only.
         this.tessellationStep = options.tessellationStep ? options.tessellationStep : (EXTENT / 64);
+
+        this.worldview = options.worldview;
+        this.hasAppearances = null;
     }
 
     updateFootprints(_id: UnwrappedTileID, _footprints: Array<TileFootprint>) {
+    }
+
+    updateAppearances(_canonical?: CanonicalTileID, _featureState?: FeatureStates, _availableImages?: Array<ImageId>, _globalProperties?: GlobalProperties) {
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
@@ -234,13 +243,13 @@ class LineBucket implements Bucket {
         const crossSlope = this.layers[0].layout.get('line-cross-slope');
         this.hasCrossSlope = this.elevationType === 'offset' && crossSlope !== undefined;
 
-        const bucketFeatures = [];
+        const bucketFeatures: BucketFeature[] = [];
 
         for (const {feature, id, index, sourceLayerIndex} of features) {
             const needGeometry = this.layers[0]._featureFilter.needGeometry;
             const evaluationFeature = toEvaluationFeature(feature, needGeometry);
 
-            if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom), evaluationFeature, canonical))
+            if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom, {worldview: this.worldview, activeFloors: options.activeFloors}), evaluationFeature, canonical))
                 continue;
 
             const sortKey = lineSortKey ?
@@ -263,8 +272,8 @@ class LineBucket implements Bucket {
 
         if (lineSortKey) {
             bucketFeatures.sort((a, b) => {
-                // a.sortKey is always a number when in use
-                return (a.sortKey as number) - (b.sortKey as number);
+                // a.sortKey is always a number when lineSortKey is defined
+                return a.sortKey - b.sortKey;
             });
         }
 
@@ -335,6 +344,7 @@ class LineBucket implements Bucket {
                 if (!dashArray) continue;
 
             } else {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 dashArray = dashPropertyValue.evaluate({zoom}, feature);
             }
 
@@ -342,24 +352,27 @@ class LineBucket implements Bucket {
                 cap = capPropertyValue.value;
 
             } else {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 cap = capPropertyValue.evaluate({zoom}, feature);
             }
 
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             lineAtlas.addDash(dashArray, cap);
 
             // save positions for paint array
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             feature.patterns[layer.id] = [lineAtlas.getKey(dashArray, cap)];
         }
 
     }
 
-    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: ImageId[], imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
-        this.programConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness);
+    update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: ImageId[], imagePositions: SpritePositions, layers: ReadonlyArray<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null, worldview?: string) {
+        this.programConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness, worldview);
     }
 
     addFeatures(options: PopulateParameters, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: ImageId[], _: TileTransform, brightness?: number | null) {
         for (const feature of this.patternFeatures) {
-            this.addFeature(feature, feature.geometry, feature.index, canonical, imagePositions, availableImages, brightness);
+            this.addFeature(feature, feature.geometry, feature.index, canonical, imagePositions, availableImages, brightness, options.elevationFeatures);
         }
     }
 
@@ -402,10 +415,22 @@ class LineBucket implements Bucket {
         this.segments.destroy();
     }
 
-    lineFeatureClips(feature: BucketFeature): LineClips | null | undefined {
-        if (!!feature.properties && feature.properties.hasOwnProperty('mapbox_clip_start') && feature.properties.hasOwnProperty('mapbox_clip_end')) {
-            const start = +feature.properties['mapbox_clip_start'];
-            const end = +feature.properties['mapbox_clip_end'];
+    lineFeatureClips(feature: BucketFeature, multiLineMetricsIndex?: number): LineClips | null | undefined {
+        let startProp: string;
+        let endProp: string;
+        if (multiLineMetricsIndex && multiLineMetricsIndex > 0) {
+            // If a single line feature re-enters a tile, it may be split into multiple lines (MultiLineString).
+            // Each line has its own clip start and end keys, with a line index postfix appended
+            // starting from the 1st element in the array, e.g., mapbox_clip_start_1
+            startProp = `mapbox_clip_start_${multiLineMetricsIndex}`;
+            endProp = `mapbox_clip_end_${multiLineMetricsIndex}`;
+        } else {
+            startProp = 'mapbox_clip_start';
+            endProp = 'mapbox_clip_end';
+        }
+        if (!!feature.properties && feature.properties.hasOwnProperty(startProp) && feature.properties.hasOwnProperty(endProp)) {
+            const start = +feature.properties[startProp];
+            const end = +feature.properties[endProp];
             return {start, end};
         }
     }
@@ -420,6 +445,8 @@ class LineBucket implements Bucket {
         const roundLimit = layout.get('line-round-limit');
         this.lineClips = this.lineFeatureClips(feature);
         this.lineFeature = feature;
+        // Flag indicating that the line metrics were calculated for the vector tile feature.
+        const hasMapboxLineMetrics = !!feature.properties && feature.properties.hasOwnProperty('mapbox_line_metrics') ? feature.properties['mapbox_line_metrics'] : false;
         this.zOffsetValue = layout.get('line-z-offset').value;
 
         const paint = this.layers[0].paint;
@@ -447,18 +474,21 @@ class LineBucket implements Bucket {
                         prevDir: this.computeSegPrevDir(info, line)
                     };
 
-                    this.addLine(line, feature, canonical, join, cap, miterLimit, roundLimit, subseg);
+                    const multiLineMetricsIndex = hasMapboxLineMetrics && info.parentIndex > 0 ? info.parentIndex : null;
+                    this.addLine(line, feature, canonical, join, cap, miterLimit, roundLimit, subseg, multiLineMetricsIndex);
                 }
 
                 this.fillNonElevatedRoadSegment(vertexOffset);
             }
         } else {
-            for (const line of geometry) {
-                this.addLine(line, feature, canonical, join, cap, miterLimit, roundLimit);
+            for (let i = 0; i < geometry.length; i++) {
+                const line = geometry[i];
+                const multiLineMetricsIndex = hasMapboxLineMetrics && i > 0 ? i : null;
+                this.addLine(line, feature, canonical, join, cap, miterLimit, roundLimit, undefined, multiLineMetricsIndex);
             }
         }
 
-        this.programConfigurations.populatePaintArrays(this.layoutVertexArray.length, feature, index, imagePositions, availableImages, canonical, brightness);
+        this.programConfigurations.populatePaintArrays(this.layoutVertexArray.length, feature, index, imagePositions, availableImages, canonical, brightness, undefined, this.worldview);
     }
 
     private computeSegNextDir(info: LineInfo, line: Point[]) {
@@ -563,7 +593,7 @@ class LineBucket implements Bucket {
         }
     }
 
-    addLine(vertices: Array<Point>, feature: BucketFeature, canonical: CanonicalTileID, join: string, cap: string, miterLimit: number, roundLimit: number, subsegment?: Subsegment) {
+    addLine(vertices: Array<Point>, feature: BucketFeature, canonical: CanonicalTileID, join: string, cap: string, miterLimit: number, roundLimit: number, subsegment?: Subsegment, multiLineMetricsIndex?: number) {
         this.distance = 0;
         this.prevDistance = 0;
         this.scaledDistance = 0;
@@ -571,6 +601,8 @@ class LineBucket implements Bucket {
         this.totalFeatureLength = 0;
         this.lineSoFar = 0;
         this.currentVertex = undefined;
+
+        this.lineClips = multiLineMetricsIndex ? this.lineFeatureClips(feature, multiLineMetricsIndex) : this.lineClips;
 
         const joinNone = join === 'none';
         this.patternJoinNone = this.hasPattern && joinNone;
@@ -1006,7 +1038,7 @@ class LineBucket implements Bucket {
         if (this.zOffsetValue.kind === 'constant') {
             return {zOffset: this.zOffsetValue.value, variableWidth};
         }
-        const zOffset = this.zOffsetValue.evaluate(this.evaluationGlobals, this.lineFeature) || 0.0;
+        const zOffset: number = this.zOffsetValue.evaluate(this.evaluationGlobals, this.lineFeature) || 0.0;
         return {zOffset, variableWidth};
     }
 

@@ -3,7 +3,7 @@ import '../../../src/util/worker_pool_factory';
 import MapWorker from '../../../src/source/worker';
 
 import type {OverscaledTileID} from '../../../src/source/tile_id';
-import type {WorkerSourceConstructor} from '../../../src/source/worker_source';
+import type {WorkerSourceConstructor, WorkerSource} from '../../../src/source/worker_source';
 
 const _self = {
     addEventListener() {}
@@ -44,10 +44,11 @@ test('worker source messages dispatched to the correct map instance', () => {
         return {cancel: () => {}};
     };
 
-    _self.registerWorkerSource('test', function (actor) {
+    _self.registerWorkerSource('test', function (this: WorkerSource, actor) {
         this.loadTile = function () {
             // we expect the map id to get appended in the call to the "real"
             // actor.send()
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             actor.send('main thread task', {}, () => {}, null);
         };
     } as unknown as WorkerSourceConstructor);

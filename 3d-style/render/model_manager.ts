@@ -32,7 +32,7 @@ class ModelManager extends Evented {
         [scope: string]: number;
     };
     requestManager: RequestManager;
-    modelByURL: Record<string, { modelId: string, scope: string}>;
+    modelByURL: Record<string, {modelId: string, scope: string}>;
 
     constructor(requestManager: RequestManager) {
         super();
@@ -49,14 +49,16 @@ class ModelManager extends Evented {
                 if (!gltf) return;
 
                 const nodes = convertModel(gltf);
-                const model = new Model(id, undefined, undefined, nodes);
+                const model = new Model(id, url, undefined, undefined, nodes);
                 model.computeBoundsAndApplyParent();
                 return model;
             })
             .catch((err) => {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 if (err && err.status === 404) {
                     return null;
                 }
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 this.fire(new ErrorEvent(new Error(`Could not load model ${id} from ${url}: ${err.message}`)));
             });
     }
@@ -91,16 +93,20 @@ class ModelManager extends Evented {
                     const {status} = results[i];
                     if (status === 'rejected') continue;
                     const {value} = results[i] as PromiseFulfilledResult<Model>;
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                     if (!this.models[scope][idsToLoad[i]]) {
                         // Before promises getting resolved, models could have been deleted
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                         this.models[scope][idsToLoad[i]] = {model: null, numReferences: 1};
                     }
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                     this.models[scope][idsToLoad[i]].model = value;
                 }
                 this.numModelsLoading[scope] -= idsToLoad.length;
                 this.fire(new Event('data', {dataType: 'style'}));
             })
             .catch((err) => {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 this.fire(new ErrorEvent(new Error(`Could not load models: ${err.message}`)));
             });
     }
@@ -196,10 +202,10 @@ class ModelManager extends Evented {
         return this.modelByURL[url] !== undefined;
     }
 
-    removeModel(id: string, scope: string, keepModelURI = false) {
+    removeModel(id: string, scope: string, keepModelURI = false, forceRemoval = false) {
         if (!this.models[scope] || !this.models[scope][id]) return;
         this.models[scope][id].numReferences--;
-        if (this.models[scope][id].numReferences === 0) {
+        if (this.models[scope][id].numReferences === 0 || forceRemoval) {
             const modelURI = this.modelUris[scope][id];
             if (!keepModelURI) delete this.modelUris[scope][id];
             delete this.modelByURL[modelURI];

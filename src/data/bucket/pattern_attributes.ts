@@ -11,5 +11,4 @@ export const patternAttributes: StructArrayLayout = createLayout([
 export const patternTransitionAttributes: StructArrayLayout = createLayout([
     // [tl.x, tl.y, br.x, br.y]
     {name: 'a_pattern_b', components: 4, type: 'Uint16'},
-    {name: 'a_pixel_ratio', components: 1, type: 'Float32'}
 ]);

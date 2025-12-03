@@ -1,4 +1,4 @@
-import {extend, pick} from '../util/util';
+import {getExpiryDataFromHeaders, pick} from '../util/util';
 import {getImage, ResourceType} from '../util/ajax';
 import {Event, ErrorEvent, Evented} from '../util/evented';
 import loadTileJSON from './load_tilejson';
@@ -107,20 +107,21 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         this._deduped = new DedupedRequest();
         this._subLoading = {};
 
-        this._options = extend({type: 'raster'}, options);
-        extend(this, pick(options, ['url', 'scheme', 'tileSize', 'projection', 'customTags']));
+        this._options = Object.assign({type: 'raster'}, options);
+        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize', 'projection', 'customTags']));
     }
 
     load(callback?: Callback<undefined>) {
         this._loaded = false;
         this.fire(new Event('dataloading', {dataType: 'source'}));
-        this._tileJSONRequest = loadTileJSON(this._options, this.map._requestManager, null, null, (err, tileJSON) => {
+        const worldview = this.map.getWorldview();
+        this._tileJSONRequest = loadTileJSON(this._options, this.map._requestManager, null, worldview, (err, tileJSON) => {
             this._tileJSONRequest = null;
             this._loaded = true;
             if (err) {
                 this.fire(new ErrorEvent(err));
             } else if (tileJSON) {
-                extend(this, tileJSON);
+                Object.assign(this, tileJSON);
 
                 if (tileJSON.raster_layers) {
                     this.rasterLayers = tileJSON.raster_layers;
@@ -220,8 +221,8 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         this.cancelTileJSONRequest();
     }
 
-    serialize(): RasterSourceSpecification | RasterDEMSourceSpecification {
-        return extend({}, this._options);
+    serialize(): RasterSourceSpecification | RasterDEMSourceSpecification | RasterArraySourceSpecification {
+        return Object.assign({}, this._options);
     }
 
     hasTile(tileID: OverscaledTileID): boolean {
@@ -234,7 +235,7 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
 
     loadTile(tile: Tile, callback: Callback<undefined>) {
         const use2x = browser.devicePixelRatio >= 2;
-        const imageLoaded = (error, data, cacheControl, expires) => {
+        const imageLoaded = (error, data, responseHeaders) => {
             delete tile.request;
 
             if (tile.aborted) {
@@ -249,7 +250,8 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
 
             if (!data) return callback(null);
 
-            if (this.map._refreshExpiredTiles) tile.setExpiryData({cacheControl, expires});
+            const expiryData = getExpiryDataFromHeaders(responseHeaders);
+            if (this.map._refreshExpiredTiles) tile.setExpiryData(expiryData);
             tile.setTexture(data, this.map.painter);
             tile.state = 'loaded';
 
@@ -350,7 +352,7 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         if (tile.texture && tile.texture instanceof Texture) {
             // Clean everything else up owned by the tile, but preserve the texture.
             // Destroy first to prevent racing with the texture cache being popped.
-            tile.destroy(true);
+            tile.destroy(false);
 
             // Save the texture to the cache
             if (tile.texture && tile.texture instanceof Texture) {

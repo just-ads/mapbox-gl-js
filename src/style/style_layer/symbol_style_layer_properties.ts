@@ -36,6 +36,7 @@ export type LayoutProps = {
     "icon-text-fit": DataDrivenProperty<"none" | "width" | "height" | "both">;
     "icon-text-fit-padding": DataDrivenProperty<[number, number, number, number]>;
     "icon-image": DataDrivenProperty<ResolvedImage>;
+    "icon-image-use-theme": DataConstantProperty<string>;
     "icon-rotate": DataDrivenProperty<number>;
     "icon-padding": DataConstantProperty<number>;
     "icon-keep-upright": DataConstantProperty<boolean>;
@@ -85,6 +86,7 @@ export const getLayoutProperties = (): Properties<LayoutProps> => layout || (lay
     "icon-text-fit": new DataDrivenProperty(styleSpec["layout_symbol"]["icon-text-fit"]),
     "icon-text-fit-padding": new DataDrivenProperty(styleSpec["layout_symbol"]["icon-text-fit-padding"]),
     "icon-image": new DataDrivenProperty(styleSpec["layout_symbol"]["icon-image"]),
+    "icon-image-use-theme": new DataConstantProperty({"type":"string","default":"default","property-type":"data-constant"}),
     "icon-rotate": new DataDrivenProperty(styleSpec["layout_symbol"]["icon-rotate"]),
     "icon-padding": new DataConstantProperty(styleSpec["layout_symbol"]["icon-padding"]),
     "icon-keep-upright": new DataConstantProperty(styleSpec["layout_symbol"]["icon-keep-upright"]),
@@ -163,7 +165,7 @@ export const getPaintProperties = (): Properties<PaintProps> => paint || (paint 
     "icon-image-cross-fade": new DataConstantProperty(styleSpec["paint_symbol"]["icon-image-cross-fade"]),
     "text-opacity": new DataDrivenProperty(styleSpec["paint_symbol"]["text-opacity"]),
     "text-occlusion-opacity": new DataDrivenProperty(styleSpec["paint_symbol"]["text-occlusion-opacity"]),
-    "text-color": new DataDrivenProperty(styleSpec["paint_symbol"]["text-color"], { runtimeType: ColorType, getOverride: (o) => o.textColor, hasOverride: (o) => !!o.textColor }),
+    "text-color": new DataDrivenProperty(styleSpec["paint_symbol"]["text-color"], { runtimeType: ColorType, getOverride: (o: Record<string, unknown>) => o.textColor, hasOverride: (o: Record<string, unknown>) => !!o.textColor }),
     "text-halo-color": new DataDrivenProperty(styleSpec["paint_symbol"]["text-halo-color"]),
     "text-halo-width": new DataDrivenProperty(styleSpec["paint_symbol"]["text-halo-width"]),
     "text-halo-blur": new DataDrivenProperty(styleSpec["paint_symbol"]["text-halo-blur"]),

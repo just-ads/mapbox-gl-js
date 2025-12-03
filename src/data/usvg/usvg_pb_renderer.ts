@@ -20,7 +20,7 @@ class ColorReplacements {
 
         for (const [key, value] of Object.entries(params)) {
             if (variablesMap.has(key)) {
-                replacements.set(variablesMap.get(key).toStringPremultipliedAlpha(), value);
+                replacements.set(variablesMap.get(key).toString(), value);
             } else {
                 console.warn(`Ignoring unknown image variable "${key}"`);
             }
@@ -32,7 +32,7 @@ class ColorReplacements {
 
 function getStyleColor(iconColor: Color, opacity: number = 255, colorReplacements: Map<string, Color>) {
     const alpha = opacity / 255;
-    const serializedColor = iconColor.toStringPremultipliedAlpha();
+    const serializedColor = iconColor.toString();
     const color = colorReplacements.has(serializedColor) ? colorReplacements.get(serializedColor).clone() : iconColor.clone();
 
     color.a *= alpha;
@@ -53,6 +53,8 @@ function getCanvas(width: number, height: number): OffscreenCanvas | HTMLCanvasE
 
 type Context = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
 
+let canvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+let context: Context;
 /**
  * Renders a uSVG icon to an ImageData object.
  *
@@ -67,10 +69,8 @@ export function renderIcon(icon: Icon, options: RasterizationOptions): ImageData
     const naturalWidth = tree.width;
     const naturalHeight = tree.height;
 
-    const tr = options.transform ? options.transform : new DOMMatrix();
-
-    const renderedWidth = Math.max(1, Math.round(naturalWidth * tr.a)); // transform.sx
-    const renderedHeight = Math.max(1, Math.round(naturalHeight * tr.d)); // transform.sy
+    const renderedWidth = Math.max(1, Math.round(naturalWidth * options.sx)); // transform.sx
+    const renderedHeight = Math.max(1, Math.round(naturalHeight * options.sy)); // transform.sy
 
     // We need to apply transform to reflect icon size change
     const finalTr = new DOMMatrix([
@@ -79,8 +79,13 @@ export function renderIcon(icon: Icon, options: RasterizationOptions): ImageData
         0, 0
     ]);
 
-    const canvas = getCanvas(renderedWidth, renderedHeight);
-    const context = canvas.getContext('2d') as Context;
+    if (canvas === null) {
+        canvas = getCanvas(10, 10);
+        context = canvas.getContext('2d', {willReadFrequently: true}) as Context;
+    }
+
+    canvas.width = renderedWidth;
+    canvas.height = renderedHeight;
 
     renderNodes(context, finalTr, tree, tree as unknown as Group, colorReplacements);
     return context.getImageData(0, 0, renderedWidth, renderedHeight);
@@ -140,37 +145,52 @@ function renderGroup(context: Context, transform: DOMMatrix, tree: UsvgTree, gro
 }
 
 function renderPath(context: Context, transform: DOMMatrix, tree: UsvgTree, path: Path, colorReplacements: Map<string, Color>) {
-    const path2d = makePath2d(path);
     context.setTransform(transform);
 
     if (path.paint_order === PaintOrder.PAINT_ORDER_FILL_AND_STROKE) {
-        fillPath(context, tree, path, path2d, colorReplacements);
-        strokePath(context, tree, path, path2d, colorReplacements);
+        fillPath(context, tree, path, colorReplacements);
+        strokePath(context, tree, path, colorReplacements);
     } else {
-        strokePath(context, tree, path, path2d, colorReplacements);
-        fillPath(context, tree, path, path2d, colorReplacements);
+        strokePath(context, tree, path, colorReplacements);
+        fillPath(context, tree, path, colorReplacements);
     }
 }
 
-function fillPath(context: Context, tree: UsvgTree, path: Path, path2d: Path2D, colorReplacements: Map<string, Color>) {
+function fillPath(context: Context, tree: UsvgTree, path: Path, colorReplacements: Map<string, Color>) {
     const fill = path.fill;
     if (!fill) return;
 
     const alpha = fill.opacity / 255;
+
+    context.save();
+
+    context.beginPath();
+    buildPath(path, context);
 
     switch (fill.paint) {
     case 'rgb_color': {
         context.fillStyle = getStyleColor(fill.rgb_color, fill.opacity, colorReplacements);
         break;
     }
-    case 'linear_gradient_idx':
-        context.fillStyle = convertLinearGradient(context, tree.linear_gradients[fill.linear_gradient_idx], alpha, colorReplacements);
+    case 'linear_gradient_idx': {
+        const linearGradient = tree.linear_gradients[fill.linear_gradient_idx];
+        if (linearGradient.transform) {
+            context.setTransform(makeTransform(linearGradient.transform).preMultiplySelf(context.getTransform()));
+        }
+        context.fillStyle = convertLinearGradient(context, linearGradient, alpha, colorReplacements);
         break;
-    case 'radial_gradient_idx':
-        context.fillStyle = convertRadialGradient(context, tree.radial_gradients[fill.radial_gradient_idx], alpha, colorReplacements);
+    }
+    case 'radial_gradient_idx': {
+        const radialGradient = tree.radial_gradients[fill.radial_gradient_idx];
+        if (radialGradient.transform) {
+            context.setTransform(makeTransform(radialGradient.transform).preMultiplySelf(context.getTransform()));
+        }
+        context.fillStyle = convertRadialGradient(context, radialGradient, alpha, colorReplacements);
+    }
     }
 
-    context.fill(path2d, getFillRule(path));
+    context.fill(getFillRule(path));
+    context.restore();
 }
 
 function getFillRule(path: Path): CanvasFillRule {
@@ -178,10 +198,11 @@ function getFillRule(path: Path): CanvasFillRule {
         path.rule === PathRule.PATH_RULE_EVEN_ODD ? 'evenodd' : undefined;
 }
 
-function strokePath(context: Context, tree: UsvgTree, path: Path, path2d: Path2D, colorReplacements: Map<string, Color>) {
+function strokePath(context: Context, tree: UsvgTree, path: Path, colorReplacements: Map<string, Color>) {
     const stroke = path.stroke;
     if (!stroke) return;
 
+    const path2d = makePath2d(path);
     context.lineWidth = stroke.width;
     context.miterLimit = stroke.miterlimit;
     context.setLineDash(stroke.dasharray);
@@ -195,10 +216,10 @@ function strokePath(context: Context, tree: UsvgTree, path: Path, path2d: Path2D
         break;
     }
     case 'linear_gradient_idx':
-        context.strokeStyle = convertLinearGradient(context, tree.linear_gradients[stroke.linear_gradient_idx], alpha, colorReplacements);
+        context.strokeStyle = convertLinearGradient(context, tree.linear_gradients[stroke.linear_gradient_idx], alpha, colorReplacements, true);
         break;
     case 'radial_gradient_idx':
-        context.strokeStyle = convertRadialGradient(context, tree.radial_gradients[stroke.radial_gradient_idx], alpha, colorReplacements);
+        context.strokeStyle = convertRadialGradient(context, tree.radial_gradients[stroke.radial_gradient_idx], alpha, colorReplacements, true);
     }
 
     switch (stroke.linejoin) {
@@ -227,16 +248,21 @@ function strokePath(context: Context, tree: UsvgTree, path: Path, path2d: Path2D
     context.stroke(path2d);
 }
 
-function convertLinearGradient(context: Context, gradient: LinearGradient, alpha: number, colorReplacements: Map<string, Color>): CanvasGradient | string {
+function convertLinearGradient(context: Context, gradient: LinearGradient, alpha: number, colorReplacements: Map<string, Color>, transformGradient: boolean = false): CanvasGradient | string {
     if (gradient.stops.length === 1) {
         const stop = gradient.stops[0];
         return getStyleColor(stop.rgb_color, stop.opacity * alpha, colorReplacements);
     }
 
-    const tr = makeTransform(gradient.transform);
     const {x1, y1, x2, y2} = gradient;
-    const start = tr.transformPoint(new DOMPoint(x1, y1));
-    const end = tr.transformPoint(new DOMPoint(x2, y2));
+    let start = new DOMPoint(x1, y1);
+    let end = new DOMPoint(x2, y2);
+
+    if (transformGradient) {
+        const tr = makeTransform(gradient.transform);
+        start = tr.transformPoint(start);
+        end = tr.transformPoint(end);
+    }
 
     const linearGradient = context.createLinearGradient(start.x, start.y, end.x, end.y);
     for (const stop of gradient.stops) {
@@ -246,22 +272,28 @@ function convertLinearGradient(context: Context, gradient: LinearGradient, alpha
     return linearGradient;
 }
 
-function convertRadialGradient(context: Context, gradient: RadialGradient, alpha: number, colorReplacements: Map<string, Color>): CanvasGradient | string {
+function convertRadialGradient(context: Context, gradient: RadialGradient, alpha: number, colorReplacements: Map<string, Color>, transformGradient: boolean = false): CanvasGradient | string {
     if (gradient.stops.length === 1) {
         const stop = gradient.stops[0];
         return getStyleColor(stop.rgb_color, stop.opacity * alpha, colorReplacements);
     }
 
     const tr = makeTransform(gradient.transform);
-    const {fx, fy, cx, cy} = gradient;
-    const start = tr.transformPoint(new DOMPoint(fx, fy));
-    const end = tr.transformPoint(new DOMPoint(cx, cy));
+    const {fx, fy, fr, cx, cy, r} = gradient;
+    let start = new DOMPoint(fx, fy);
+    let end = new DOMPoint(cx, cy);
+    let r1 = fr;
+    let r2 = r;
 
-    // Extract the scale component from the transform
-    const uniformScale = (tr.a + tr.d) / 2;
-    const r1 = gradient.r * uniformScale;
+    if (transformGradient) {
+        start = tr.transformPoint(start);
+        end = tr.transformPoint(end);
+        const uniformScale = (tr.a + tr.d) / 2;
+        r1 = fr * uniformScale;
+        r2 = gradient.r * uniformScale;
+    }
 
-    const radialGradient = context.createRadialGradient(start.x, start.y, 0, end.x, end.y, r1);
+    const radialGradient = context.createRadialGradient(start.x, start.y, r1, end.x, end.y, r2);
     for (const stop of gradient.stops) {
         radialGradient.addColorStop(stop.offset, getStyleColor(stop.rgb_color, stop.opacity * alpha, colorReplacements));
     }
@@ -368,8 +400,7 @@ function makeTransform(transform?: Transform) {
         new DOMMatrix();
 }
 
-function makePath2d(path: Path): Path2D {
-    const path2d = new Path2D();
+function buildPath<T extends CanvasPath = Path2D>(path: Path, path2d: T): T {
     const step = path.step;
 
     let x = path.diffs[0] * step;
@@ -418,6 +449,10 @@ function makePath2d(path: Path): Path2D {
     }
 
     return path2d;
+}
+
+function makePath2d(path: Path): Path2D {
+    return buildPath(path, new Path2D());
 }
 
 function assert(condition: boolean, message: string) {

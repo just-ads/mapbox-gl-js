@@ -73,6 +73,7 @@ class Interpolate implements Expression {
         if (interpolation[0] === 'linear') {
             interpolation = {name: 'linear'};
         } else if (interpolation[0] === 'exponential') {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             const base = interpolation[1];
             if (typeof base !== 'number')
                 return context.error(`Exponential interpolation requires a numeric base.`, 1, 1);
@@ -157,20 +158,18 @@ class Interpolate implements Expression {
         const outputs = this.outputs;
 
         if (labels.length === 1) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-            return outputs[0].evaluate(ctx);
+            return outputs[0].evaluate(ctx) as Color;
         }
 
-        const value = (this.input.evaluate(ctx) as number);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const value: number = this.input.evaluate(ctx);
         if (value <= labels[0]) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-            return outputs[0].evaluate(ctx);
+            return outputs[0].evaluate(ctx) as Color;
         }
 
         const stopCount = labels.length;
         if (value >= labels[stopCount - 1]) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-            return outputs[stopCount - 1].evaluate(ctx);
+            return outputs[stopCount - 1].evaluate(ctx) as Color;
         }
 
         const index = findStopLessThanOrEqualTo(labels, value);
@@ -178,11 +177,13 @@ class Interpolate implements Expression {
         const upper = labels[index + 1];
         const t = Interpolate.interpolationFactor(this.interpolation, value, lower, upper);
 
-        const outputLower = outputs[index].evaluate(ctx);
-        const outputUpper = outputs[index + 1].evaluate(ctx);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const outputLower: Color = outputs[index].evaluate(ctx);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const outputUpper: Color = outputs[index + 1].evaluate(ctx);
 
         if (this.operator === 'interpolate') {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
             return interpolate[this.type.kind.toLowerCase()](outputLower, outputUpper, t);
         } else if (this.operator === 'interpolate-hcl') {
             return hcl.reverse(hcl.interpolate(hcl.forward(outputLower), hcl.forward(outputUpper), t));

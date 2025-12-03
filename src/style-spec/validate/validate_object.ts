@@ -1,31 +1,48 @@
 import {default as ValidationError, ValidationWarning} from '../error/validation_error';
-import getType from '../util/get_type';
+import {getType, isObject} from '../util/get_type';
 import validateSpec from './validate';
 
-import type {ValidationOptions} from './validate';
-import type {LayerSpecification} from '../types';
+import type {StyleReference} from '../reference/latest';
+import type {StyleSpecification, LayerSpecification} from '../types';
 
-type Options = ValidationOptions & {
-    layer?: LayerSpecification;
-    objectElementValidators?: object;
+type ObjectElementValidatorOptions = {
+    key: string;
+    value: unknown;
+    valueSpec?: unknown;
+    style: Partial<StyleSpecification>;
+    styleSpec: StyleReference;
+    object?: object;
+    objectKey?: string;
 };
 
-export default function validateObject(options: Options): Array<ValidationError> {
+type ObjectValidatorOptions = {
+    key: string;
+    value: unknown;
+    valueSpec?: object;
+    style: Partial<StyleSpecification>;
+    styleSpec: StyleReference;
+    object?: object;
+    objectKey?: string;
+    layer?: LayerSpecification;
+    objectElementValidators?: Record<string, (options: ObjectElementValidatorOptions) => ValidationError[]>;
+};
+
+export default function validateObject(options: ObjectValidatorOptions): ValidationError[] {
     const key = options.key;
     const object = options.value;
     const elementSpecs = options.valueSpec || {};
     const elementValidators = options.objectElementValidators || {};
     const style = options.style;
     const styleSpec = options.styleSpec;
-    let errors: ValidationError[] = [];
 
-    const type = getType(object);
-    if (type !== 'object') {
-        return [new ValidationError(key, object, `object expected, ${type} found`)];
+    if (!isObject(object)) {
+        return [new ValidationError(key, object, `object expected, ${getType(object)} found`)];
     }
 
+    let errors: ValidationError[] = [];
     for (const objectKey in object) {
         const elementSpecKey = objectKey.split('.')[0]; // treat 'paint.*' as 'paint'
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const elementSpec = elementSpecs[elementSpecKey] || elementSpecs['*'];
 
         let validateElement;
@@ -44,9 +61,11 @@ export default function validateObject(options: Options): Array<ValidationError>
             continue;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
         errors = errors.concat(validateElement({
             key: (key ? `${key}.` : key) + objectKey,
             value: object[objectKey],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             valueSpec: elementSpec,
             style,
             styleSpec,
@@ -61,7 +80,8 @@ export default function validateObject(options: Options): Array<ValidationError>
             continue;
         }
 
-        if (elementSpecs[elementSpecKey].required && elementSpecs[elementSpecKey]['default'] === undefined && object[elementSpecKey] === undefined) {
+        const elementSpec = elementSpecs[elementSpecKey] as {required?: boolean; default?: unknown};
+        if (elementSpec.required && elementSpec['default'] === undefined && object[elementSpecKey] === undefined) {
             errors.push(new ValidationError(key, object, `missing required property "${elementSpecKey}"`));
         }
     }

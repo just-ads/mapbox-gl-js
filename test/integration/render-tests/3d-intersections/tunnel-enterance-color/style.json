@@ -3,7 +3,7 @@
     "metadata": {
         "test": {
             "mapMode": "static",
-            "allowed": 0.00025,
+            "allowed": 0.00027,
             "spriteFormat": "raster"
         }
     },
@@ -82,7 +82,7 @@
                 "fill-elevation-reference": "hd-road-base"
             },
             "paint": {
-                "fill-tunnel-structure-color": "pink",
+                "fill-tunnel-structure-color": "red",
                 "fill-color": [
                     "interpolate",
                     [

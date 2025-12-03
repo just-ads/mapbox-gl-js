@@ -4,7 +4,7 @@ import {PerformanceUtils} from '../util/performance';
 import {makeFQID} from '../util/fqid';
 
 import type Transform from '../geo/transform';
-import type StyleLayer from './style_layer';
+import type {TypedStyleLayer} from './style_layer/typed_style_layer';
 import type SymbolStyleLayer from './style_layer/symbol_style_layer';
 import type Tile from '../source/tile';
 import type {BucketPart} from '../symbol/placement';
@@ -20,7 +20,6 @@ class LayerPlacement {
 
     constructor(styleLayer: SymbolStyleLayer) {
         this._sortAcrossTiles = styleLayer.layout.get('symbol-z-order') !== 'viewport-y' &&
-
             styleLayer.layout.get('symbol-sort-key').constantOr(1) !== undefined;
 
         this._currentTileIndex = 0;
@@ -33,7 +32,7 @@ class LayerPlacement {
         tiles: Array<Tile>,
         placement: Placement,
         showCollisionBoxes: boolean,
-        styleLayer: StyleLayer,
+        styleLayer: TypedStyleLayer,
         shouldPausePlacement: () => boolean,
         scaleFactor: number
     ): boolean {
@@ -94,14 +93,7 @@ class PauseablePlacement {
         return this._done;
     }
 
-    continuePlacement(order: Array<string>, layers: {
-        [_: string]: StyleLayer;
-    }, layerTiles: {
-        [_: string]: Array<Tile>;
-    }, layerTilesInYOrder: {
-        [_: string]: Array<Tile>;
-    },
-    scaleFactor: number) {
+    continuePlacement(order: Array<string>, layers: Record<string, TypedStyleLayer>, layerTiles: Record<string, Array<Tile>>, layerTilesInYOrder: Record<string, Array<Tile>>, scaleFactor: number) {
         const startTime = browser.now();
 
         const shouldPausePlacement = () => {
@@ -113,11 +105,11 @@ class PauseablePlacement {
             const layerId = order[this._currentPlacementIndex];
             const layer = layers[layerId];
             const placementZoom = this.placement.collisionIndex.transform.zoom;
-            if (layer.type === 'symbol' &&
+            if (layer.type === 'symbol' && layer.visibility !== 'none' &&
                 (!layer.minzoom || layer.minzoom <= placementZoom) &&
                 (!layer.maxzoom || layer.maxzoom > placementZoom)) {
 
-                const symbolLayer = (layer as SymbolStyleLayer);
+                const symbolLayer = layer;
                 const zOffset = symbolLayer.layout.get('symbol-z-elevate');
 
                 const hasSymbolSortKey = symbolLayer.layout.get('symbol-sort-key').constantOr(1) !== undefined;

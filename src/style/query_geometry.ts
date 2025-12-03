@@ -45,9 +45,9 @@ export class QueryGeometry {
 
     isAboveHorizon: boolean;
 
-    constructor(screenBounds: Point[], cameraPoint: Point, aboveHorizon: boolean, transform: Transform) {
+    constructor(screenBounds: Point[], aboveHorizon: boolean, transform: Transform) {
         this.screenBounds = screenBounds;
-        this.cameraPoint = cameraPoint;
+        this.cameraPoint = transform.getCameraPoint();
         this._screenRaycastCache = {};
         this._cameraRaycastCache = {};
         this.isAboveHorizon = aboveHorizon;
@@ -69,18 +69,19 @@ export class QueryGeometry {
         let aboveHorizon;
 
         if (geometry instanceof Point || typeof geometry[0] === 'number') {
-            const pt = Point.convert(geometry) as Point;
+            const pt = Point.convert(geometry as PointLike);
             screenGeometry = [pt];
             aboveHorizon = transform.isPointAboveHorizon(pt);
         } else {
             const tl = Point.convert(geometry[0]);
-            const br = Point.convert(geometry[1]) as Point;
+            const br = Point.convert(geometry[1] as PointLike);
             const center = tl.add(br)._div(2);
             screenGeometry = [tl, br];
             aboveHorizon = polygonizeBounds(tl, br).every((p) => transform.isPointAboveHorizon(p)) && transform.isPointAboveHorizon(center);
         }
 
-        return new QueryGeometry(screenGeometry, transform.getCameraPoint(), aboveHorizon, transform);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        return new QueryGeometry(screenGeometry, aboveHorizon, transform);
     }
 
     /**
@@ -192,9 +193,12 @@ export class QueryGeometry {
 
         const camPos = this.cameraPoint.clone();
         // @ts-expect-error - TS2365 - Operator '+' cannot be applied to types 'boolean' and 'boolean'.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const column = (camPos.x > min.x) + (camPos.x > max.x);
         // @ts-expect-error - TS2365 - Operator '+' cannot be applied to types 'boolean' and 'boolean'.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const row = (camPos.y > min.y) + (camPos.y > max.y);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const sector = row * 3 + column;
 
         switch (sector) {
@@ -243,7 +247,7 @@ export class QueryGeometry {
         // Floating point errors when projecting into tilespace could leave a feature
         // outside the query volume even if it looks like it overlaps visually, a 1px bias value overcomes that.
         const bias = 1;
-        const padding = tile.queryPadding / transform._pixelsPerMercatorPixel + bias;
+        const padding = Math.max(tile.queryPadding, tile.evaluateQueryRenderedFeaturePadding()) / transform._pixelsPerMercatorPixel + bias;
 
         const cachedQuery = use3D ?
             this._bufferedCameraMercator(padding, transform) :
@@ -409,7 +413,7 @@ export function unwrapQueryPolygon(polygon: Point[], tr: Transform): {
 // Finding projection of these kind of polygons is more involving as projecting just the corners will
 // produce a degenerate (self-intersecting, non-continuous, etc.) polygon in mercator coordinates
 export function projectPolygonCoveringPoles(polygon: Point[], tr: Transform): CachedPolygon | null | undefined {
-    const matrix = mat4.multiply([] as unknown as mat4, tr.pixelMatrix, tr.globeMatrix);
+    const matrix = mat4.multiply([], tr.pixelMatrix, tr.globeMatrix);
 
     // Transform north and south pole coordinates to the screen to see if they're
     // inside the query polygon
@@ -478,6 +482,7 @@ export function projectPolygonCoveringPoles(polygon: Point[], tr: Transform): Ca
         ];
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     resampled.push(...mid);
 
     // Resample to the second section of the ring
