@@ -481,8 +481,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         tile.requestTime = requestTime;
         tile.request = this.actor.send(message, params, (err, data: WorkerSourceVectorTileResult) => {
             delete tile.request;
-            if ((tile.requestTime > requestTime) || (partial && !data)) {
-                // if we did a partial reload and the tile didn't change, do nothing and treat the tile as loaded
+            if ((tile.requestTime > requestTime)) {
                 tile.state = 'loaded';
                 return callback(null);
             }

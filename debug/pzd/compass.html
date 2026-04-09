@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mapbox GL JS debug page</title>
+    <meta charset='utf-8'>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <link rel='stylesheet' href='../dist/mapbox-gl.css'/>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body, #map {
+            height: 100%;
+        }
+    </style>
+    <script src="https://unpkg.com/three@0.132.2/build/three.min.js"></script>
+</head>
+
+<body>
+<div id='map'></div>
+
+<script src='../dist/mapbox-gl-dev.js'></script>
+<script src='../debug/access_token_generated.js'></script>
+<script>
+
+    var map = window.map = new mapboxgl.Map({
+        container: 'map',
+        devtools: true,
+        zoom: 1.69,
+        center: [-9.4, -26.8],
+        bearing: 131,
+        pitch: 60,
+        style: 'mapbox://styles/mapbox/light-v9',
+        projection: 'globe',
+        hash: true
+    });
+
+    class CompassLayer {
+        constructor(options = {}) {
+            this.id = options.id || 'terrain-compass';
+            this.type = 'custom';
+            this.renderingMode = '3d';
+
+            this.position = options.position || [0, 0];
+            this.size = options.size || 200;
+
+            // 性能优化：缓存资源
+            this._program = null;
+            this._vertexBuffer = null;
+            this._uniforms = null;
+            this._texture = null;
+            this._image = null;
+
+            // 添加状态管理
+            this._isInitialized = false;
+            this._needsTextureUpdate = false;
+
+            // 使用防抖的重绘请求
+            this._repaintRequested = false;
+
+            this.setCompass('compass.png');
+        }
+
+        onAdd(map, gl) {
+            this.map = map;
+            this.gl = gl;
+
+            // 一次性初始化
+            this._initializeResources();
+            this._isInitialized = true;
+        }
+
+        _initializeResources() {
+            const gl = this.gl;
+
+            // 创建着色器程序
+            this._program = this._createShaderProgram();
+
+            // 获取uniform位置
+            this._uniforms = {
+                a_pos: gl.getAttribLocation(this._program, "a_pos"),
+                u_matrix: gl.getUniformLocation(this._program, 'u_matrix'),
+                u_texSize: gl.getUniformLocation(this._program, 'u_texSize'),
+                u_size: gl.getUniformLocation(this._program, 'u_size'),
+                u_resolution: gl.getUniformLocation(this._program, 'u_resolution'),
+                u_texture: gl.getUniformLocation(this._program, 'u_texture'),
+            };
+
+            // 创建并配置纹理
+            this._texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, this._texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+            // 准备顶点缓冲
+            this._prepareBuffer();
+        }
+
+        _createShaderProgram() {
+            const gl = this.gl;
+
+            // 使用更高效的着色器代码
+            const vertexSource = `
+            attribute vec2 a_pos;
+            uniform mat4 u_matrix;
+            void main() {
+                gl_Position = u_matrix * vec4(a_pos, 0.0, 1.0);
+            }`;
+
+            const fragmentSource = `
+            precision mediump float;
+            uniform sampler2D u_texture;
+            uniform vec2 u_resolution;
+            uniform vec2 u_texSize;
+            uniform vec2 u_size;
+
+            void main() {
+                vec2 uv = gl_FragCoord.xy / u_resolution;
+                vec2 disp = u_texSize * u_size;
+                vec2 dispN = disp / u_resolution;
+                vec2 center = vec2(0.5);
+                vec2 minUV = center - dispN * 0.5;
+                vec2 maxUV = center + dispN * 0.5;
+
+                // 提前裁剪，避免不必要的纹理采样
+                if (uv.x < minUV.x || uv.x > maxUV.x || uv.y < minUV.y || uv.y > maxUV.y) {
+                    discard;
+                    return;
+                }
+
+                vec2 texUV = (uv - minUV) / (maxUV - minUV);
+                texUV.y = 1.0 - texUV.y; // 翻转Y坐标
+                gl_FragColor = texture2D(u_texture, texUV);
+            }`;
+
+            const vertexShader = this._compileShader(gl.VERTEX_SHADER, vertexSource);
+            const fragmentShader = this._compileShader(gl.FRAGMENT_SHADER, fragmentSource);
+
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error('Program link error:', gl.getProgramInfoLog(program));
+                return null;
+            }
+
+            // 清理着色器对象
+            gl.deleteShader(vertexShader);
+            gl.deleteShader(fragmentShader);
+
+            return program;
+        }
+
+        _compileShader(type, source) {
+            const gl = this.gl;
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        _prepareBuffer() {
+            const gl = this.gl;
+            // 使用静态顶点数据
+            const vertices = new Float32Array([
+                -1, -1,
+                1, -1,
+                -1, 1,
+                1, 1
+            ]);
+
+            this._vertexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this._vertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+        }
+
+        setCompass(url) {
+            // 清理之前的图片资源
+            if (this._image) {
+                this._cleanupImage();
+            }
+
+            const image = new Image();
+            image.src = url;
+            image.crossOrigin = '';
+
+            image.onload = () => {
+                if (this._image !== image) return; // 确保是当前图片
+
+                this._needsTextureUpdate = true;
+                this._requestRepaint();
+            };
+
+            image.onerror = () => {
+                console.error('Failed to load compass image:', url);
+            };
+
+            this._image = image;
+        }
+
+        _cleanupImage() {
+            if (this._image) {
+                // 清除事件监听器
+                this._image.onload = null;
+                this._image.onerror = null;
+                this._image = null;
+            }
+        }
+
+        _requestRepaint() {
+            if (!this._repaintRequested && this.map) {
+                this._repaintRequested = true;
+                requestAnimationFrame(() => {
+                    this._repaintRequested = false;
+                    this.map.triggerRepaint();
+                });
+            }
+        }
+
+        render(gl, matrix) {
+            if (!this._isInitialized || !this._image || !this._image.complete) {
+                return;
+            }
+
+            gl.useProgram(this._program);
+
+            // 只在需要时更新纹理
+            if (this._needsTextureUpdate) {
+                this._updateTexture();
+                this._needsTextureUpdate = false;
+            }
+
+            // 设置混合模式
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+            // 批量设置uniforms
+            this._setUniforms(matrix, gl.canvas.width, gl.canvas.height);
+
+            // 设置顶点属性
+            gl.bindBuffer(gl.ARRAY_BUFFER, this._vertexBuffer);
+            gl.enableVertexAttribArray(this._uniforms.a_pos);
+            gl.vertexAttribPointer(this._uniforms.a_pos, 2, gl.FLOAT, false, 0, 0);
+
+            // 绑定纹理
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this._texture);
+            gl.uniform1i(this._uniforms.u_texture, 0);
+
+            // 绘制
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // 清理状态
+            gl.disableVertexAttribArray(this._uniforms.a_pos);
+        }
+
+        _updateTexture() {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this._texture);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this._image);
+        }
+
+        _setUniforms(matrix, width, height) {
+            const gl = this.gl;
+            const uniforms = this._uniforms;
+
+            gl.uniformMatrix4fv(uniforms.u_matrix, false, matrix);
+            gl.uniform2f(uniforms.u_resolution, width, height);
+            gl.uniform2f(uniforms.u_texSize, this._image.width, this._image.height);
+
+            // 优化：预计算尺寸比例
+            const sizeRatio = this.size / this._image.width;
+            gl.uniform2f(uniforms.u_size, sizeRatio, sizeRatio);
+        }
+
+        onRemove() {
+            if (!this.gl) return;
+
+            // 清理资源
+            this._cleanupImage();
+
+            if (this._vertexBuffer) {
+                this.gl.deleteBuffer(this._vertexBuffer);
+                this._vertexBuffer = null;
+            }
+
+            if (this._texture) {
+                this.gl.deleteTexture(this._texture);
+                this._texture = null;
+            }
+
+            if (this._program) {
+                this.gl.deleteProgram(this._program);
+                this._program = null;
+            }
+
+            this._isInitialized = false;
+        }
+    }
+
+    map.on('load', function () {
+        map.addSource('mapbox-dem', {
+            'type': 'raster-dem',
+            'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
+            'tileSize': 512,
+            'maxzoom': 14
+        });
+        // add the DEM source as a terrain layer with exaggerated height
+        // map.setTerrain({'source': 'mapbox-dem', 'exaggeration': 1.5});
+        map.addLayer(new CompassLayer({
+            id: 'compass',
+            position: [92.745, 28.532],
+            screenPosition: [50, 50],
+            fixedToScreen: false,
+            size: 400,
+        }));
+    });
+
+</script>
+</body>
+</html>

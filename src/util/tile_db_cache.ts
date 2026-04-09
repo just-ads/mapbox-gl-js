@@ -73,7 +73,7 @@ export function cacheGetFromDB(id: string, callback: (error?: any, response?: Re
     const timer = setTimeout(() => {
         cancel = true;
         callback(null);
-    }, 2000);
+    }, 500);
     getObjectStore()
         .then(store => {
             clearTimeout(timer);
@@ -95,6 +95,7 @@ export function cacheGetFromDB(id: string, callback: (error?: any, response?: Re
             };
         })
         .catch(err => {
+            callback(err, null);
             console.log(err);
         });
 }

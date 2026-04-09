@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+    <title>self-intersecting-polygons</title>
+    <style>
+        body { margin: 0; padding: 0; }
+        html, body, #map { height: 100%; }
+    </style>
+</head>
+<body>
+<div id='map'></div>
+<script src='../dist/mapbox-gl-dev.js'></script>
+<script src='../debug/access_token_generated.js'></script>
+<script>
+    var map = window.map = new mapboxgl.Map({
+        container: 'map',
+        devtools: true,
+        zoom: 21,
+        center: [82.77427231948604, 41.69386243403923],
+        hash: true,
+    });
+
+    map.on('load', () => {
+        map.addSource('test', {
+            type: 'geojson',
+            data: {
+                type: 'FeatureCollection',
+                features: [{
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Polygon',
+                        coordinates: [[
+                            [
+                                82.77427231948604,
+                                41.69386243403923
+                            ],
+                            [
+                                82.77445504497433,
+                                41.69388797012638
+                            ],
+                            [
+                                82.77439670692956,
+                                41.69378457394507
+                            ],
+                            [
+                                82.77431724648619,
+                                41.693912504788955
+                            ],
+                            [
+                                82.77427231948604,
+                                41.69386243403923
+                            ]
+                        ]]
+                    },
+                    properties: {}
+                }]
+            }
+        });
+
+        map.addLayer({
+            id: '123',
+            type: 'fill',
+            source: 'test',
+        })
+    });
+
+
+
+</script>
+</body>
+</html>

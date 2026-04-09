@@ -171,14 +171,18 @@ export function cacheGet(
             })
             .catch(callback);
     };
+    if (secondUrl) {
+        getCache(secondUrl, (error, response, fresh) => {
+            if (!response) {
+                getCache(url, callback);
+            } else {
+                callback(error, response, fresh);
+            }
+        });
+    } else {
+        getCache(url, callback);
+    }
 
-    getCache(secondUrl, (error, response, fresh) => {
-        if (!response) {
-            getCache(url, callback);
-        } else {
-            callback(error, response, fresh);
-        }
-    });
 }
 
 function isFresh(response: Response) {

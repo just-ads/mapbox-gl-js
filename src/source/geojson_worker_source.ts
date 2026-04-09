@@ -1,6 +1,7 @@
 import {getJSON} from '../util/ajax';
 import {getPerformanceMeasurement} from '../util/performance';
 import GeoJSONWrapper from './geojson_wrapper';
+import GeoJSONRT from './geojson_rt';
 import writePbf from './vector_tile_to_pbf';
 import Supercluster from 'supercluster';
 import geojsonvt from 'geojson-vt';
@@ -118,7 +119,7 @@ function loadGeoJSONTile(this: GeoJSONWorkerSource, params: WorkerSourceVectorTi
  */
 class GeoJSONWorkerSource extends VectorTileWorkerSource {
     _geoJSONIndex: GeoJSONIndex;
-    _featureMap: Map<number | string, GeoJSON.Feature>;
+    _dynamicIndex: GeoJSONRT;
 
     /**
      * @param [loadGeoJSON] Optional method for custom loading/parsing of
@@ -131,7 +132,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         if (loadGeoJSON) {
             this.loadGeoJSON = loadGeoJSON;
         }
-        this._featureMap = new Map();
+        this._dynamicIndex = new GeoJSONRT();
     }
 
     /**
@@ -178,31 +179,28 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
                         if (data.type === 'Feature') data = {type: 'FeatureCollection', features: [data]};
 
                         if (!params.append) {
-                            this._featureMap.clear();
+                            this._dynamicIndex.clear();
+                            this.loaded = {};
                         }
 
-                        for (const feature of (data.features || [])) {
-                            const id = feature.id;
-                            if (id !== undefined) {
-                                if (!feature.geometry) {
-                                    this._featureMap.delete(id);
-                                } else {
-                                    this._featureMap.set(id, feature);
-                                }
-                            }
-                        }
-                        data.features = Array.from(this._featureMap.values());
+                        this._dynamicIndex.load(data.features, this.loaded);
+
+                        if (params.cluster) data.features = this._dynamicIndex.getFeatures() as unknown as GeoJSON.Feature[];
+                    } else {
+                        this.loaded = {};
                     }
 
-                    this._geoJSONIndex = params.cluster ?
-                        new Supercluster(getSuperclusterOptions(params)).load((data as GeoJSON.FeatureCollection).features as Array<GeoJSON.Feature<GeoJSON.Point, object>>) :
-                        geojsonvt(data, params.geojsonVtOptions);
+                    this._geoJSONIndex =
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                        params.cluster ? new Supercluster(getSuperclusterOptions(params)).load((data as GeoJSON.FeatureCollection).features as Array<GeoJSON.Feature<GeoJSON.Point, object>>) :
+                            params.dynamic ? this._dynamicIndex :
+                                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                                geojsonvt(data, params.geojsonVtOptions);
+
 
                 } catch (err) {
                     return callback(err as Error);
                 }
-
-                this.loaded = {};
 
                 const result: {resourceTiming?: ResourceTiming} = {};
                 if (perf) {

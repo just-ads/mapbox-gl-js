@@ -143,11 +143,11 @@
     </details>
 </div>
 
-<script src='../dist/mapbox-gl-dev.js'></script>
-<script src='../debug/access_token_generated.js'></script>
+<script src='../../dist/mapbox-gl-dev.js'></script>
+<script src='../../debug/access_token.js'></script>
 <script src='https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.1/mapbox-gl-draw.js'></script>
-<script src='./analysis/tin.js'></script>
-<script src='./analysis/Delatin.js'></script>
+<script src='../analysis/tin.js'></script>
+<script src='../analysis/Delatin.js'></script>
 
 
 <script>
@@ -181,13 +181,13 @@
                 "color": "white",
                 "intensity": 0.4
             },
-            fog: {
-                'horizon-blend': 0.3,
-                'color': '#f8f0e3',
-                'high-color': '#add8e6',
-                'space-color': '#d8f2ff',
-                'star-intensity': 0.0
-            },
+            // fog: {
+            //     'horizon-blend': 0.3,
+            //     'color': '#f8f0e3',
+            //     'high-color': '#add8e6',
+            //     'space-color': '#d8f2ff',
+            //     'star-intensity': 0.0
+            // },
             // terrain: {
             //     source: 'mapbox-dem',
             //     exaggeration: 1
@@ -198,7 +198,7 @@
                     tileSize: 512,
                     maxzoom: 14,
                     minzoom: 5,
-                    tiles: ['https://api.mapbox.com/raster/v1/mapbox.mapbox-terrain-dem-v1/{z}/{x}/{y}.webp?access_token=pk.eyJ1IjoiYWRzMjkzNDk3MDc3OSIsImEiOiJjbDZuZnp6angwMGkwM2pzM2tueXN1NGl0In0.0l_OvoBv3UqIuDuWmbW-sw'],
+                    tiles: [`https://api.mapbox.com/raster/v1/mapbox.mapbox-terrain-dem-v1/{z}/{x}/{y}.webp?access_token=${getAccessToken()}`],
                 },
                 'xinzhi-dem': {
                     type: 'raster-dem',

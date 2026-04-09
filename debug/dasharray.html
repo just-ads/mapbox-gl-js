@@ -54,18 +54,20 @@ map.on('load', () => {
         "type": "line",
         "source": "geojson",
         "paint": {
-            "line-width": 10,
-            // "line-dasharray": [1, 2],
-            "line-dasharray": [
-                "match", ["get", "property"],
-                1, ["literal", [1, 2]],
-                2, ["literal", [2, 2]],
-                3, ["literal", [3, 2]],
-                ["literal", [1, 1]]
-            ]
+            "line-width": 5,
+            "line-dasharray": [5, 2, 0.1, 2],
+            // "line-dasharray": [
+            //     "match", ["get", "property"],
+            //     1, ["literal", [1, 2]],
+            //     2, ["literal", [2, 2]],
+            //     3, ["literal", [3, 2]],
+            //     ["literal", [1, 1]]
+            // ]
         },
         "layout": {
-            "line-cap": ["match", ["get", "property"], 2, "round", "butt"]
+            // "line-cap": ["match", ["get", "property"], 2, "round", "butt"]
+            "line-cap": "round",
+            "line-join": "round"
         }
     });
 });

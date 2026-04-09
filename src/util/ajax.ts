@@ -163,7 +163,10 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
         const requestTime = Date.now();
 
         fetch(request).then(response => {
-            if (response.ok) {
+            const extraStatus = +response.headers.get('Status');
+            if (extraStatus && extraStatus !== 200) {
+                return callback(new AJAXError(`自定义请求错误${extraStatus}`, extraStatus, requestParameters.url));
+            } else if (response.ok) {
                 const cacheableResponse = cacheSearch && !cacheIgnoringSave ? response.clone() : null;
                 return finishRequest(response, cacheableResponse, requestTime);
             } else {

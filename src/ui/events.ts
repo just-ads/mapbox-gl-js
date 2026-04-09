@@ -1509,8 +1509,6 @@ export type MapEvents = {
      * // Initialize the map
      * const map = new mapboxgl.Map({});
      * // Set an event listener that fires
-     * // when the map's sources begin _loading or
-     * // changing asynchronously.
      * map.on('tileloadfail', () => {
      *     console.log('A tileloadfail event occurred.');
      * });
