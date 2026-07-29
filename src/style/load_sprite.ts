@@ -5,7 +5,6 @@ import {RGBAImage} from '../util/image';
 import type {StyleImages} from './style_image';
 import type {RequestManager} from '../util/mapbox';
 import type {Callback} from '../types/callback';
-import type {Cancelable} from '../types/cancelable';
 
 type SpriteData = Record<string, {
     width: number;
@@ -22,28 +21,41 @@ type SpriteData = Record<string, {
 export default function (
     baseURL: string,
     requestManager: RequestManager,
+    signal: AbortSignal,
     callback: Callback<StyleImages>,
-): Cancelable {
-    let json: SpriteData | undefined, image: HTMLImageElement | ImageBitmap | undefined, error: Error | undefined;
+) {
+    let json: SpriteData | undefined, image: ImageBitmap | undefined, error: Error | undefined;
     const format = browser.devicePixelRatio > 1 ? '@2x' : '';
 
-    let jsonRequest: Cancelable | null | undefined = getJSON(requestManager.transformRequest(requestManager.normalizeSpriteURL(baseURL, format, '.json'), ResourceType.SpriteJSON), (err?: Error | null, data?: object) => {
-        jsonRequest = null;
-        if (!error) {
-            error = err;
-            json = data as SpriteData;
-            maybeComplete();
-        }
-    });
+    const requestParameters = requestManager.transformRequest(requestManager.normalizeSpriteURL(baseURL, format, '.json'), ResourceType.SpriteJSON);
+    getJSON<SpriteData>(requestParameters, signal)
+        .then(({data}) => {
+            if (!error) {
+                json = data;
+                maybeComplete();
+            }
+        })
+        .catch((err: Error) => {
+            if (!error && err.name !== 'AbortError') {
+                error = err;
+                maybeComplete();
+            }
+        });
 
-    let imageRequest: Cancelable | null | undefined = getImage(requestManager.transformRequest(requestManager.normalizeSpriteURL(baseURL, format, '.png'), ResourceType.SpriteImage), (err, img) => {
-        imageRequest = null;
-        if (!error) {
-            error = err;
-            image = img;
-            maybeComplete();
-        }
-    });
+    const imageRequestParameters = requestManager.transformRequest(requestManager.normalizeSpriteURL(baseURL, format, '.png'), ResourceType.SpriteImage);
+    getImage(imageRequestParameters, signal)
+        .then(({data}) => {
+            if (!error) {
+                image = data;
+                maybeComplete();
+            }
+        })
+        .catch((err: Error) => {
+            if (!error && err.name !== 'AbortError') {
+                error = err;
+                maybeComplete();
+            }
+        });
 
     function maybeComplete() {
         if (error) {
@@ -71,17 +83,4 @@ export default function (
             callback(null, result);
         }
     }
-
-    return {
-        cancel() {
-            if (jsonRequest) {
-                jsonRequest.cancel();
-                jsonRequest = null;
-            }
-            if (imageRequest) {
-                imageRequest.cancel();
-                imageRequest = null;
-            }
-        }
-    };
 }

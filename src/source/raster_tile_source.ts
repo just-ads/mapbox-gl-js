@@ -1,32 +1,30 @@
-import {getExpiryDataFromHeaders, pick} from '../util/util';
+import {parseExpiryData, pick} from '../util/util';
 import {getImage, ResourceType} from '../util/ajax';
 import {Event, ErrorEvent, Evented} from '../util/evented';
-import loadTileJSON from './load_tilejson';
+import loadTileJSON, {parseTileJSONRequest} from './load_tilejson';
 import {postTurnstileEvent} from '../util/mapbox';
 import TileBounds from './tile_bounds';
 import browser from '../util/browser';
 import {cacheEntryPossiblyAdded} from '../util/tile_request_cache';
-import {CanonicalTileID} from "./tile_id";
-import offscreenCanvasSupported from "../util/offscreen_canvas_supported";
-import {DedupedRequest} from "./deduped_request";
-import {makeFQID} from "../util/fqid";
-import {loadRasterTile} from "./load_raster_tile";
+import {makeFQID} from '../util/fqid';
 import Texture from '../render/texture';
+import {resolveTileProvider, loadTileProvider, processTileJSON} from './tile_provider';
 
-import type Tile from './tile';
+import type {TileProvider} from './tile_provider';
 import type {ISource, SourceEvents, SourceRasterLayer} from './source';
 import type {OverscaledTileID} from './tile_id';
 import type {Map} from '../ui/map';
 import type Dispatcher from '../util/dispatcher';
+import type Tile from './tile';
 import type {Callback} from '../types/callback';
 import type {Cancelable} from '../types/cancelable';
+import type {TileJSON} from '../types/tilejson';
+import type {RequestParameters} from '../util/ajax';
 import type {
     RasterSourceSpecification,
     RasterDEMSourceSpecification,
-    RasterArraySourceSpecification, RasterProjection, CustomTags
+    RasterArraySourceSpecification,
 } from '../style-spec/types';
-import type Actor from '../util/actor';
-import type {WorkerSourceRasterTileRequest} from "./worker_source";
 
 /**
  * A source containing raster tiles.
@@ -51,6 +49,7 @@ import type {WorkerSourceRasterTileRequest} from "./worker_source";
  */
 class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements ISource<T> {
     type: T;
+    provider?: string;
     id: string;
     scope: string;
     minzoom: number;
@@ -61,8 +60,6 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
     // eslint-disable-next-line camelcase
     mapbox_logo: boolean | undefined;
     tileSize: number;
-    customTags?: CustomTags;
-    projection?: RasterProjection;
     minTileCacheSize?: number;
     maxTileCacheSize?: number;
     vectorLayers?: never;
@@ -77,14 +74,11 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
     dispatcher: Dispatcher;
     map: Map;
     tiles: Array<string>;
-    actor: Actor;
-
-    _deduped: DedupedRequest;
-    _subLoading: Record<string, any>;
 
     _loaded: boolean;
-    _options: RasterSourceSpecification | RasterDEMSourceSpecification | RasterArraySourceSpecification;
+    _options: (RasterSourceSpecification | RasterDEMSourceSpecification | RasterArraySourceSpecification) & {provider?: string | false};
     _tileJSONRequest: Cancelable | null | undefined;
+    _tileProvider?: TileProvider<ArrayBuffer | ImageBitmap>;
 
     prepare: undefined;
     afterUpdate: undefined;
@@ -104,18 +98,16 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         this.tileSize = 512;
         this._loaded = false;
 
-        this._deduped = new DedupedRequest();
-        this._subLoading = {};
-
-        this._options = Object.assign({type: 'raster'}, options);
-        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize', 'projection', 'customTags']));
+        this._options = {type: 'raster', ...options};
+        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize']));
     }
 
     load(callback?: Callback<undefined>) {
         this._loaded = false;
         this.fire(new Event('dataloading', {dataType: 'source'}));
         const worldview = this.map.getWorldview();
-        this._tileJSONRequest = loadTileJSON(this._options, this.map._requestManager, null, worldview, (err, tileJSON) => {
+
+        const done = (err?: Error | null, tileJSON?: TileJSON | null) => {
             this._tileJSONRequest = null;
             this._loaded = true;
             if (err) {
@@ -139,7 +131,67 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
             }
 
             if (callback) callback(err);
-        });
+        };
+
+        this.provider = typeof this._options.provider === 'string' ? this._options.provider : undefined;
+        this._tileProvider = undefined;
+        const tileProvider = resolveTileProvider(this._options);
+
+        if (tileProvider instanceof Error) {
+            this._loaded = true;
+            this.fire(new ErrorEvent(tileProvider));
+            if (callback) callback();
+            return;
+        }
+
+        if (this.provider && !tileProvider) {
+            this._loaded = true;
+            this.fire(new ErrorEvent(new Error(`TileProvider "${this.provider}" is not registered`)));
+            if (callback) callback();
+            return;
+        }
+
+        if (tileProvider) {
+            this._tileJSONRequest = this.loadTileJSONWithProvider(tileProvider, done);
+            return;
+        }
+
+        this._tileJSONRequest = loadTileJSON(this._options, this.map._requestManager, null, worldview, done);
+    }
+
+    loadTileJSONWithProvider(tileProvider: {name: string; url: string}, callback: Callback<TileJSON>): Cancelable {
+        this.provider = tileProvider.name;
+        const {request, options} = parseTileJSONRequest(this._options, this.map._requestManager);
+
+        const controller = new AbortController();
+        loadTileProvider(tileProvider.name, tileProvider.url)
+            .then((ProviderClass) => {
+                if (controller.signal.aborted) return;
+                const provider = new ProviderClass(options);
+                if (provider.load && request) {
+                    return provider.load({request}).then(tileJSON => {
+                        this._tileProvider = provider;
+                        return tileJSON;
+                    });
+                }
+                this._tileProvider = provider;
+                return null;
+            })
+            .then((tileJSON) => {
+                if (controller.signal.aborted) return;
+                const result = processTileJSON(this._options, tileJSON, this.map._requestManager);
+                if (result instanceof Error) {
+                    callback(result);
+                } else {
+                    callback(null, result);
+                }
+            })
+            .catch((err) => {
+                if (controller.signal.aborted) return;
+                callback(err instanceof Error ? err : new Error(String(err)));
+            });
+
+        return {cancel: () => controller.abort()};
     }
 
     loaded(): boolean {
@@ -207,147 +259,132 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         return this;
     }
 
-    setMinMaxZoom(minZoom: number, maxZoom: number): this {
-        this.minzoom = minZoom;
-        this.maxzoom = maxZoom;
-        this._options.minzoom = minZoom;
-        this._options.maxzoom = maxZoom;
-        this.reload();
-
-        return this;
-    }
-
     onRemove(_: Map) {
         this.cancelTileJSONRequest();
     }
 
     serialize(): RasterSourceSpecification | RasterDEMSourceSpecification | RasterArraySourceSpecification {
-        return Object.assign({}, this._options);
+        return {...this._options};
     }
 
     hasTile(tileID: OverscaledTileID): boolean {
         return !this.tileBounds || this.tileBounds.contains(tileID.canonical);
     }
 
-    needRevise() {
-        return this.projection && this.projection !== 'MERCATOR';
-    }
-
     loadTile(tile: Tile, callback: Callback<undefined>) {
         const use2x = browser.devicePixelRatio >= 2;
-        const imageLoaded = (error, data, responseHeaders) => {
-            delete tile.request;
+        const url = this.map._requestManager.normalizeTileURL(tile.tileID.canonical.url(this.tiles, this.scheme), use2x, this.tileSize);
+        const request = this.map._requestManager.transformRequest(url, ResourceType.Tile);
 
-            if (tile.aborted) {
+        if (this._tileProvider) {
+            const controller = new AbortController();
+            tile.request = controller;
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises
+            this.loadTileWithProvider(tile, this._tileProvider, request, controller, callback);
+        } else {
+            const controller = new AbortController();
+            tile.request = controller;
+            getImage(request, controller.signal).then(({data, headers}) => {
+                delete tile.request;
+
+                // A cancelled request rejects AbortError and lands in .catch, so only tile.aborted
+                // can reach here.
+                if (tile.aborted) {
+                    tile.state = 'unloaded';
+                    return callback(null);
+                }
+
+                const expiryData = parseExpiryData(headers);
+                if (this.map._refreshExpiredTiles) tile.setExpiryData(expiryData);
+                tile.setTexture(data, this.map.painter);
+                tile.state = 'loaded';
+
+                cacheEntryPossiblyAdded(this.dispatcher);
+                callback(null);
+            }).catch((err: Error) => {
+                delete tile.request;
+
+                if (err.name === 'AbortError') {
+                    tile.state = 'unloaded';
+                    return callback(null);
+                }
+
+                tile.state = 'errored';
+                callback(err);
+            });
+        }
+    }
+
+    async loadTileWithProvider(tile: Tile, provider: TileProvider<ArrayBuffer | ImageBitmap>, request: RequestParameters, controller: AbortController, callback: Callback<undefined>) {
+        const {z, x, y} = tile.tileID.canonical;
+        try {
+            const response = await provider.loadTile({z, x, y}, {request, signal: controller.signal});
+
+            if (controller.signal.aborted) {
                 tile.state = 'unloaded';
                 return callback(null);
             }
 
-            if (error) {
+            if (response == null) {
+                const err: Error & {status?: number} = new Error('Tile not found');
+                err.status = 404;
                 tile.state = 'errored';
-                return callback(error);
+                return callback(err);
             }
 
-            if (!data) return callback(null);
+            if (response.data == null) {
+                tile.state = 'loaded';
+                return callback(null);
+            }
 
-            const expiryData = getExpiryDataFromHeaders(responseHeaders);
-            if (this.map._refreshExpiredTiles) tile.setExpiryData(expiryData);
-            tile.setTexture(data, this.map.painter);
+            const imageBitmap = response.data instanceof ImageBitmap ?
+                response.data :
+                await createImageBitmap(new Blob([response.data]));
+
+            if (controller.signal.aborted) {
+                tile.state = 'unloaded';
+                return callback(null);
+            }
+
+            tile.setTexture(imageBitmap, this.map.painter);
             tile.state = 'loaded';
 
-            cacheEntryPossiblyAdded(this.dispatcher);
+            if (this.map._refreshExpiredTiles) {
+                tile.setExpiryData({
+                    cacheControl: response.cacheControl,
+                    expires: response.expires,
+                });
+            }
+
+            // Tiles provider bypasses mapbox-tiles CacheStorage because
+            // it's not yet integrated with the cache management.
             callback(null);
-        };
-
-        if (this.needRevise()) {
-            this.loadOtherProjectionTile(tile, imageLoaded);
-        } else {
-            const url = this.map._requestManager.normalizeTileURL(tile.tileID.canonical.url(this.tiles, this.scheme), use2x, this.tileSize);
-            const request = this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, tile.tileID.canonical);
-            tile.url = request.url;
-            tile.request = getImage(request, imageLoaded);
-        }
-    }
-
-    loadOtherProjectionTile(tile: Tile, callback: (error, data?, cacheControl?, expires?) => (void)) {
-        const use2x = browser.devicePixelRatio >= 2;
-        if (!tile.actor) {
-            tile.actor = this.dispatcher.getActor();
-        }
-        // 计算覆盖的瓦片
-        tile.actor.send(`raster.getCoverTiles`, {
-            uid: tile.uid,
-            tileID: tile.tileID,
-            projection: this.projection,
-            source: this.id,
-            type: 'raster',
-            scope: this.scope
-        }, (err, data) => {
-            if (tile.state === 'unloaded') return callback(null);
-            if (!data) return callback(err);
-            const coverTiles = data.coverTiles;
-            const requests = coverTiles.map(item => {
-                const ti = new CanonicalTileID(item.z, item.x, item.y);
-                const url = this.map._requestManager.normalizeTileURL(ti.url(this.tiles, this.scheme), use2x, this.tileSize);
-                return {
-                    request: this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, ti),
-                    tile: ti,
-                    x: item.dx,
-                    y: item.dy
-                };
-            });
-            const params: WorkerSourceRasterTileRequest = {
-                uid: tile.uid,
-                source: this.id,
-                type: 'raster',
-                scope: this.scope,
-                requests,
-                ltPixel: data.ltPixel,
-                rbPixel: data.rbPixel,
-                tileID: tile.tileID,
-            };
-
-            if (offscreenCanvasSupported()) {
-                tile.actor.send('raster.loadTile', params, callback);
-            } else {
-                tile.request = loadRasterTile.call(this, params, callback);
-                this.limitedStorage();
+        } catch (err) {
+            if (controller.signal.aborted) {
+                tile.state = 'unloaded';
+                return callback(null);
             }
-        });
-    }
-
-    limitedStorage() {
-        const subLoading = Object.keys(this._subLoading);
-        if (subLoading.length > 300) {
-            // 中间的复用率较低
-            for (let i = 0; i < subLoading.length - 80; i++) {
-                delete this._subLoading[subLoading[i]];
+            if (err instanceof DOMException && err.name === 'AbortError') {
+                tile.state = 'unloaded';
+                return callback(null);
             }
+            tile.state = 'errored';
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            callback(err instanceof Error ? err : new Error(String(err)));
+        } finally {
+            delete tile.request;
         }
     }
 
     abortTile(tile: Tile, callback?: Callback<undefined>) {
-        tile.aborted = true;
-        tile.state = 'unloaded';
         if (tile.request) {
-            tile.request.cancel();
+            tile.request.abort();
             delete tile.request;
-        }
-        if (tile.actor && this.type === 'raster') {
-            tile.actor.send('abortTile', {
-                uid: tile.uid,
-                tileID: tile.tileID,
-                type: 'raster',
-                source: this.id,
-                scope: this.scope
-            });
         }
         if (callback) callback();
     }
 
     unloadTile(tile: Tile, callback?: Callback<undefined>) {
-        tile.aborted = true;
-        tile.state = 'unloaded';
         // Cache the tile texture to avoid re-allocating Textures if they'll just be reloaded
         if (tile.texture && tile.texture instanceof Texture) {
             // Clean everything else up owned by the tile, but preserve the texture.
@@ -361,15 +398,7 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         } else {
             tile.destroy();
         }
-        if (tile.actor && this.type === 'raster') {
-            tile.actor.send('removeTile', {
-                uid: tile.uid,
-                tileID: tile.tileID,
-                type: 'raster',
-                source: this.id,
-                scope: this.scope
-            });
-        }
+
         if (callback) callback();
     }
 

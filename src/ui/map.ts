@@ -1,10 +1,11 @@
 import {version} from '../../package.json';
-import {asyncAll, deepEqual, bindAll, warnOnce, uniqueId, isSafariWithAntialiasingBug} from '../util/util';
+import {asyncAll, deepEqual, bindAll, warnOnce, uniqueId} from '../util/util';
 import browser from '../util/browser';
 import * as DOM from '../util/dom';
 import {getImage, ResourceType} from '../util/ajax';
 import {
     RequestManager,
+    parseAccessToken,
     mapSessionAPI,
     mapLoadEvent,
     postPerformanceEvent,
@@ -14,7 +15,6 @@ import {
     postAddedAppearanceEvent
 } from '../util/mapbox';
 import Style from '../style/style';
-import IndoorManager from '../style/indoor_manager';
 import EvaluationParameters from '../style/evaluation_parameters';
 import Painter from '../render/painter';
 import Transform from '../geo/transform';
@@ -24,8 +24,7 @@ import Camera from './camera';
 import LngLat, {LngLatBounds} from '../geo/lng_lat';
 import Point from '@mapbox/point-geometry';
 import AttributionControl from './control/attribution_control.js';
-import IndoorControl from './control/indoor_control';
-import {supported} from '@mapbox/mapbox-gl-supported';
+import {webGLContextAttributes} from '@mapbox/mapbox-gl-supported';
 import {RGBAImage} from '../util/image';
 import {Event, ErrorEvent} from '../util/evented';
 import {MapMouseEvent} from './events';
@@ -40,7 +39,7 @@ import {Debug} from '../util/debug';
 import config from '../util/config';
 import {isFQID} from '../util/fqid';
 import defaultLocale from './default_locale';
-import {DevTools} from './devtools';
+import {DevTools} from './control/devtools';
 import {InteractionSet} from './interactions';
 import {ImageId} from '../style-spec/expression/types/image_id';
 
@@ -50,12 +49,13 @@ import type SourceCache from '../source/source_cache';
 import type {MapEventType, MapEventOf} from './events';
 import type {PointLike} from '../types/point-like';
 import type {FeatureState} from '../style-spec/expression/index';
-import type {RequestParameters, AJAXError} from '../util/ajax';
+import type {AJAXError} from '../util/ajax';
 import type {RequestTransformFunction} from '../util/mapbox';
 import type {LngLatLike, LngLatBoundsLike} from '../geo/lng_lat';
 import type {CustomLayerInterface} from '../style/style_layer/custom_style_layer';
 import type {StyleImageInterface, StyleImageMetadata} from '../style/style_image';
-import type {StyleOptions, StyleSetterOptions, AnyLayer, FeatureSelector, SourceSelector, QueryRenderedFeaturesParams, QueryRenderedFeaturesetParams} from '../style/style';
+import type {StyleOptions, StyleSetterOptions, AnyLayer, FeatureSelector, SourceSelector, QueryRenderedFeaturesParams, QueryRenderedFeaturesetParams, LayerProperty} from '../style/style';
+import type {FontstackCompositing} from '../style/glyph_loader';
 import type ScrollZoomHandler from './handler/scroll_zoom';
 import type {ScrollZoomHandlerOptions} from './handler/scroll_zoom';
 import type BoxZoomHandler from './handler/box_zoom';
@@ -99,9 +99,11 @@ import type {Callback} from '../types/callback';
 import type {Interaction} from './interactions';
 import type {SpriteFormat} from '../render/image_manager';
 import type {PitchRotateKey} from './handler_manager';
-import type {CanvasSourceOptions} from '../source/canvas_source';
 import type {CustomSourceInterface} from '../source/custom_source';
+import type {CanvasSourceSpecification} from '../source/canvas_source';
 import type {RasterQueryParameters, RasterQueryResult} from '../source/raster_array_tile_source';
+import type {IndoorTileOptions} from '../style/indoor_data';
+import type {PlacementAlgorithmName} from '../symbol/placement_algorithms';
 
 export type ControlPosition = 'top-left' | 'top' | 'top-right' | 'right' | 'bottom-right' | 'bottom' | 'bottom-left' | 'left';
 
@@ -121,6 +123,7 @@ export type SetStyleOptions = {
     };
     localFontFamily: StyleOptions['localFontFamily'];
     localIdeographFontFamily: StyleOptions['localIdeographFontFamily'];
+    fontstackCompositing?: FontstackCompositing;
 };
 
 type Listener<T extends MapEventType> = (event: MapEventOf<T>) => void;
@@ -203,14 +206,17 @@ export type MapOptions = {
     precompilePrograms?: boolean;
     repaint?: boolean;
     fadeDuration?: number;
+    placementAlgorithm?: PlacementAlgorithmName;
     localFontFamily?: string;
     localIdeographFontFamily?: string;
+    fontstackCompositing?: FontstackCompositing;
     performanceMetricsCollection?: boolean;
     tessellationStep?: number;
     scaleFactor?: number;
-    spriteFormat?: SpriteFormat;
     pitchRotateKey?: PitchRotateKey;
 };
+
+const CSS_MATRIX_RE = /matrix.*\((.+)\)/;
 
 const defaultMinZoom = -2;
 const defaultMaxZoom = 22;
@@ -260,6 +266,7 @@ const defaultOptions = {
     maxTileCacheSize: null,
     localIdeographFontFamily: 'sans-serif',
     localFontFamily: null,
+    fontstackCompositing: 'client',
     transformRequest: null,
     accessToken: null,
     fadeDuration: 300,
@@ -269,7 +276,6 @@ const defaultOptions = {
     testMode: false,
     precompilePrograms: true,
     scaleFactor: 1.0,
-    spriteFormat: 'auto',
 } satisfies Omit<MapOptions, 'container'>;
 
 /**
@@ -385,6 +391,9 @@ const defaultOptions = {
  * @param {string} [options.localFontFamily=null] Defines a CSS
  * font-family for locally overriding generation of all glyphs. Font settings from the map's style will be ignored, except for font-weight keywords (light/regular/medium/bold).
  * If set, this option overrides the setting in localIdeographFontFamily.
+ * @param {'client' | 'server'} [options.fontstackCompositing='client'] Controls how multi-font fontstacks are composited.
+ * When `'client'` (the default), each font in a comma-separated fontstack is loaded individually and missing glyphs are filled from subsequent fallback fonts on the client.
+ * When `'server'`, the full fontstack string is passed as-is to the glyph server, which must support server-side fontstack composition.
  * @param {RequestTransformFunction} [options.transformRequest=null] A callback run before the Map makes a request for an external URL. The callback can be used to modify the url, set headers, or set the credentials property for cross-origin requests.
  * Expected to return a {@link RequestParameters} object with a `url` property and optionally `headers` and `credentials` properties.
  * @param {boolean} [options.collectResourceTiming=false] If `true`, Resource Timing API information will be collected for requests made by GeoJSON and Vector Tile web workers (this information is normally inaccessible from the main Javascript thread). Information will be returned in a `resourceTiming` property of relevant `data` events.
@@ -395,7 +404,11 @@ const defaultOptions = {
  * @param {Object} [options.locale=null] A patch to apply to the default localization table for UI strings such as control tooltips. The `locale` object maps namespaced UI string IDs to translated strings in the target language;
  * see [`src/ui/default_locale.js`](https://github.com/mapbox/mapbox-gl-js/blob/main/src/ui/default_locale.js) for an example with all supported string IDs. The object may specify all UI strings (thereby adding support for a new translation) or only a subset of strings (thereby patching the default translation table).
  * @param {boolean} [options.testMode=false] Silences errors and warnings generated due to an invalid accessToken, useful when using the library to write unit tests.
- * @param {'raster' | 'icon_set' | 'auto'} [options.spriteFormat='auto'] The format of the image sprite to use. If set to `'auto'`, vector iconset will be used for all mapbox-hosted sprites and raster sprite for all custom URLs.
+ * @param {number} [options.scaleFactor=1] The scale factor for text and icon sizes in symbol layers.
+ * A value greater than `1` increases label sizes, useful for improving accessibility or adjusting
+ * for high-density displays. The scale factor is clamped per-layer by `text-size-scale-range`
+ * and `icon-size-scale-range` style properties.
+ * This option is experimental and may change in future releases.
  * @param {ProjectionSpecification} [options.projection='mercator'] The [projection](https://docs.mapbox.com/mapbox-gl-js/style-spec/projection/) the map should be rendered in.
  * Supported projections are:
  * * [Albers](https://en.wikipedia.org/wiki/Albers_projection) equal-area conic projection as `albers`
@@ -431,9 +444,7 @@ const defaultOptions = {
  */
 export class Map extends Camera {
     style?: Style;
-    indoor: IndoorManager;
     painter: Painter;
-
     _container: HTMLElement;
     _missingCSSCanary: HTMLElement;
     _canvasContainer: HTMLElement;
@@ -464,7 +475,6 @@ export class Map extends Camera {
     _styleDirty?: boolean;
     _sourcesDirty?: boolean;
     _placementDirty?: boolean;
-    _scaleFactorChanged?: boolean;
     _loaded: boolean;
     _fullyLoaded: boolean; // accounts for placement finishing as well
     _trackResize: boolean;
@@ -478,6 +488,7 @@ export class Map extends Camera {
     _isInitialLoad: boolean;
     _shouldCheckAccess: boolean;
     _fadeDuration: number;
+    _placementAlgorithm: PlacementAlgorithmName;
     _crossSourceCollisions: boolean;
     _collectResourceTiming: boolean;
     _renderTaskQueue: TaskQueue;
@@ -490,6 +501,7 @@ export class Map extends Camera {
     _mapId: number;
     _localIdeographFontFamily: string;
     _localFontFamily?: string;
+    _fontstackCompositing: FontstackCompositing;
     _requestManager: RequestManager;
     _locale: Partial<typeof defaultLocale>;
     _removed: boolean;
@@ -511,6 +523,7 @@ export class Map extends Camera {
     _precompilePrograms: boolean;
     _interactions: InteractionSet;
     _scaleFactor: number;
+    _tokenExpiration?: number;
 
     // `_useExplicitProjection` indicates that a projection is set by a call to map.setProjection()
     _useExplicitProjection: boolean;
@@ -578,7 +591,7 @@ export class Map extends Camera {
 
         const initialOptions = options;
 
-        options = Object.assign({}, defaultOptions, options);
+        options = {...defaultOptions, ...options};
 
         if (options.minZoom != null && options.maxZoom != null && options.minZoom > options.maxZoom) {
             throw new Error(`maxZoom must be greater than or equal to minZoom`);
@@ -596,12 +609,6 @@ export class Map extends Camera {
             throw new Error(`maxPitch must be less than or equal to ${defaultMaxPitch}`);
         }
 
-        // disable antialias with OS/iOS 15.4 and 15.5 due to rendering bug
-        if (options.antialias && isSafariWithAntialiasingBug(window)) {
-            options.antialias = false;
-            warnOnce('Antialiasing is disabled for this WebGL context to avoid browser bug: https://github.com/mapbox/mapbox-gl-js/issues/11609');
-        }
-
         const transform = new Transform(options.minZoom, options.maxZoom, options.minPitch, options.maxPitch, options.renderWorldCopies, null, null);
         super(transform, options);
 
@@ -616,6 +623,7 @@ export class Map extends Camera {
         this._bearingSnap = options.bearingSnap;
         this._refreshExpiredTiles = options.refreshExpiredTiles;
         this._fadeDuration = options.fadeDuration;
+        this._placementAlgorithm = options.placementAlgorithm || 'default';
         this._isInitialLoad = true;
         this._crossSourceCollisions = options.crossSourceCollisions;
         this._collectResourceTiming = options.collectResourceTiming;
@@ -627,7 +635,7 @@ export class Map extends Camera {
         this._markers = [];
         this._popups = [];
         this._mapId = uniqueId();
-        this._locale = Object.assign({}, defaultLocale, options.locale);
+        this._locale = {...defaultLocale, ...options.locale};
         this._clickTolerance = options.clickTolerance;
         this._cooperativeGestures = options.cooperativeGestures;
         this._performanceMetricsCollection = options.performanceMetricsCollection;
@@ -636,7 +644,6 @@ export class Map extends Camera {
         this._containerHeight = 0;
         this._showParseStatus = true;
         this._precompilePrograms = options.precompilePrograms;
-        this._scaleFactorChanged = false;
 
         this._averageElevationLastSampledAt = -Infinity;
         this._averageElevationExaggeration = 0;
@@ -652,9 +659,11 @@ export class Map extends Camera {
         this._scaleFactor = options.scaleFactor;
 
         this._requestManager = new RequestManager(options.transformRequest, options.accessToken, options.testMode);
+        const tokenData = parseAccessToken(options.accessToken || config.ACCESS_TOKEN);
+        if (tokenData && 'atlas' in tokenData && typeof tokenData.atlas === 'number') this._tokenExpiration = tokenData.atlas;
         this._silenceAuthErrors = !!options.testMode;
         if (options.contextCreateOptions) {
-            this._contextCreateOptions = Object.assign({}, options.contextCreateOptions);
+            this._contextCreateOptions = {...options.contextCreateOptions};
         } else {
             this._contextCreateOptions = {};
         }
@@ -681,7 +690,7 @@ export class Map extends Camera {
             this.setMaxBounds(options.maxBounds);
         }
 
-        this._spriteFormat = options.spriteFormat;
+        this._spriteFormat = 'auto';
 
         bindAll([
             '_onWindowOnline',
@@ -693,21 +702,6 @@ export class Map extends Camera {
         ], this);
 
         this._setupContainer();
-
-        if (options.devtools) DevTools.addTo(this);
-
-        DevTools.addParameter(this, 'showOverdrawInspector', 'Debug');
-        DevTools.addParameter(this, 'showTileBoundaries', 'Debug');
-        DevTools.addParameter(this, 'showParseStatus', 'Debug');
-        DevTools.addParameter(this, 'repaint', 'Debug');
-        DevTools.addParameter(this, 'showTileAABBs', 'Debug');
-        DevTools.addParameter(this, 'showPadding', 'Debug');
-        DevTools.addParameter(this, 'showCollisionBoxes', 'Debug', {}, () => this._update());
-        DevTools.addParameter(this.transform, 'freezeTileCoverage', 'Debug', {}, () => this._update());
-        DevTools.addParameter(this, 'showTerrainWireframe', 'Debug');
-        DevTools.addParameter(this, 'showLayers2DWireframe', 'Debug');
-        DevTools.addParameter(this, 'showLayers3DWireframe', 'Debug');
-        DevTools.addParameter(this, '_scaleFactor', 'Scaling', {label: 'scaleFactor', min: 0.1, max: 10.0, step: 0.1}, () => this.setScaleFactor(this._scaleFactor));
 
         this._setupPainter();
         if (this.painter === undefined) {
@@ -732,13 +726,15 @@ export class Map extends Camera {
 
         this._localFontFamily = options.localFontFamily;
         this._localIdeographFontFamily = options.localIdeographFontFamily;
+        this._fontstackCompositing = options.fontstackCompositing;
 
         if (options.style || !options.testMode) {
             const style = options.style || config.DEFAULT_STYLE;
             this.setStyle(style, {
                 config: options.config,
                 localFontFamily: this._localFontFamily,
-                localIdeographFontFamily: this._localIdeographFontFamily
+                localIdeographFontFamily: this._localIdeographFontFamily,
+                fontstackCompositing: this._fontstackCompositing
             });
         }
 
@@ -765,7 +761,7 @@ export class Map extends Camera {
             const bounds = options.bounds;
             if (bounds) {
                 this.resize();
-                this.fitBounds(bounds, Object.assign({}, options.fitBoundsOptions, {duration: 0}));
+                this.fitBounds(bounds, {...options.fitBoundsOptions, duration: 0});
             }
         }
 
@@ -780,7 +776,6 @@ export class Map extends Camera {
             }
             this._postStyleLoadEvent();
             this._postStyleWithAppearanceEvent();
-            this._setupIndoor();
         });
 
         this.on('data', (event) => {
@@ -793,6 +788,14 @@ export class Map extends Camera {
         });
 
         this._interactions = new InteractionSet(this);
+
+        Debug.run(() => {
+            // eslint-disable-next-line no-warning-comments
+            // TODO: deprecate the `devtools` map option in favor of programmatic addition of the DevTools control
+            if (options.devtools) {
+                this.addControl(new DevTools());
+            }
+        });
     }
 
     /*
@@ -836,7 +839,7 @@ export class Map extends Camera {
         this._controls.push(control);
 
         const positionContainer = this._controlPositions[position];
-        if (position.indexOf('bottom') !== -1) {
+        if (position.includes('bottom')) {
             positionContainer.insertBefore(controlElement, positionContainer.firstChild);
         } else {
             positionContainer.appendChild(controlElement);
@@ -883,7 +886,7 @@ export class Map extends Camera {
      * // added === true
      */
     hasControl(control: IControl): boolean {
-        return this._controls.indexOf(control) > -1;
+        return this._controls.includes(control);
     }
 
     /**
@@ -1207,35 +1210,65 @@ export class Map extends Camera {
     getMaxPitch(): number { return this.transform.maxPitch; }
 
     /**
-     * Returns the map's current scale factor.
+     * Returns the map's current scale factor for symbol sizing.
      *
-     * @returns {number} Returns the map's scale factor.
-     * @private
+     * The scale factor multiplies text and icon sizes in symbol layers, useful for
+     * accessibility or adapting to different display densities.
+     * This method is experimental and may change in future releases.
+     *
+     * @memberof Map#
+     * @returns {number} The map's current scale factor (default `1`).
+     * @experimental
      *
      * @example
      * const scaleFactor = map.getScaleFactor();
+     *
+     * @see {@link Map#setScaleFactor}
+     * @see [text-size-scale-range](https://docs.mapbox.com/style-spec/reference/layers/#layout-symbol-text-size-scale-range)
      */
     getScaleFactor(): number {
         return this._scaleFactor;
     }
 
     /**
-     * Sets the map's scale factor.
+     * Sets the map's scale factor for symbol sizing.
      *
-     * @param {number} scaleFactor The scale factor to set.
+     * The scale factor multiplies text and icon sizes in symbol layers. This is useful for
+     * improving accessibility (larger labels for users with vision impairments) or adjusting
+     * label sizes for different display densities.
+     *
+     * The effective scale factor for each symbol layer is clamped to that layer's
+     * `text-size-scale-range` and `icon-size-scale-range` properties,
+     * allowing fine-grained control over which layers scale and by how much.
+     *
+     * Calling this method triggers a re-layout of symbol layers whose effective scale factor changed.
+     * This method is experimental and may change in future releases.
+     *
+     * @memberof Map#
+     * @param {number} scaleFactor The scale factor to apply (default `1`). Values greater
+     * than `1` increase sizes; values less than `1` decrease sizes.
      * @returns {Map} Returns itself to allow for method chaining.
-     * @private
+     * @experimental
      *
      * @example
-     *
+     * // Increase map labels for accessibility (clamped by text-size-scale-range)
      * map.setScaleFactor(2);
+     *
+     * @example
+     * // Reset to default size
+     * map.setScaleFactor(1);
+     *
+     * @see {@link Map#getScaleFactor}
+     * @see [text-size-scale-range](https://docs.mapbox.com/style-spec/reference/layers/#layout-symbol-text-size-scale-range)
+     * @see [icon-size-scale-range](https://docs.mapbox.com/style-spec/reference/layers/#layout-symbol-icon-size-scale-range)
      */
     setScaleFactor(scaleFactor: number): this {
         this._scaleFactor = scaleFactor;
         this.painter.scaleFactor = scaleFactor;
-        DevTools.refresh();
 
-        this._scaleFactorChanged = true;
+        if (this.style) {
+            this.style._setLabelPlacementStale();
+        }
 
         this.style._updateFilteredLayers((layer) => layer.type === 'symbol');
         this._update(true);
@@ -1282,7 +1315,6 @@ export class Map extends Camera {
     /**
      * Returns the map's language, which is used for translating map labels and UI components.
      *
-     * @private
      * @returns {undefined | string | string[]} Returns the map's language code.
      * @example
      * const language = map.getLanguage();
@@ -1303,13 +1335,12 @@ export class Map extends Camera {
     /**
      * Sets the map's language, which is used for translating map labels and UI components.
      *
-     * @private
      * @param {'auto' | string | string[]} [language] A string representing the desired language used for the map's labels and UI components. Languages can only be set on Mapbox vector tile sources.
-     *  Valid language strings must be a [BCP-47 language code](https://en.wikipedia.org/wiki/IETF_language_tag#List_of_subtags). Unsupported BCP-47 codes will not include any translations. Invalid codes will result in an recoverable error.
-     *  If a label has no translation for the selected language, it will display in the label's local language.
-     *  If param is set to `auto`, GL JS will select a user's preferred language as determined by the browser's [`window.navigator.language`](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/language) property.
-     *  If the `locale` property is not set separately, this language will also be used to localize the UI for supported languages.
-     *  If param is set to `undefined` or `null`, it will remove the current map language and reset the language used for translating map labels and UI components.
+     * Valid language strings must be a [BCP-47 language code](https://en.wikipedia.org/wiki/IETF_language_tag#List_of_subtags). Unsupported BCP-47 codes will not include any translations. Invalid codes will result in an recoverable error.
+     * If a label has no translation for the selected language, it will display in the label's local language.
+     * If param is set to `auto`, GL JS will select a user's preferred language as determined by the browser's [`window.navigator.language`](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/language) property.
+     * If the `locale` property is not set separately, this language will also be used to localize the UI for supported languages.
+     * If param is set to `undefined` or `null`, it will remove the current map language and reset the language used for translating map labels and UI components.
      * @returns {Map} Returns itself to allow for method chaining.
      * @example
      * map.setLanguage('es');
@@ -1342,7 +1373,6 @@ export class Map extends Camera {
     /**
      * Returns the code for the map's worldview.
      *
-     * @private
      * @returns {string} Returns the map's worldview code.
      * @example
      * const worldview = map.getWorldview();
@@ -1354,12 +1384,11 @@ export class Map extends Camera {
     /**
      * Sets the map's worldview.
      *
-     * @private
      * @param {string} [worldview] A string representing the desired worldview.
-     *  A worldview determines the way that certain disputed boundaries are rendered.
-     *  Valid worldview strings must be an [ISO alpha-2 country code](https://en.wikipedia.org/wiki/ISO_3166-1#Current_codes).
-     *  Unsupported ISO alpha-2 codes will fall back to the TileJSON's default worldview. Invalid codes will result in a recoverable error.
-     *  If param is set to `undefined` or `null`, it will cause the map to fall back to the TileJSON's default worldview.
+     * A worldview determines the way that certain disputed boundaries are rendered.
+     * Valid worldview strings must be an [ISO alpha-2 country code](https://en.wikipedia.org/wiki/ISO_3166-1#Current_codes).
+     * Unsupported ISO alpha-2 codes will fall back to the TileJSON's default worldview. Invalid codes will result in a recoverable error.
+     * If param is set to `undefined` or `null`, it will cause the map to fall back to the TileJSON's default worldview.
      * @returns {Map} Returns itself to allow for method chaining.
      * @example
      * map.setWorldview('JP');
@@ -1372,7 +1401,7 @@ export class Map extends Camera {
 
         this._worldview = worldview;
         this._styleDirty = true;
-        this.style.reloadSources();
+        this.style.setWorldview(worldview);
 
         return this;
     }
@@ -1441,7 +1470,7 @@ export class Map extends Camera {
 
         const tr = this.transform;
         const projection = tr.projection.name;
-        let projectionHasChanged;
+        let projectionHasChanged: boolean | undefined;
 
         if (projection === 'globe' && tr.zoom >= GLOBE_ZOOM_THRESHOLD_MAX) {
             tr.setMercatorFromTransition();
@@ -1472,7 +1501,7 @@ export class Map extends Camera {
     }
 
     _updateProjection(projection: ProjectionSpecification): this {
-        let projectionHasChanged;
+        let projectionHasChanged: boolean | undefined;
         const oldMercatorFromTransition = this.transform.mercatorFromTransition;
 
         if (projection.name === 'globe' && this.transform.zoom >= GLOBE_ZOOM_THRESHOLD_MAX) {
@@ -2168,9 +2197,7 @@ export class Map extends Camera {
 
     /**
      * Add an interaction — a named gesture handler of a given type.
-     * *This API is experimental and subject to change in future versions*.
      *
-     * @experimental
      * @param {string} id The ID of the interaction.
      * @param {Object} interaction The interaction object with the following properties.
      * @param {string} interaction.type The type of gesture to handle (e.g. 'click').
@@ -2216,9 +2243,7 @@ export class Map extends Camera {
 
     /**
      * Remove an interaction previously added with `addInteraction`.
-     * *This API is experimental and subject to change in future versions*.
      *
-     * @experimental
      * @param {string} id The id of the interaction to remove.
      * @returns {Map} Returns itself to allow for method chaining.
      *
@@ -2296,12 +2321,13 @@ export class Map extends Camera {
      * });
      */
     setStyle(style: StyleSpecification | string | null, options?: SetStyleOptions): this {
-        options = Object.assign({}, {localIdeographFontFamily: this._localIdeographFontFamily, localFontFamily: this._localFontFamily}, options);
+        options = {localIdeographFontFamily: this._localIdeographFontFamily, localFontFamily: this._localFontFamily, fontstackCompositing: this._fontstackCompositing, ...options};
 
         const diffNeeded =
             options.diff !== false &&
             options.localFontFamily === this._localFontFamily &&
             options.localIdeographFontFamily === this._localIdeographFontFamily &&
+            options.fontstackCompositing === this._fontstackCompositing &&
             !options.config; // Rebuild the style from scratch if config is set
 
         if (this.style && style && diffNeeded) {
@@ -2325,6 +2351,7 @@ export class Map extends Camera {
         } else {
             this._localIdeographFontFamily = options.localIdeographFontFamily;
             this._localFontFamily = options.localFontFamily;
+            this._fontstackCompositing = options.fontstackCompositing;
             return this._updateStyle(style, options);
         }
     }
@@ -2348,7 +2375,7 @@ export class Map extends Camera {
         if (style) {
             // Move SetStyleOptions's `config` property to
             // StyleOptions's `initialConfig` for internal use
-            const styleOptions: StyleOptions = Object.assign({}, options);
+            const styleOptions: StyleOptions = {...options};
             if (options && options.config) {
                 styleOptions.initialConfig = options.config;
                 delete styleOptions.config;
@@ -2492,7 +2519,7 @@ export class Map extends Camera {
      * @see Example: GeoJSON source: [Add live realtime data](https://docs.mapbox.com/mapbox-gl-js/example/live-geojson/)
      * @see Example: Raster DEM source: [Add hillshading](https://docs.mapbox.com/mapbox-gl-js/example/hillshade/)
      */
-    addSource(id: string, source: SourceSpecification | CustomSourceInterface<unknown>): this {
+    addSource(id: string, source: SourceSpecification | CanvasSourceSpecification | CustomSourceInterface<unknown>): this {
         if (!this._isValidId(id)) {
             return this;
         }
@@ -2804,9 +2831,9 @@ export class Map extends Camera {
      * @see [Example: Add an icon to the map](https://www.mapbox.com/mapbox-gl-js/example/add-image/)
      */
     loadImage(url: string, callback: Callback<ImageBitmap | HTMLImageElement | ImageData>) {
-        getImage(this._requestManager.transformRequest(url, ResourceType.Image), (err, img) => {
-            callback(err, img instanceof HTMLImageElement ? browser.getImageData(img) : img);
-        });
+        const request = this._requestManager.transformRequest(url, ResourceType.Image);
+        // No signal: loadImage exposes no cancellation, so getImage never rejects AbortError here.
+        getImage(request).then(({data}) => callback(null, data)).catch(callback);
     }
 
     /**
@@ -3490,6 +3517,23 @@ export class Map extends Camera {
     }
 
     /**
+     * Returns the value of a layout, paint, or root-level property in the specified style layer.
+     *
+     * @param {string} layerId The ID of the layer to get the property from.
+     * @param {string} name The name of the property to get. Can be a paint or layout property, or a root-level layer property (`minzoom`, `maxzoom`, `filter`, `slot`, `source`, `source-layer`).
+     * @returns {*} The value of the specified property.
+     * @example
+     * const minzoom = map.getLayerProperty('my-layer', 'minzoom');
+     */
+    getLayerProperty<K extends keyof LayerProperty>(layerId: string, name: K): LayerProperty[K] | null | undefined {
+        if (!this._isValidId(layerId)) {
+            return null;
+        }
+
+        return this.style.getLayerProperty(layerId, name);
+    }
+
+    /**
      * Sets the value of a layout or paint property in the specified style layer.
      *
      * @param {string} layerId The ID of the layer to set the layout or paint property in.
@@ -3501,10 +3545,10 @@ export class Map extends Camera {
      * @example
      * map.setLayerProperty('my-layer', 'visibility', 'none');
      */
-    setLayerProperty<T extends keyof (LayoutSpecification | PaintSpecification)>(
+    setLayerProperty<K extends keyof LayerProperty>(
         layerId: string,
-        name: T,
-        value: LayoutSpecification[T] | PaintSpecification[T],
+        name: K,
+        value: LayerProperty[K],
         options: StyleSetterOptions = {},
     ): this {
         if (!this._isValidId(layerId)) {
@@ -3936,6 +3980,37 @@ export class Map extends Camera {
         return this._triggerCameraUpdate(camera);
     }
 
+    /**
+     * Returns the map's near clip offset. Relevant for orthographic projection only.
+     *
+     * @memberof Map#
+     * @returns {number} The map's current near clip offset.
+     * @experimental
+     *
+     * @example
+     * map.getNearClipOffset();
+     */
+    getNearClipOffset(): number { return this.transform.nearClipOffset; }
+
+    /**
+     * Sets the map's camera near clip offset value. Relevant for orthographic projection only.
+     *
+     * @memberof Map#
+     * @param {number} offset The near clip offset to set.
+     * @returns {Map} Returns itself to allow for method chaining.
+     * @experimental
+     *
+     * @example
+     * map.setNearClipOffset(30)
+     */
+    setNearClipOffset(offset: number): this {
+        const needsUpdate = this.transform.nearClipOffset !== offset;
+
+        this.transform.nearClipOffset = offset;
+
+        return this._update(needsUpdate);
+    }
+
     _triggerCameraUpdate(camera: CameraSpecification): this {
         return this._update(this.transform.setOrthographicProjectionAtLowPitch(camera['camera-projection'] === 'orthographic'));
     }
@@ -4117,26 +4192,18 @@ export class Map extends Camera {
      * map._selectIndoorFloor('floor-1');
      */
     _selectIndoorFloor(floorId: string) {
-        this.indoor.selectFloor(floorId);
+        if (this.style.indoorManager) this.style.indoorManager.selectFloor(floorId);
     }
 
     _setIndoorActiveFloorsVisibility(activeFloorsVisible: boolean) {
-        this.indoor.setActiveFloorsVisibility(activeFloorsVisible);
+        if (this.style.indoorManager) this.style.indoorManager.setActiveFloorsVisibility(activeFloorsVisible);
     }
 
-    _addIndoorControl() {
-        if (!this._indoorControl) {
-            this._indoorControl = new IndoorControl();
+    getIndoorTileOptions(source: string, scope: string): IndoorTileOptions | null {
+        if (!this.style || !this.style.isIndoorEnabled() || !this.style.indoorManager) {
+            return null;
         }
-
-        this.addControl(this._indoorControl, 'right');
-    }
-
-    _removeIndoorControl() {
-        if (!this._indoorControl) {
-            return;
-        }
-        this.removeControl(this._indoorControl);
+        return this.style.indoorManager.getIndoorTileOptions(source, scope);
     }
 
     _updateContainerDimensions() {
@@ -4145,17 +4212,17 @@ export class Map extends Camera {
         const width = this._container.getBoundingClientRect().width || 400;
         const height = this._container.getBoundingClientRect().height || 300;
 
-        let transformValues;
-        let transformScaleWidth;
-        let transformScaleHeight;
+        let transformValues: string[] | undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let transformScaleWidth: any;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let transformScaleHeight: any;
         let el: Element | null | undefined = this._container;
         while (el && (!transformScaleWidth || !transformScaleHeight)) {
             const transformMatrix = window.getComputedStyle(el).transform;
             if (transformMatrix && transformMatrix !== 'none') {
-                transformValues = transformMatrix.match(/matrix.*\((.+)\)/)[1].split(', ');
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+                transformValues = transformMatrix.match(CSS_MATRIX_RE)[1].split(', ');
                 if (transformValues[0] && transformValues[0] !== '0' && transformValues[0] !== '1') transformScaleWidth = transformValues[0];
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
                 if (transformValues[3] && transformValues[3] !== '0' && transformValues[3] !== '1') transformScaleHeight = transformValues[3];
             }
             el = el.parentElement;
@@ -4173,27 +4240,6 @@ export class Map extends Camera {
                 'Please ensure your page includes mapbox-gl.css, as described ' +
                 'in https://www.mapbox.com/mapbox-gl-js/api/.');
         }
-    }
-
-    _setupIndoor() {
-        if (!this.style.isIndoorEnabled()) {
-            return;
-        }
-
-        this.indoor = new IndoorManager(this.style);
-
-        this.on('load', () => {
-            this._addIndoorControl();
-            this.indoor._updateUI(this.transform.zoom, this.transform.center, this.transform.getBounds());
-
-            this.on('move', () => {
-                this.indoor._updateUI(this.transform.zoom, this.transform.center, this.transform.getBounds());
-            });
-
-            this.on('idle', () => {
-                this.indoor._updateUI(this.transform.zoom, this.transform.center, this.transform.getBounds());
-            });
-        });
     }
 
     _setupContainer() {
@@ -4264,11 +4310,9 @@ export class Map extends Camera {
     }
 
     _setupPainter() {
-        const attributes = Object.assign({}, supported.webGLContextAttributes, {
-            failIfMajorPerformanceCaveat: this._failIfMajorPerformanceCaveat,
+        const attributes = {...webGLContextAttributes, failIfMajorPerformanceCaveat: this._failIfMajorPerformanceCaveat,
             preserveDrawingBuffer: this._preserveDrawingBuffer,
-            antialias: this._antialias || false
-        });
+            antialias: this._antialias || false};
 
         const gl = this._canvas.getContext('webgl2', attributes);
 
@@ -4282,6 +4326,12 @@ export class Map extends Camera {
         this.painter = new Painter(gl, this._contextCreateOptions, this.transform, this._scaleFactor, this._worldview);
         this.on('data', (event) => {
             if (event.dataType === 'source') {
+                const elevationSource = this.transform.elevation ? this.transform.elevation._source() : null;
+                // Force a new label placement when a DEM source was updated,
+                // to ensure that labels are placed according to the updated terrain.
+                if (elevationSource && event.sourceCacheId === elevationSource.id && this.style) {
+                    this.style._setLabelPlacementStale();
+                }
                 this.painter.setTileLoadedFlag(true);
             }
         });
@@ -4297,6 +4347,9 @@ export class Map extends Camera {
             this._frame.cancel();
             this._frame = null;
         }
+        if (this.style) {
+            this.style.handleContextLost();
+        }
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         this.fire(new Event('webglcontextlost', {originalEvent: event}));
     }
@@ -4309,6 +4362,7 @@ export class Map extends Camera {
         if (this.style) {
             this.style.clearLayers();
             this.style.imageManager.destroyAtlasTextures();
+            this.style.imageManager.imageAtlasCache.destroyTextures();
             this.style.reloadModels();
             this.style.clearSources();
         }
@@ -4513,12 +4567,8 @@ export class Map extends Camera {
             averageElevationChanged = this._updateAverageElevation(frameStartTime);
         }
 
-        const updatePlacementResult = this.style && this.style._updatePlacement(this.painter, this.painter.transform, this.showCollisionBoxes, fadeDuration, this._crossSourceCollisions, this.painter.replacementSource, this._scaleFactorChanged);
-        if (this._scaleFactorChanged) {
-            this._scaleFactorChanged = false;
-        }
-        if (updatePlacementResult) {
-            this._placementDirty = updatePlacementResult.needsRerender;
+        if (this.style) {
+            this._placementDirty = this.style._updatePlacement(this.painter.transform, this.showCollisionBoxes, fadeDuration, this._crossSourceCollisions, this.painter.replacementSource, this._placementAlgorithm);
         }
 
         // Actually draw
@@ -4543,6 +4593,7 @@ export class Map extends Camera {
                 gpuTiming: !!this.listens('gpu-timing-layer'),
                 gpuTimingDeferredRender: !!this.listens('gpu-timing-deferred-render'),
                 speedIndexTiming: this.speedIndexTiming,
+                paintStartTimeStamp,
             });
         }
 
@@ -4654,6 +4705,10 @@ export class Map extends Camera {
                         this.fire(new Event('speedindexcompleted', {speedIndex: speedIndexNumber}));
                         this.speedIndexTiming = false;
                     }
+                }
+
+                if (willIdle && this.style) {
+                    this.style.handleIdle();
                 }
             }
         }
@@ -4768,8 +4823,14 @@ export class Map extends Camera {
     * and the Mapbox Terms of Service are available at https://www.mapbox.com/tos/
     ******************************************************************************/
 
-    _authenticate() {
+    _isTokenExpired() {
+        return this._tokenExpiration != null && Date.now() > this._tokenExpiration;
+    }
 
+    _revokeAuth() {
+    }
+
+    _authenticate() {
     }
 
     /***** END WARNING - REMOVAL OR MODIFICATION OF THE
@@ -4851,6 +4912,7 @@ export class Map extends Camera {
      * map.remove();
      */
     remove() {
+        if (this._removed) return;
         if (this._hash) this._hash.remove();
 
         for (const control of this._controls) control.onRemove(this);
@@ -4864,9 +4926,6 @@ export class Map extends Camera {
         this._domRenderTaskQueue.clear();
         if (this.style) {
             this.style.destroy();
-        }
-        if (this.indoor) {
-            this.indoor.destroy();
         }
         this.painter.destroy();
         if (this.handlers) this.handlers.destroy();
@@ -4985,7 +5044,6 @@ export class Map extends Camera {
     set showTileBoundaries(value: boolean) {
         if (this._showTileBoundaries === value) return;
         this._showTileBoundaries = value;
-        DevTools.refresh();
         this._update();
     }
 
@@ -5007,7 +5065,6 @@ export class Map extends Camera {
     set showParseStatus(value: boolean) {
         if (this._showParseStatus === value) return;
         this._showParseStatus = value;
-        DevTools.refresh();
         this._update();
     }
 
@@ -5028,7 +5085,6 @@ export class Map extends Camera {
     set showTerrainWireframe(value: boolean) {
         if (this._showTerrainWireframe === value) return;
         this._showTerrainWireframe = value;
-        DevTools.refresh();
         this._update();
     }
 
@@ -5049,7 +5105,6 @@ export class Map extends Camera {
     set showLayers2DWireframe(value: boolean) {
         if (this._showLayers2DWireframe === value) return;
         this._showLayers2DWireframe = value;
-        DevTools.refresh();
         this._update();
     }
 
@@ -5070,8 +5125,18 @@ export class Map extends Camera {
     set showLayers3DWireframe(value: boolean) {
         if (this._showLayers3DWireframe === value) return;
         this._showLayers3DWireframe = value;
-        DevTools.refresh();
         this._update();
+    }
+
+    get showElevationIdDebug(): boolean { return this.painter ? this.painter._debugParams.showElevationIdDebug : false; }
+    set showElevationIdDebug(value: boolean) {
+        if (!this.painter || this.painter._debugParams.showElevationIdDebug === value) return;
+        this.painter._debugParams.showElevationIdDebug = value;
+        if (this.style && value) {
+            this.style._reloadSources();
+        } else {
+            this._update();
+        }
     }
 
     /**
@@ -5105,7 +5170,6 @@ export class Map extends Camera {
     set showPadding(value: boolean) {
         if (this._showPadding === value) return;
         this._showPadding = value;
-        DevTools.refresh();
         this._update();
     }
 
@@ -5124,11 +5188,10 @@ export class Map extends Camera {
     set showCollisionBoxes(value: boolean) {
         if (this._showCollisionBoxes === value) return;
         this._showCollisionBoxes = value;
-        DevTools.refresh();
         if (this.style && value) {
             // When we turn collision boxes on we have to generate them for existing tiles
             // When we turn them off, there's no cost to leaving existing boxes in place
-            this.style._generateCollisionBoxes();
+            this.style._reloadSources();
         } else {
             // Otherwise, call an update to remove collision boxes
             this._update();
@@ -5151,7 +5214,6 @@ export class Map extends Camera {
     set showOverdrawInspector(value: boolean) {
         if (this._showOverdrawInspector === value) return;
         this._showOverdrawInspector = value;
-        DevTools.refresh();
         this._update();
     }
 
@@ -5169,7 +5231,6 @@ export class Map extends Camera {
     set repaint(value: boolean) {
         if (this._repaint !== value) {
             this._repaint = value;
-            DevTools.refresh();
             this.triggerRepaint();
         }
     }
@@ -5187,7 +5248,6 @@ export class Map extends Camera {
     set showTileAABBs(value: boolean) {
         if (this._showTileAABBs === value) return;
         this._showTileAABBs = value;
-        DevTools.refresh();
         if (!value) { Debug.clearAabbs(); return; }
         this._update();
     }

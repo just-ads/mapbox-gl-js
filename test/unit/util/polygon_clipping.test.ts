@@ -1,7 +1,8 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import {describe, test, expect} from '../../util/vitest';
-import {polygonSubdivision, gridSubdivision, clip} from '../../../src/util/polygon_clipping';
+import {gridSubdivision} from '../../../src/util/polygon_clipping';
+import {polygonSubdivision, clip, roundWithBoundaryTolerance, VertexCanonicalizer} from '../../../3d-style/util/polygon_clipping_hd';
 import Point from '@mapbox/point-geometry';
 import {EdgeIterator} from '../../../3d-style/elevation/elevation_feature';
 
@@ -563,5 +564,151 @@ describe('polygon subdivision', () => {
         expect(result[6][0]).toEqualRing([new Point(90, 22), new Point(100, 20), new Point(100, 30), new Point(90, 33), new Point(90, 22)]);
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         expect(result[7][0]).toEqualRing([new Point(90, 47), new Point(100, 50), new Point(100, 60), new Point(90, 58), new Point(90, 47)]);
+    });
+
+    test('short subdivision edge extended to cross polygon', () => {
+        // Regression test: edge endpoints are inside the polygon boundary.
+        // Without edge extension, the strip would not fully cross the polygon,
+        // causing martinez.diff() to produce invalid output.
+        const subject = [new Point(0, 0), new Point(100, 0), new Point(100, 40), new Point(0, 40), new Point(0, 0)];
+
+        const edges = new MockEdgeIterator([
+            [new Point(50, 2), new Point(50, 38)]
+        ]);
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        const result = polygonSubdivision(convertToCollection(subject), edges, 0.15);
+
+        expect(result.length).toBe(2);
+        expect(result[0].length).toBe(1);
+        expect(result[1].length).toBe(1);
+    });
+
+    test('canonical rounding fixes precision issues', () => {
+        // Real-world polygon that caused precision issues without canonical rounding.
+        // The martinez library can produce nearly-coincident vertices that should be
+        // identical, causing rendering artifacts.
+        const subject = [
+            new Point(1569, 3677), new Point(1737, 3023), new Point(1825, 2634),
+            new Point(1952, 1864), new Point(2077, 728), new Point(2111, -1),
+            new Point(4966, -1), new Point(4960, 192), new Point(4843, 1624),
+            new Point(4681, 2642), new Point(4455, 3748), new Point(4278, 4475),
+            new Point(1569, 3677)
+        ];
+
+        const edges = new MockEdgeIterator([
+            [new Point(3959, -8562), new Point(868, -7651)],
+            [new Point(4357, -7209), new Point(1246, -6374)],
+            [new Point(4703, -5781), new Point(1546, -5138)],
+            [new Point(4945, -4322), new Point(1752, -3891)],
+            [new Point(5013, -2859), new Point(1970, -2624)],
+            [new Point(5086, -1399), new Point(2035, -1346)],
+            [new Point(5063, 67), new Point(2014, -69)],
+            [new Point(4954, 1538), new Point(1921, 1195)],
+            [new Point(4730, 3006), new Point(1731, 2437)],
+            [new Point(4440, 4288), new Point(1463, 3611)]
+        ]);
+
+        const result = polygonSubdivision([subject], edges);
+
+        expect(result.length).toBe(5);
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        expect(result[0][0]).toEqualRing([
+            new Point(1569, 3677), new Point(1579, 3637), new Point(4330, 4263),
+            new Point(4278, 4475), new Point(1569, 3677)
+        ]);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        expect(result[1][0]).toEqualRing([
+            new Point(1579, 3637), new Point(1737, 3023), new Point(1825, 2634),
+            new Point(1854, 2460), new Point(4611, 2983), new Point(4455, 3748),
+            new Point(4330, 4263), new Point(1579, 3637)
+        ]);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        expect(result[2][0]).toEqualRing([
+            new Point(1854, 2460), new Point(1952, 1864), new Point(2024, 1207),
+            new Point(4851, 1526), new Point(4843, 1624), new Point(4681, 2642),
+            new Point(4611, 2983), new Point(1854, 2460)
+        ]);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        expect(result[3][0]).toEqualRing([
+            new Point(2024, 1207), new Point(2077, 728), new Point(2111, -1),
+            new Point(3539, -1), new Point(4964, 63), new Point(4960, 192),
+            new Point(4851, 1526), new Point(2024, 1207)
+        ]);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        expect(result[4][0]).toEqualRing([
+            new Point(3539, -1), new Point(4966, -1), new Point(4964, 63),
+            new Point(3539, -1)
+        ]);
+    });
+
+    test('roundWithBoundaryTolerance keeps near-half values consistent', () => {
+        // Captured from a HD-road bridge guard rail bug: martinez emitted two
+        // post-scale floats for the same logical cut endpoint. The old 128-grid
+        // snap moved them to opposite sides of the integer rounding boundary,
+        // so the two adjacent sub-polygons no longer shared the cut edge — and
+        // their unpaired cut walls rendered as a phantom guard rail crossing
+        // the road.
+        const oldSnapRound = (value: number) => Math.round(Math.round(value * 65536 / 128) * 128 / 65536);
+        expect(oldSnapRound(4861.499005)).toBe(4861);
+        expect(oldSnapRound(4861.499027)).toBe(4862);
+        expect(roundWithBoundaryTolerance(4861.499005, 1e-3)).toBe(4862);
+        expect(roundWithBoundaryTolerance(4861.499027, 1e-3)).toBe(4862);
+
+        // The MAPS3D-2108 shape: values straddling n + 0.5 also collapse to the
+        // same integer.
+        expect(roundWithBoundaryTolerance(3538.4998, 1e-3)).toBe(3539);
+        expect(roundWithBoundaryTolerance(3538.5002, 1e-3)).toBe(3539);
+
+        // Outside the tolerance window the function matches Math.round.
+        expect(roundWithBoundaryTolerance(4861.4, 1e-3)).toBe(4861);
+        expect(roundWithBoundaryTolerance(4861.6, 1e-3)).toBe(4862);
+        expect(roundWithBoundaryTolerance(4861.498, 1e-3)).toBe(4861);
+        expect(roundWithBoundaryTolerance(4861.502, 1e-3)).toBe(4862);
+
+        // Negative values are handled symmetrically.
+        expect(roundWithBoundaryTolerance(-4861.4995, 1e-3)).toBe(-4861);
+        expect(roundWithBoundaryTolerance(-4861.5005, 1e-3)).toBe(-4861);
+    });
+
+    test('VertexCanonicalizer collapses arbitrarily close pairs to one integer', () => {
+        // Two floats representing the same logical martinez vertex can land on
+        // opposite sides of any per-vertex rounding-rule discontinuity. Cross-
+        // vertex canonicalization makes them adopt a single integer regardless
+        // of the rounding rule.
+        const cases: Array<[[number, number], [number, number]]> = [
+            // Drift 1e-4 across the boundary at n + 0.5.
+            [[1234.499, 0], [1234.4989, 0]],
+            // Drift 1e-3 straddling the n + 0.5 boundary.
+            [[1234.4995, 0], [1234.4985, 0]],
+            // Tiny drift just below n + 0.5.
+            [[1234.4984, 0], [1234.4985, 0]],
+            // Mirror case for negative coords (JS Math.round breaks ties toward
+            // +inf, so the conflict edge is on the more-negative side).
+            [[-1234.5015, 0], [-1234.5016, 0]],
+            // Drift equal to the tolerance, straddling n + 0.5.
+            [[1234.498, 0], [1234.499, 0]],
+        ];
+
+        for (const [first, second] of cases) {
+            const c = new VertexCanonicalizer(1e-3);
+            const a = c.canonicalize(first[0], first[1]);
+            const b = c.canonicalize(second[0], second[1]);
+            expect(b).toEqual(a);
+        }
+    });
+
+    test('VertexCanonicalizer chains aliases so close pairs survive intermediate hops', () => {
+        // The third vertex is within tolerance of the second but outside
+        // tolerance of the first. It must adopt the cluster's integer pair
+        // anyway — which requires the second vertex's pre-round position to
+        // have been stored as an alias when it adopted the cluster.
+        const c = new VertexCanonicalizer(1e-3);
+        const a = c.canonicalize(1234.4976, 0);
+        const b = c.canonicalize(1234.4985, 0);
+        const third = c.canonicalize(1234.4995, 0);
+        expect(b).toEqual(a);
+        expect(third).toEqual(a);
     });
 });

@@ -6,6 +6,7 @@
 #pragma mapbox: define lowp float opacity
 
 uniform float u_emissive_strength;
+uniform lowp float u_opacity_multiplier;
 
 #ifdef RENDER_SHADOWS
 uniform vec3 u_ground_shadow_factor;
@@ -27,12 +28,18 @@ void main() {
     #pragma mapbox: initialize highp vec4 color
     #pragma mapbox: initialize lowp float opacity
 
+    vec2 cutout_factors = vec2(0.0);
+#ifdef FEATURE_CUTOUT
+    cutout_factors = get_cutout_factors(gl_FragCoord);
+#endif
+
     vec4 out_color = color;
 
 #ifdef LIGHTING_3D_MODE
     out_color = apply_lighting_with_emission_ground(out_color, u_emissive_strength);
 #ifdef RENDER_SHADOWS
     float light = shadowed_light_factor(v_pos_light_view_0, v_pos_light_view_1, v_depth);
+    light = mix(light, 1.0, cutout_factors.y);
     out_color.rgb *= mix(u_ground_shadow_factor, vec3(1.0), light);
 #endif // RENDER_SHADOWS
 #endif // LIGHTING_3D_MODE
@@ -41,7 +48,7 @@ void main() {
     out_color = fog_dither(fog_apply_premultiplied(out_color, v_fog_pos));
 #endif
 
-    out_color *= opacity;
+    out_color *= (opacity * u_opacity_multiplier);
 
 #ifdef INDICATOR_CUTOUT
     // apply cutout if the fragment is not an underground polygon (no need)
@@ -51,7 +58,7 @@ void main() {
 #endif
 
 #ifdef FEATURE_CUTOUT
-    out_color = apply_feature_cutout(out_color, gl_FragCoord);
+    out_color = apply_feature_cutout(out_color, gl_FragCoord, cutout_factors.x);
 #endif
 
     glFragColor = out_color;

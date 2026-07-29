@@ -11,10 +11,10 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 function stringify(v) {
     let s = compactStringify(v);
     // http://timelessrepo.com/json-isnt-a-javascript-subset
-    if (s.indexOf('\u2028') >= 0) {
+    if (s.includes('\u2028')) {
         s = s.replace(/\u2028/g, '\\u2028');
     }
-    if (s.indexOf('\u2029') >= 0) {
+    if (s.includes('\u2029')) {
         s = s.replace(/\u2029/g, '\\u2029');
     }
     return s;

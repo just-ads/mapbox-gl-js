@@ -1,60 +1,8 @@
 {
-  "compilerOptions": {
-    "allowImportingTsExtensions": true,
-    "allowJs": true,
-    "allowSyntheticDefaultImports": true,
-    "checkJs": true,
-    "erasableSyntaxOnly": true,
-    "esModuleInterop": true,
-    "incremental": true,
-    "isolatedModules": true,
-    "module": "ESNext",
-    "moduleDetection": "force",
-    "moduleResolution": "bundler",
-    "noEmit": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": true,
-    "noUncheckedIndexedAccess": true,
-    "resolveJsonModule": true,
-    "strict": false,
-    "strictBindCallApply": true,
-    "strictBuiltinIteratorReturn": true,
-    "noImplicitThis": true,
-    "target": "es2022",
-    "useDefineForClassFields": false,
-    "useUnknownInCatchVariables": true,
-    "verbatimModuleSyntax": true,
-    "lib": [
-      "ESNext",
-      "DOM",
-      "DOM.Iterable"
-    ],
-    "types": [
-      "node",
-      "geojson",
-      "offscreencanvas"
-    ]
-  },
-  "include": [
-    "./src/**/*",
-    "./test/**/*",
-    "./build/**/*",
-    "./3d-style/**/*",
-    "./*.config.*"
-  ],
-  "exclude": [
-    "./dist",
-    "./debug",
-    "./rollup",
-    "./node_modules",
-    "./src/style-spec/bin",
-    "./src/style-spec/dist",
-    "./test/release/**/*",
-    "./test/integration/**/*",
-    "./test/build/vite/**/*",
-    "./test/build/webpack/**/*",
-    "./test/build/typings/**/*",
-    "./test/build/style-spec.test.js",
-    "./test/build/browserify-test-fixture.js"
+  "files": [],
+  "references": [
+    {"path": "./tsconfig.browser.json"},
+    {"path": "./tsconfig.strict.json"},
+    {"path": "./tsconfig.node.json"}
   ]
 }

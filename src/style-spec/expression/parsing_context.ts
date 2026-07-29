@@ -10,7 +10,7 @@ import CollatorExpression from './definitions/collator';
 import Within from './definitions/within';
 import Distance from './definitions/distance';
 import Config from './definitions/config';
-import {isGlobalPropertyConstant, isFeatureConstant} from './is_constant';
+import {isGlobalPropertyConstantSet, isFeatureConstant} from './is_constant';
 import Var from './definitions/var';
 
 import type {Expression, ExpressionRegistry} from './expression';
@@ -23,8 +23,6 @@ import type {ConfigOptions} from '../types/config_options';
  */
 class ParsingContext {
     registry: ExpressionRegistry;
-    path: Array<number | string>;
-    key: string;
     scope: Scope;
     errors: Array<ParsingError>;
     _scope: string | null | undefined;
@@ -37,6 +35,14 @@ class ParsingContext {
     // `expectedType`.
     expectedType: Type | null | undefined;
 
+    // Lazy path: materialized from _parentCtx on first read of `path` or `key`.
+    // When _path is non-null the parent link fields are unused.
+    private _path: Array<number | string> | null;
+    private _parentCtx: ParsingContext | null;
+    private _pathIndex: number | null;
+    private _pathKey: string | null;
+    private _key: string | undefined;
+
     constructor(
         registry: ExpressionRegistry,
         path: Array<number | string> = [],
@@ -48,14 +54,41 @@ class ParsingContext {
         iconImageUseTheme?: string
     ) {
         this.registry = registry;
-        this.path = path;
-        this.key = path.map(part => { if (typeof part === 'string') { return `['${part}']`; } return `[${part}]`; }).join('');
+        this._path = path;
+        this._parentCtx = null;
+        this._pathIndex = null;
+        this._pathKey = null;
         this.scope = scope;
         this.errors = errors;
         this.expectedType = expectedType;
         this._scope = _scope;
         this.options = options;
         this.iconImageUseTheme = iconImageUseTheme;
+    }
+
+    get path(): Array<number | string> {
+        if (this._path === null) {
+            // Materialize the path from the parent chain exactly once.
+            let base = this._parentCtx.path;
+            if (this._pathIndex !== null) base = base.concat(this._pathIndex);
+            if (this._pathKey !== null) base = base.concat(this._pathKey);
+            this._path = base;
+            this._parentCtx = null;
+        }
+        return this._path;
+    }
+
+    get key(): string {
+        if (this._key === undefined) {
+            const path = this.path;
+            let key = '';
+            for (let i = 0; i < path.length; i++) {
+                const part = path[i];
+                key += typeof part === 'string' ? `['${part}']` : `[${part}]`;
+            }
+            this._key = key;
+        }
+        return this._key;
     }
 
     /**
@@ -109,16 +142,6 @@ class ParsingContext {
     ): Expression | null | void {
         if (expr === null || typeof expr === 'string' || typeof expr === 'boolean' || typeof expr === 'number') {
             expr = ['literal', expr];
-        }
-
-        function annotate(parsed: Expression, type: Type, typeAnnotation: 'assert' | 'coerce' | 'omit') {
-            if (typeAnnotation === 'assert') {
-                return new Assertion(type, [parsed]);
-            } else if (typeAnnotation === 'coerce') {
-                return new Coercion(type, [parsed]);
-            } else {
-                return parsed;
-            }
         }
 
         if (Array.isArray(expr)) {
@@ -195,12 +218,10 @@ class ParsingContext {
         expectedType?: Type | null,
         bindings?: Array<[string, Expression]>,
     ): ParsingContext {
-        let path = typeof index === 'number' ? this.path.concat(index) : this.path;
-        path = typeof key === 'string' ? path.concat(key) : path;
         const scope = bindings ? this.scope.concat(bindings) : this.scope;
-        return new ParsingContext(
+        const child = new ParsingContext(
             this.registry,
-            path,
+            undefined,
             expectedType || null,
             scope,
             this.errors,
@@ -208,6 +229,46 @@ class ParsingContext {
             this.options,
             this.iconImageUseTheme
         );
+        // Lazily link to parent; path array is only materialized when `path` or
+        // `key` is actually read (i.e. on error paths).
+        if (typeof index === 'number' || typeof key === 'string') {
+            child._path = null;
+            child._parentCtx = this;
+            child._pathIndex = typeof index === 'number' ? index : null;
+            child._pathKey = typeof key === 'string' ? key : null;
+        } else {
+            // No new path segments — share the already-materialized (or still-lazy)
+            // path from this context without any allocation.
+            child._path = this._path;
+            child._parentCtx = this._parentCtx;
+            child._pathIndex = this._pathIndex;
+            child._pathKey = this._pathKey;
+        }
+        return child;
+    }
+
+    /**
+     * Returns a fresh context that shares the same path position as this one
+     * but has an empty errors array. Used by CompoundExpression to probe
+     * overload signatures without polluting the parent errors list.
+     * @private
+     */
+    _forkForSignature(): ParsingContext {
+        const child = new ParsingContext(
+            this.registry,
+            undefined,
+            null,
+            this.scope,
+            [],
+            this._scope,
+            this.options,
+            this.iconImageUseTheme
+        );
+        child._path = this._path;
+        child._parentCtx = this._parentCtx;
+        child._pathIndex = this._pathIndex;
+        child._pathKey = this._pathKey;
+        return child;
     }
 
     /**
@@ -226,14 +287,30 @@ class ParsingContext {
      * Returns null if `t` is a subtype of `expected`; otherwise returns an
      * error message and also pushes it to `this.errors`.
      */
-    checkSubtype(expected: Type, t: Type): string | null | undefined {
+    checkSubtype(expected: Type, t: Type, index?: number): string | null | undefined {
         const error = checkSubtype(expected, t);
-        if (error) this.error(error);
+        if (error) this.error(error, ...(typeof index === 'number' ? [index] : []));
         return error;
     }
 }
 
 export default ParsingContext;
+
+const CONSTANT_FOLD_EXCLUDED_GLOBALS = new Set([
+    'zoom', 'heatmap-density', 'worldview', 'line-progress', 'raster-value',
+    'sky-radial-progress', 'accumulated', 'is-supported-script', 'pitch',
+    'distance-from-center', 'measure-light', 'raster-particle-speed', 'is-active-floor',
+]);
+
+function annotate(parsed: Expression, type: Type, typeAnnotation: 'assert' | 'coerce' | 'omit') {
+    if (typeAnnotation === 'assert') {
+        return new Assertion(type, [parsed]);
+    } else if (typeAnnotation === 'coerce') {
+        return new Coercion(type, [parsed]);
+    } else {
+        return parsed;
+    }
+}
 
 function isConstant(expression: Expression) {
     if (expression instanceof Var) {
@@ -276,5 +353,5 @@ function isConstant(expression: Expression) {
     }
 
     return isFeatureConstant(expression) &&
-        isGlobalPropertyConstant(expression, ['zoom', 'heatmap-density', 'worldview', 'line-progress', 'raster-value', 'sky-radial-progress', 'accumulated', 'is-supported-script', 'pitch', 'distance-from-center', 'measure-light', 'raster-particle-speed']);
+        isGlobalPropertyConstantSet(expression, CONSTANT_FOLD_EXCLUDED_GLOBALS);
 }

@@ -30,16 +30,24 @@ export default function validateImport(options: ImportValidatorOptions): Validat
         enumerable: false
     });
 
-    let errors = validateObject(Object.assign({}, options, {
+    let errors = validateObject({
+        ...options,
         value: importSpec,
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         valueSpec: styleSpec.import
-    }));
+    });
 
     // Empty string is reserved for the root style id
     if (unbundle(importSpec.id) === '') {
         const key = `${options.key}.id`;
         errors.push(new ValidationError(key, importSpec, `import id can't be an empty string`));
+    }
+
+    // Reject reserved prototype-pollution key — the import id is used as a scope
+    // string that becomes a dictionary key in several runtime caches.
+    if (unbundle(importSpec.id) === '__proto__') {
+        const key = `${options.key}.id`;
+        errors.push(new ValidationError(key, importSpec, `import id can't be "__proto__"`));
     }
 
     if (data) {

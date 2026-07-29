@@ -1,6 +1,6 @@
-import murmur3 from 'murmurhash-js';
+import murmur3 from '../util/murmur3';
 import {register} from '../util/web_worker_transfer';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 
 type SerializedFeaturePositionMap = {
     ids: Float64Array;
@@ -21,12 +21,12 @@ export default class FeaturePositionMap {
         this.indexed = false;
     }
 
-    add(id: unknown, index: number, start: number, end: number) {
+    add(id: string | number, index: number, start: number, end: number) {
         this.ids.push(getNumericId(id));
         this.positions.push(index, start, end);
     }
 
-    eachPosition(id: unknown, fn: (index: number, start: number, end: number) => void) {
+    eachPosition(id: string | number, fn: (index: number, start: number, end: number) => void) {
         assert(this.indexed);
 
         const intId = getNumericId(id);
@@ -72,7 +72,7 @@ export default class FeaturePositionMap {
         // so TypedArray vs Array distinction that TS points out doesn't matter
         map.ids = obj.ids as unknown as number[];
         map.positions = obj.positions as unknown as number[];
-        let prev;
+        let prev: number | undefined;
         for (const id of map.ids) {
             if (id !== prev) map.uniqueIds.push(id);
             prev = id;
@@ -82,12 +82,12 @@ export default class FeaturePositionMap {
     }
 }
 
-function getNumericId(value: unknown): number {
+function getNumericId(value: string | number): number {
     const numValue = +value;
     if (Number.isSafeInteger(numValue)) {
         return numValue;
     }
-    return murmur3(String(value as number));
+    return murmur3(String(value));
 }
 
 // custom quicksort that sorts ids, indices and offsets together (by ids)

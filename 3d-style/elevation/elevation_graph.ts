@@ -1,5 +1,5 @@
 import {register} from '../../src/util/web_worker_transfer';
-import assert from 'assert';
+import assert from '../../src/style-spec/util/assert';
 import EXTENT from '../../src/style-spec/data/extent';
 
 import type Point from "@mapbox/point-geometry";
@@ -22,30 +22,6 @@ export interface ElevationPortalEdge {
     hash: bigint;
     isTunnel: boolean;
     type: ElevationPortalType;
-}
-
-export type LeveledPolygon = {
-    geometry: Point[][];
-    zLevel: number;
-};
-
-export class ElevationPolygons {
-    polygons: Map<number, Array<LeveledPolygon>> = new Map();
-
-    add(key: number, ...values: LeveledPolygon[]) {
-        const poly = this.polygons.get(key);
-        if (!poly) {
-            this.polygons.set(key, values);
-        } else {
-            poly.push(...values);
-        }
-    }
-
-    merge(elevationPolygons: ElevationPolygons) {
-        for (const [key, value] of elevationPolygons.polygons) {
-            this.add(key, ...value);
-        }
-    }
 }
 
 export class ElevationPortalGraph {
@@ -136,4 +112,3 @@ export class ElevationPortalGraph {
 }
 
 register(ElevationPortalGraph, 'ElevationPortalGraph');
-register(ElevationPolygons, "ElevationPolygons");

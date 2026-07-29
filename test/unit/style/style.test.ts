@@ -23,15 +23,13 @@ import {
 import Tile from '../../../src/source/tile';
 import {OverscaledTileID} from '../../../src/source/tile_id';
 import {ImageId} from '../../../src/style-spec/expression/types/image_id';
-import {StubMap} from './utils';
+import {StubMap, newStubStyle} from './utils';
 import {makeFQID} from '../../../src/util/fqid';
 
 function createStyleJSON(properties) {
-    return Object.assign({
-        "version": 8,
+    return {"version": 8,
         "sources": {},
-        "layers": []
-    }, properties);
+        "layers": [], ...properties};
 }
 
 function createSource() {
@@ -62,7 +60,8 @@ describe('Style', () => {
         });
         vi.spyOn(Style, 'registerForPluginStateChange');
         const style = new Style(new StubMap());
-        vi.spyOn(style.dispatcher, 'broadcast').mockImplementation(() => {});
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        vi.spyOn(style.dispatcher, 'broadcast').mockImplementation(() => Promise.resolve([]));
         expect(Style.registerForPluginStateChange).toHaveBeenCalledTimes(1);
 
         setRTLTextPlugin("/plugin.js",);
@@ -80,7 +79,7 @@ describe('Style', () => {
     /**
      * @note Currently we cannot mock workers
      * @see https://github.com/vitest-dev/vitest/issues/4033
-     * @todo Test with @vitest/web-worker
+     * @todo Test with `@vitest/web-worker`
      */
     test.skip('loads plugin immediately if already registered', async () => {
         clearRTLTextPlugin();
@@ -296,11 +295,11 @@ describe('Style#loadJSON', () => {
         const err = event.error;
         expect(err).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        expect(err.toString().indexOf('-source-layer-') !== -1).toBeTruthy();
+        expect(err.toString().includes('-source-layer-')).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        expect(err.toString().indexOf('-source-id-') !== -1).toBeTruthy();
+        expect(err.toString().includes('-source-id-')).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        expect(err.toString().indexOf('-layer-id-') !== -1).toBeTruthy();
+        expect(err.toString().includes('-layer-id-')).toBeTruthy();
     });
 
     test('sets up layer event forwarding', async () => {
@@ -326,6 +325,94 @@ describe('Style#loadJSON', () => {
             });
 
         });
+    });
+});
+
+// `_layers`, `_otherSourceCaches`, `_symbolSourceCaches`, and
+// `_fillExtrusionSourceCaches` are indexed by raw IDs from untrusted style
+// JSON. If they were initialized with `{}`, an ID of "__proto__" would invoke
+// the prototype setter rather than creating an own property, corrupting the
+// registry and breaking `for...in` iteration across the render pipeline.
+// These tests guard the `Object.create(null)` hardening against regression.
+describe('Style prototype-pollution hardening', () => {
+    test('layer id "__proto__" via loadJSON does not corrupt the registry', async () => {
+        const style = new Style(new StubMap());
+
+        style.loadJSON({
+            version: 8,
+            sources: {},
+            layers: [{id: '__proto__', type: 'background'}]
+        });
+
+        await waitFor(style, "style.load");
+
+        expect(Object.getPrototypeOf(style._layers)).toBeNull();
+        expect(Object.hasOwn(style._layers, '__proto__')).toBe(true);
+        expect(style.getLayer('__proto__')).toBeTruthy();
+        expect(Object.keys(style._layers)).toEqual(['__proto__']);
+    });
+
+    test('source id "__proto__" via loadJSON does not corrupt source-cache registries', async () => {
+        const style = new Style(new StubMap());
+
+        // JSON.parse models the realistic attack vector: hostile JSON over the
+        // network. An object-literal `{"__proto__": ...}` in JS source sets
+        // the prototype rather than creating an own property, so it cannot
+        // reach `addSource()` with id "__proto__". Validation runs (default)
+        // so this exercises the full path including validate_object.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const hostileStyle = JSON.parse('{"version":8,"sources":{"__proto__":{"type":"geojson","data":{"type":"FeatureCollection","features":[]}}},"layers":[]}');
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(hostileStyle);
+
+        await waitFor(style, "style.load");
+
+        expect(Object.getPrototypeOf(style._otherSourceCaches)).toBeNull();
+        expect(Object.getPrototypeOf(style._symbolSourceCaches)).toBeNull();
+        expect(Object.getPrototypeOf(style._fillExtrusionSourceCaches)).toBeNull();
+        expect(Object.hasOwn(style._otherSourceCaches, '__proto__')).toBe(true);
+        expect(Object.hasOwn(style._symbolSourceCaches, '__proto__')).toBe(true);
+    });
+
+    test('addLayer with id "__proto__" does not corrupt the registry', async () => {
+        const style = new Style(new StubMap());
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON());
+        await waitFor(style, "style.load");
+
+        style.addLayer({id: '__proto__', type: 'background'});
+
+        expect(Object.getPrototypeOf(style._layers)).toBeNull();
+        expect(style.getLayer('__proto__')).toBeTruthy();
+    });
+
+    test('addSource with id "__proto__" does not corrupt source-cache registries', async () => {
+        const style = new Style(new StubMap());
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON());
+        await waitFor(style, "style.load");
+
+        style.addSource('__proto__', createGeoJSONSource());
+
+        expect(Object.getPrototypeOf(style._otherSourceCaches)).toBeNull();
+        expect(Object.getPrototypeOf(style._symbolSourceCaches)).toBeNull();
+        expect(Object.hasOwn(style._otherSourceCaches, '__proto__')).toBe(true);
+        expect(Object.hasOwn(style._symbolSourceCaches, '__proto__')).toBe(true);
+    });
+
+    test('merged source-cache registries stay null-prototype after mergeSources', async () => {
+        const style = new Style(new StubMap());
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const hostileStyle = JSON.parse('{"version":8,"sources":{"__proto__":{"type":"geojson","data":{"type":"FeatureCollection","features":[]}}},"layers":[]}');
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(hostileStyle);
+        await waitFor(style, "style.load");
+
+        style.mergeSources();
+
+        expect(Object.getPrototypeOf(style._mergedOtherSourceCaches)).toBeNull();
+        expect(Object.getPrototypeOf(style._mergedSymbolSourceCaches)).toBeNull();
+        expect(Object.getPrototypeOf(style._mergedFillExtrusionSourceCaches)).toBeNull();
     });
 });
 
@@ -387,6 +474,7 @@ test('Style#update', () => {
             expect(key).toEqual('updateLayers');
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             expect(value.layers.map((layer) => { return layer.id; })).toEqual(['first', 'third']);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(value.removedIds).toEqual(['second']);
         };
 
@@ -411,6 +499,7 @@ describe('Style#setState', () => {
             'setPaintProperty',
             'setLayoutProperty',
             'setLayerProperty',
+            'getLayerProperty',
             'setFilter',
             'addSource',
             'removeSource',
@@ -798,11 +887,11 @@ describe('Style#addLayer', () => {
 
         expect(err).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        expect(err.toString().indexOf('-source-layer-') !== -1).toBeTruthy();
+        expect(err.toString().includes('-source-layer-')).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        expect(err.toString().indexOf('-source-id-') !== -1).toBeTruthy();
+        expect(err.toString().includes('-source-id-')).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        expect(err.toString().indexOf('-layer-id-') !== -1).toBeTruthy();
+        expect(err.toString().includes('-layer-id-')).toBeTruthy();
     });
 
     test('emits error on invalid layer', async () => {
@@ -1258,6 +1347,39 @@ describe('Style#moveLayer', () => {
         style.moveLayer('b', 'b');
         expect(style._order).toEqual(['a', 'b', 'c']);
     });
+
+    test('Throws a warning when layers have different slots', async () => {
+        const style = new Style(new StubMap());
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            layers: [
+                {id: 'a', type: 'background', slot: 'main'},
+                {id: 'b', type: 'background', slot: 'aux'}
+            ]
+        }));
+
+        await waitFor(style, "style.load");
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        style.moveLayer('b', 'a');
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy).toHaveBeenCalledWith('Layer with id "a" has a different slot. Layers can only be rearranged within the same slot.');
+        expect(style._order).toEqual(['a', 'b']);
+    });
+
+    test('Does not throw warning when layer has not a slot', async () => {
+        const style = new Style(new StubMap());
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            layers: [
+                {id: 'a', type: 'background', slot: 'main'},
+                {id: 'b', type: 'background'}
+            ]
+        }));
+
+        await waitFor(style, "style.load");
+        style.moveLayer('b', 'a');
+        expect(style._order).toEqual(['b', 'a']);
+    });
 });
 
 describe('Style#setPaintProperty', () => {
@@ -1672,6 +1794,221 @@ describe('Style#setLayerProperty', () => {
         style.update({});
         expect(style._changes.isDirty()).toBeFalsy();
     });
+
+    test('minzoom', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": [
+                {"id": "background", "type": "background"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        style.setLayerProperty('background', 'minzoom', 5);
+        expect(style._layers['background'].minzoom).toBe(5);
+        expect(style._changes.isDirty()).toBeTruthy();
+    });
+
+    test('maxzoom', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": [
+                {"id": "background", "type": "background"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        style.setLayerProperty('background', 'maxzoom', 12);
+        expect(style._layers['background'].maxzoom).toBe(12);
+        expect(style._changes.isDirty()).toBeTruthy();
+    });
+
+    test('filter', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [
+                {"id": "line", "type": "line", "source": "geojson"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        const filter = ['==', ['get', 'type'], 'road'];
+        style.setLayerProperty('line', 'filter', filter);
+        expect(style.getFilter('line')).toEqual(filter);
+        expect(style.getFilter('line')).not.toBe(filter);
+        expect(style._changes.isDirty()).toBeTruthy();
+    });
+
+    test('slot', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": [
+                {"id": "background", "type": "background"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        style.setLayerProperty('background', 'slot', 'middle');
+        expect(style._layers['background'].slot).toBe('middle');
+    });
+
+});
+
+describe('Style#getLayerProperty', () => {
+    test('returns undefined for unknown layer', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": []
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('nonexistent', 'minzoom')).toBeUndefined();
+    });
+
+    test('returns minzoom and maxzoom', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": [
+                {"id": "background", "type": "background", "minzoom": 3, "maxzoom": 12}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('background', 'minzoom')).toBe(3);
+        expect(style.getLayerProperty('background', 'maxzoom')).toBe(12);
+    });
+
+    test('returns filter', async () => {
+        const filter = ['==', ['get', 'type'], 'road'];
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [
+                {"id": "line", "type": "line", "source": "geojson", filter}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('line', 'filter')).toEqual(filter);
+    });
+
+    test('returns slot', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "vt": {"type": "vector", "tiles": ["http://example.com/{z}/{x}/{y}.pbf"]}
+            },
+            "layers": [
+                {"id": "line", "type": "line", "source": "vt", "source-layer": "roads", "slot": "middle"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('line', 'slot')).toBe('middle');
+    });
+
+    test('returns appearances round-tripped through serialize', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": [
+                {"id": "background", "type": "background"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        const appearances = [
+            {
+                "condition": ["==", ["feature-state", "availability"], "partial"],
+                "properties": {
+                    "icon-image": ["image", "charging-station", {"params": {"fill": "orange"}}],
+                    "icon-size": 1.1
+                }
+            }
+        ];
+        style.setLayerProperty('background', 'appearances', appearances);
+        expect(style.getLayerProperty('background', 'appearances')).toEqual(appearances);
+    });
+
+    test('returns undefined for unset root properties', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [
+                {"id": "line", "type": "line", "source": "geojson"}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('line', 'minzoom')).toBeUndefined();
+        expect(style.getLayerProperty('line', 'maxzoom')).toBeUndefined();
+        expect(style.getLayerProperty('line', 'filter')).toBeUndefined();
+        expect(style.getLayerProperty('line', 'slot')).toBeUndefined();
+    });
+
+    test('delegates to getPaintProperty for paint properties', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {},
+            "layers": [
+                {"id": "background", "type": "background", "paint": {"background-color": "red"}}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('background', 'background-color')).toEqual('red');
+    });
+
+    test('delegates to getLayoutProperty for layout properties', async () => {
+        const style = new Style(new StubMap());
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [
+                {"id": "line", "type": "line", "source": "geojson", "layout": {"line-cap": "round"}}
+            ]
+        });
+
+        await waitFor(style, 'style.load');
+        expect(style.getLayerProperty('line', 'line-cap')).toBe('round');
+    });
 });
 
 describe('Style#getLayoutProperty', () => {
@@ -2004,7 +2341,7 @@ test('Style defers expensive methods', async () => {
     style.update({});
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    expect(style.fire.mock.calls[0][0].type).toEqual('data');
+    expect(style.fire.mock.calls[0][0].type).toEqual('neworder');
 
     // called per source
     expect(style.reloadSource).toHaveBeenCalledTimes(2);
@@ -2125,32 +2462,9 @@ describe('Style#addSourceType', () => {
         const style = new Style(new StubMap());
         const SourceType = function () {};
 
-        // expect no call to load worker source
-        style.dispatcher.broadcast = function (type) {
-            if (type === 'loadWorkerSource') {
-                expect.unreachable();
-            }
-        };
-
         style.addSourceType('foo', SourceType, () => {
             expect(_types['foo']).toEqual(SourceType);
         });
-    });
-
-    test('triggers workers to load worker source code', () => {
-        const style = new Style(new StubMap());
-        const SourceType = function () {};
-        SourceType.workerSourceURL = 'worker-source.js';
-
-        style.dispatcher.broadcast = function (type, params) {
-            if (type === 'loadWorkerSource') {
-                expect(_types['bar']).toEqual(SourceType);
-                expect(params.name).toEqual('bar');
-                expect(params.url).toEqual('worker-source.js');
-            }
-        };
-
-        style.addSourceType('bar', SourceType, (err) => { expect(err).toBeFalsy(); });
     });
 
     test('refuses to add new type over existing name', () => {
@@ -2590,6 +2904,67 @@ test('Style#addImages', async () => {
     );
 });
 
+test('Style#addImages broadcasts spriteLoaded when the sprite is empty', async () => {
+    const style = new Style(new StubMap());
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    style.loadJSON(createStyleJSON());
+    await waitFor(style, 'style.load');
+
+    vi.spyOn(style.dispatcher, 'broadcast');
+
+    // An empty sprite resolves with no images. The worker still needs the
+    // 'spriteLoaded' broadcast or it defers tile parsing forever.
+    style.addImages(new Map(), true);
+
+    expect(style.dispatcher.broadcast).toHaveBeenCalledWith(
+        'spriteLoaded',
+        {scope: ''}
+    );
+});
+
+test('Style#addImages does not broadcast spriteLoaded for an empty image set unrelated to a sprite', async () => {
+    const style = new Style(new StubMap());
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    style.loadJSON(createStyleJSON());
+    await waitFor(style, 'style.load');
+
+    vi.spyOn(style.dispatcher, 'broadcast');
+
+    style.addImages(new Map());
+
+    expect(style.dispatcher.broadcast).not.toHaveBeenCalledWith(
+        'spriteLoaded',
+        {scope: ''}
+    );
+});
+
+test('Style#_loadSprite broadcasts spriteLoaded when the sprite fails to load', async () => {
+    mockFetch({
+        'sprite.*json': () => Promise.resolve(new Response(null, {status: 404, statusText: 'Not Found'})),
+        'sprite.*png': () => Promise.resolve(new Response(null, {status: 404, statusText: 'Not Found'}))
+    });
+
+    const style = new Style(new StubMap());
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    style.loadJSON(createStyleJSON());
+    await waitFor(style, 'style.load');
+
+    vi.spyOn(style.dispatcher, 'broadcast');
+    const errorSpy = vi.fn();
+    style.on('error', errorSpy);
+
+    style._loadSprite('http://example.com/sprite');
+    await waitFor(style, 'data');
+
+    // A failed sprite request must still notify the worker so it stops
+    // deferring tile parsing.
+    expect(style.dispatcher.broadcast).toHaveBeenCalledWith(
+        'spriteLoaded',
+        {scope: ''}
+    );
+    expect(errorSpy).toHaveBeenCalled();
+});
+
 test('Style#updateImage', async () => {
     const style = new Style(new StubMap());
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
@@ -2681,21 +3056,16 @@ test('Style#_updateTilesForChangedImages', async () => {
     sourceCache._tiles[tileID.key] = tile;
     vi.spyOn(tile, 'setDependencies');
 
-    await new Promise((resolve) => {
-        expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(false);
+    expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(false);
 
-        style.getImages(0, {images: [imageId], source: 'geojson', scope: '', tileID, type: 'icons'}, (err, result) => {
-            expect(err).toBeFalsy();
-            expect(result.size).toEqual(0);
-            resolve();
-        });
-    });
+    const result = await style.getImages(0, {icons: [imageId], patterns: [], source: 'geojson', scope: '', tileID});
+    expect(result.images.size).toEqual(0);
 
     expect(style._updateTilesForChangedImages).toHaveBeenCalledTimes(1);
-    expect(sourceCache.setDependencies).toHaveBeenCalledTimes(1);
+    expect(sourceCache.setDependencies).toHaveBeenCalledTimes(2);
     expect(sourceCache.setDependencies).toHaveBeenCalledWith(tileID.key, 'icons', [imageIdStr]);
 
-    expect(tile.setDependencies).toHaveBeenCalledTimes(1);
+    expect(tile.setDependencies).toHaveBeenCalledTimes(2);
     expect(tile.setDependencies).toHaveBeenCalledWith('icons', [imageIdStr]);
     expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(true);
 
@@ -2796,4 +3166,411 @@ test('Occlusion ordering & draped layers', async () => {
         makeFQID('symbol-occlusion-2'),
         makeFQID('symbol-occlusion-3'),
     ]);
+});
+
+describe('Style#_updatePlacement', () => {
+    test('does not re-trigger placement on repaint with fadeDuration: 0 when nothing changed', async () => {
+        const map = new StubMap();
+        // Mock painter with scaleFactor (required by _updatePlacement)
+        // @ts-expect-error - painter is not part of StubMap but required for _updatePlacement
+        map.painter = {scaleFactor: 1};
+
+        // Mock replacement source with updateTime (required by _updatePlacement)
+        const replacementSource = {updateTime: 0};
+
+        const style = new Style(map);
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [{
+                "id": "symbol",
+                "type": "symbol",
+                "source": "geojson"
+            }]
+        });
+
+        await waitFor(style, 'style.load');
+
+        const tr = map.transform;
+        tr.resize(512, 512);
+
+        // Compile the style layers before calling _updatePlacement
+        style.update({zoom: tr.zoom, fadeDuration: 0});
+
+        // First call to _updatePlacement - initializes placement
+        style._updatePlacement(tr, false, 0, false, replacementSource);
+
+        // Placement should be done after first call with fadeDuration: 0
+        expect(style.pauseablePlacement.isDone()).toBeTruthy();
+
+        // Spy on placement methods AFTER initial placement
+        const startNewPlacementSpy = vi.spyOn(style.pauseablePlacement, 'startNewPlacement');
+        const continuePlacementSpy = vi.spyOn(style.pauseablePlacement, 'continuePlacement');
+
+        // Second call to _updatePlacement - should NOT trigger new placement
+        style._updatePlacement(tr, false, 0, false, replacementSource);
+
+        // Assert placement methods were NOT called
+        expect(startNewPlacementSpy).not.toHaveBeenCalled();
+        expect(continuePlacementSpy).not.toHaveBeenCalled();
+
+        // Third call to _updatePlacement - verify consistent behavior
+        style._updatePlacement(tr, false, 0, false, replacementSource);
+
+        // Assert placement methods STILL were not called (verifies it's not a one-time skip)
+        expect(startNewPlacementSpy).not.toHaveBeenCalled();
+        expect(continuePlacementSpy).not.toHaveBeenCalled();
+    });
+
+    test('returns true when symbol layer is added after load due to symbolBucketsChanged', async () => {
+        const map = new StubMap();
+        // @ts-expect-error - painter is not part of StubMap but required for _updatePlacement
+        map.painter = {scaleFactor: 1};
+        const replacementSource = {updateTime: 0};
+
+        const style = new Style(map);
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": []
+        });
+
+        await waitFor(style, 'style.load');
+
+        const tr = map.transform;
+        tr.resize(512, 512);
+
+        style.update({zoom: tr.zoom, fadeDuration: 0});
+        style._updatePlacement(tr, false, 0, false, replacementSource);
+
+        expect(style.pauseablePlacement.isDone()).toBeTruthy();
+
+        style.addLayer({
+            "id": "symbol",
+            "type": "symbol",
+            "source": "geojson"
+        });
+
+        style.update({zoom: tr.zoom, fadeDuration: 0});
+
+        // Spy on crossTileSymbolIndex.addLayer to return true (simulating new symbol buckets)
+        // This happens in real scenarios when tiles have symbol features
+        vi.spyOn(style.crossTileSymbolIndex, 'addLayer').mockReturnValue(true);
+
+        const result = style._updatePlacement(tr, false, 0, false, replacementSource);
+
+        expect(result).toBeTruthy();
+    });
+
+    test('returns true when transformChanged', async () => {
+        const map = new StubMap();
+        // @ts-expect-error - painter is not part of StubMap but required for _updatePlacement
+        map.painter = {scaleFactor: 1};
+        const replacementSource = {updateTime: 0};
+
+        const style = new Style(map);
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [{
+                "id": "symbol",
+                "type": "symbol",
+                "source": "geojson"
+            }]
+        });
+
+        await waitFor(style, 'style.load');
+
+        const tr = map.transform;
+        tr.resize(512, 512);
+
+        style.update({zoom: tr.zoom, fadeDuration: 0});
+        style._updatePlacement(tr, false, 0, false, replacementSource);
+
+        expect(style.pauseablePlacement.isDone()).toBeTruthy();
+
+        // Change transform to trigger transformChanged
+        tr.zoom = 5;
+
+        // Use fadeDuration > 0 so that setStale() is called when placement is
+        // considered stale due to transform change (line 4210-4211 in style.ts)
+        const result = style._updatePlacement(tr, false, 300, false, replacementSource);
+
+        expect(result).toBeTruthy();
+    });
+
+    test('returns true when replacementSourceChanged', async () => {
+        const map = new StubMap();
+        // @ts-expect-error - painter is not part of StubMap but required for _updatePlacement
+        map.painter = {scaleFactor: 1};
+
+        const style = new Style(map);
+        style.loadJSON({
+            "version": 8,
+            "sources": {
+                "geojson": {
+                    "type": "geojson",
+                    "data": {"type": "FeatureCollection", "features": []}
+                }
+            },
+            "layers": [{
+                "id": "symbol",
+                "type": "symbol",
+                "source": "geojson"
+            }]
+        });
+
+        await waitFor(style, 'style.load');
+
+        const tr = map.transform;
+        tr.resize(512, 512);
+
+        style.update({zoom: tr.zoom, fadeDuration: 0});
+        style._updatePlacement(tr, false, 0, false, {updateTime: 0});
+
+        expect(style.pauseablePlacement.isDone()).toBeTruthy();
+
+        // Change replacementSource updateTime to trigger replacementSourceChanged
+        const result = style._updatePlacement(tr, false, 300, false, {updateTime: 1});
+
+        expect(result).toBeTruthy();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Style FRC init-time wiring
+//
+// Two integration points that aren't covered by the pure-function tests in
+// frc_coverage.test.ts:
+//   1. When a style loads with an hd_road_coverage layer, Style must create a
+//      dedicated SourceCache (renderSourceType: HdRoadCoverage) and stash an
+//      HdCoverageState on `_hdCoverage`. This is the moment the conflation
+//      pipeline turns on.
+//   2. When setConfigProperty changes `sdCoverageFadeRange` at runtime, the
+//      next call to style.updateFrcCoverageFadeRange() must pick up the new
+//      value and push it onto the painter. This is the contract the runtime
+//      toggle depends on.
+// ---------------------------------------------------------------------------
+
+describe('Style HD coverage source-cache wiring', () => {
+    const HD_COVERAGE_LAYER = 'hd_road_coverage';
+
+    // In test env HD is statically loaded, so _updateHdCoverageSourceCache always
+    // constructs an empty HdCoverageState on first call. The real signal that a
+    // coverage cache was created is `coverageSourceCaches[<source>]` being populated.
+
+    function loadStyleWithLayer(layer) {
+        const {style} = newStubStyle();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            sources: {
+                'hd-roads': {
+                    type: 'vector',
+                    tiles: ['http://example.com/{z}/{x}/{y}.mvt']
+                }
+            },
+            layers: [layer]
+        }));
+        return style;
+    }
+
+    test('Style with no hd_road_coverage layer leaves coverageSourceCaches empty', async () => {
+        const style = loadStyleWithLayer({
+            id: 'just-a-fill',
+            type: 'fill',
+            source: 'hd-roads',
+            'source-layer': 'building'
+        });
+        await waitFor(style, 'style.load');
+        // State may exist (always-create), but no coverage caches inside.
+        const coverageKeys = Object.keys(style._sourceCaches).filter(k => k.startsWith('hd-road-coverage:'));
+        expect(coverageKeys.length).toBe(0);
+        if (style._hdCoverage) {
+            expect(Object.keys(style._hdCoverage.coverageSourceCaches).length).toBe(0);
+        }
+    });
+
+    test('Adding a fill layer with source-layer hd_road_coverage creates the state and cache', async () => {
+        const style = loadStyleWithLayer({
+            id: 'hd-coverage-helper',
+            type: 'fill',
+            source: 'hd-roads',
+            'source-layer': HD_COVERAGE_LAYER,
+            paint: {'fill-color': 'red', 'fill-opacity': 0}
+        });
+        await waitFor(style, 'style.load');
+
+        expect(style._hdCoverage).not.toBeNull();
+        // The dedicated cache key is `hd-road-coverage:<sourceId>`.
+        const cacheKey = `hd-road-coverage:hd-roads`;
+        expect(style._sourceCaches[cacheKey]).toBeDefined();
+        // SourceCache has _renderSourceType === HdRoadCoverage (=3 per tile.ts).
+        expect(style._sourceCaches[cacheKey]._renderSourceType).toBe(3);
+        // State has a back-reference under coverageSourceCaches[sourceId].
+        expect(style._hdCoverage.coverageSourceCaches['hd-roads']).toBe(style._sourceCaches[cacheKey]);
+    });
+
+    test('Idempotent — second fill layer with same source/source-layer does not double up the cache', async () => {
+        const {style} = newStubStyle();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            sources: {
+                'hd-roads': {type: 'vector', tiles: ['http://example.com/{z}/{x}/{y}.mvt']}
+            },
+            layers: [{
+                id: 'cov-a', type: 'fill', source: 'hd-roads', 'source-layer': HD_COVERAGE_LAYER
+            }, {
+                id: 'cov-b', type: 'fill', source: 'hd-roads', 'source-layer': HD_COVERAGE_LAYER
+            }]
+        }));
+        await waitFor(style, 'style.load');
+
+        const cacheKey = `hd-road-coverage:hd-roads`;
+        expect(style._sourceCaches[cacheKey]).toBeDefined();
+        // Only one coverage cache total for this source.
+        const coverageKeys = Object.keys(style._sourceCaches).filter(k => k.startsWith('hd-road-coverage:'));
+        expect(coverageKeys.length).toBe(1);
+    });
+
+    test('Non-fill layer with the same source-layer does NOT create a coverage cache', async () => {
+        const style = loadStyleWithLayer({
+            id: 'cov-line',
+            type: 'line',
+            source: 'hd-roads',
+            'source-layer': HD_COVERAGE_LAYER
+        });
+        await waitFor(style, 'style.load');
+
+        const coverageKeys = Object.keys(style._sourceCaches).filter(k => k.startsWith('hd-road-coverage:'));
+        expect(coverageKeys.length).toBe(0);
+    });
+
+    test('Fill layer pointing at a NON-vector source does NOT create a coverage cache', async () => {
+        const {style} = newStubStyle();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            sources: {
+                'gj': {type: 'geojson', data: {type: 'FeatureCollection', features: []}}
+            },
+            layers: [{
+                id: 'cov', type: 'fill', source: 'gj', 'source-layer': HD_COVERAGE_LAYER
+            }]
+        }));
+        await waitFor(style, 'style.load');
+
+        const coverageKeys = Object.keys(style._sourceCaches).filter(k => k.startsWith('hd-road-coverage:'));
+        expect(coverageKeys.length).toBe(0);
+    });
+});
+
+describe('Style FRC config update propagation', () => {
+    // Style.updateFrcCoverageFadeRange is the bridge between style.options
+    // (where setConfigProperty writes) and painter.frcCoverageFadeRange
+    // (where vector_tile_source reads). These tests verify that bridge:
+    //   - Default schema [0,0] → painter stays null.
+    //   - Setting the option to a valid range → painter picks it up.
+    //   - Resetting to [0,0] → painter goes back to null.
+    //   - Without a painter on the map, calling is a safe no-op.
+
+    function loadStyleWithSchema(opts = {}) {
+        const {style} = newStubStyle();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            // fragment:false keeps schema on the root style, otherwise Style wraps
+            // it as an internal "basemap" import and setConfigProperty('') wouldn't apply.
+            fragment: false,
+            schema: {
+                sdCoverageFadeRange: {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                    default: opts.defaultRange || [0, 0],
+                    type: 'number',
+                    array: true,
+                    minValue: 0,
+                    maxValue: 24
+                },
+                sdCoverageSourceLayers: {
+                    default: ['road', 'structure'],
+                    type: 'string',
+                    array: true
+                }
+            }
+        }));
+        return style;
+    }
+
+    function attachStubPainter(style) {
+        const painter = {frcCoverageFadeRange: null, frcCoverageSourceLayers: []};
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        style.map.painter = painter;
+        return painter;
+    }
+
+    test('Default schema [0,0] → painter.frcCoverageFadeRange stays null', async () => {
+        const style = loadStyleWithSchema();
+        await waitFor(style, 'style.load');
+        const painter = attachStubPainter(style);
+
+        style.updateFrcCoverageFadeRange();
+        expect(painter.frcCoverageFadeRange).toBeNull();
+    });
+
+    test('setConfigProperty([14,15]) → next updateFrcCoverageFadeRange pushes [14,15] onto painter', async () => {
+        const style = loadStyleWithSchema();
+        await waitFor(style, 'style.load');
+        const painter = attachStubPainter(style);
+
+        style.setConfigProperty('', 'sdCoverageFadeRange', [14, 15]);
+        style.updateFrcCoverageFadeRange();
+        expect(painter.frcCoverageFadeRange).toEqual([14, 15]);
+    });
+
+    test('Resetting config back to [0,0] → painter.frcCoverageFadeRange goes back to null', async () => {
+        const style = loadStyleWithSchema();
+        await waitFor(style, 'style.load');
+        const painter = attachStubPainter(style);
+
+        style.setConfigProperty('', 'sdCoverageFadeRange', [14, 15]);
+        style.updateFrcCoverageFadeRange();
+        expect(painter.frcCoverageFadeRange).toEqual([14, 15]);
+
+        style.setConfigProperty('', 'sdCoverageFadeRange', [0, 0]);
+        style.updateFrcCoverageFadeRange();
+        expect(painter.frcCoverageFadeRange).toBeNull();
+    });
+
+    test('Changing sdCoverageSourceLayers updates painter.frcCoverageSourceLayers', async () => {
+        const style = loadStyleWithSchema();
+        await waitFor(style, 'style.load');
+        const painter = attachStubPainter(style);
+
+        // Source layers only get pushed when fadeRange is active.
+        style.setConfigProperty('', 'sdCoverageFadeRange', [14, 15]);
+        style.setConfigProperty('', 'sdCoverageSourceLayers', ['(sd-traffic)traffic']);
+        style.updateFrcCoverageFadeRange();
+        expect(painter.frcCoverageSourceLayers).toEqual(['(sd-traffic)traffic']);
+    });
+
+    test('updateFrcCoverageFadeRange is a safe no-op when map.painter is undefined', async () => {
+        const style = loadStyleWithSchema({defaultRange: [14, 15]});
+        await waitFor(style, 'style.load');
+        // Deliberately do NOT attach a painter.
+        expect(style.map.painter).toBeUndefined();
+        // Must not throw.
+        expect(() => style.updateFrcCoverageFadeRange()).not.toThrow();
+    });
 });

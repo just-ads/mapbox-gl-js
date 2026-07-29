@@ -10,10 +10,13 @@
 // #define scale 63.0
 #define scale 0.015873016
 
-in vec2 a_pos_normal;
-in vec4 a_data;
+in ivec2 a_pos_normal;
+in uvec4 a_data;
 #if defined(ELEVATED) || defined(ELEVATED_ROADS)
-in vec3 a_z_offset_width;
+in vec4 a_z_offset_width;
+#endif
+#ifdef ELEVATION_GROUND_SCALE
+in float a_elevation_ground_scale;
 #endif
 // Includes in order: a_uv_x, a_split_index, a_line_progress
 // to reduce attribute count on older devices.
@@ -80,9 +83,9 @@ out highp float v_depth;
 #pragma mapbox: define mediump float gapwidth
 #pragma mapbox: define mediump float width
 #pragma mapbox: define mediump float floorwidth
-#pragma mapbox: define mediump vec4 pattern
+#pragma mapbox: define mediump uvec4 pattern
 #ifdef LINE_PATTERN_TRANSITION
-#pragma mapbox: define mediump vec4 pattern_b
+#pragma mapbox: define mediump uvec4 pattern_b
 #endif
 #pragma mapbox: define mediump float pixel_ratio
 #pragma mapbox: define lowp float emissive_strength
@@ -94,9 +97,9 @@ void main() {
     #pragma mapbox: initialize mediump float gapwidth
     #pragma mapbox: initialize mediump float width
     #pragma mapbox: initialize mediump float floorwidth
-    #pragma mapbox: initialize mediump vec4 pattern
+    #pragma mapbox: initialize mediump uvec4 pattern
     #ifdef LINE_PATTERN_TRANSITION
-    #pragma mapbox: initialize mediump vec4 pattern_b
+    #pragma mapbox: initialize mediump uvec4 pattern_b
     #endif
     #pragma mapbox: initialize mediump float pixel_ratio
     #pragma mapbox: initialize lowp float emissive_strength
@@ -110,15 +113,16 @@ void main() {
     // Retina devices need a smaller distance to avoid aliasing.
     float ANTIALIASING = 1.0 / u_device_pixel_ratio / 2.0;
 
-    vec2 a_extrude = a_data.xy - 128.0;
-    float a_direction = mod(a_data.z, 4.0) - 1.0;
+    vec2 a_extrude = vec2(a_data.xy) - 128.0;
+    float a_direction = float(a_data.z & 3u) - 1.0;
 
-    vec2 pos = floor(a_pos_normal * 0.5);
+    vec2 pos_normal = vec2(a_pos_normal);
+    vec2 pos = floor(pos_normal * 0.5);
 
     // x is 1 if it's a round cap, 0 otherwise
     // y is 1 if the normal points up, and -1 if it points down
     // We store these in the least significant bit of a_pos_normal
-    vec2 normal = a_pos_normal - 2.0 * pos;
+    vec2 normal = pos_normal - 2.0 * pos;
     normal.y = normal.y * 2.0 - 1.0;
     v_normal = normal;
 
@@ -155,11 +159,15 @@ void main() {
     vec2 offsetTile = offset2 * u_pixels_to_tile_units;
     vec2 offset_pos = pos + offsetTile;
     float ele = 0.0;
+    float scaled_z_offset = a_z_offset;
+#ifdef ELEVATION_GROUND_SCALE
+    scaled_z_offset = a_z_offset * mix(1.0, u_exaggeration, a_elevation_ground_scale);
+#endif
 #ifdef CROSS_SLOPE_VERTICAL
     // Vertical line
     // The least significant bit of a_pos_normal.y hold 1 if it's on top, 0 for bottom
-    float top = a_pos_normal.y - 2.0 * floor(a_pos_normal.y * 0.5);
-    float line_height = 2.0 * u_tile_to_meter * outset * top * u_pixels_to_tile_units[1][1] + a_z_offset;
+    float top = pos_normal.y - 2.0 * floor(pos_normal.y * 0.5);
+    float line_height = 2.0 * u_tile_to_meter * outset * top * u_pixels_to_tile_units[1][1] + scaled_z_offset;
     ele = sample_elevation(offset_pos) + line_height;
     // Ignore projected extrude for vertical lines
     projected_extrude = vec4(0);
@@ -170,14 +178,14 @@ void main() {
     float ele1 = max(sample_elevation(offset_pos + extrude), sample_elevation(offset_pos + extrude / 2.0));
     float ele2 = max(sample_elevation(offset_pos - extrude), sample_elevation(offset_pos - extrude / 2.0));
     float ele_max = max(ele0, max(ele1, ele2));
-    ele = ele_max + a_z_offset;
+    ele = ele_max + scaled_z_offset;
 #else // CROSS_SLOPE_HORIZONTAL
     // Line follows terrain slope
     float ele0 = sample_elevation(offset_pos);
     float ele1 = max(sample_elevation(offset_pos + extrude), sample_elevation(offset_pos + extrude / 2.0));
     float ele2 = max(sample_elevation(offset_pos - extrude), sample_elevation(offset_pos - extrude / 2.0));
     float ele_max = max(ele0, 0.5 * (ele1 + ele2));
-    ele = ele_max - ele0 + ele1 + a_z_offset;
+    ele = ele_max - ele0 + ele1 + scaled_z_offset;
 #endif // CROSS_SLOPE_HORIZONTAL
 #endif // CROSS_SLOPE_VERTICAL
     gl_Position = u_matrix * vec4(offset_pos, ele, 1.0) + projected_extrude;
@@ -231,9 +239,9 @@ void main() {
 
     mediump float pixels_to_tile_units = 1.0 / u_tile_units_to_pixels;
     mediump float pixel_ratio_inverse = 1.0 / pixel_ratio;
-    mediump float aspect = v_width / ((pattern.w - pattern.y) * pixel_ratio_inverse);
+    mediump float aspect = v_width / (float(pattern.w - pattern.y) * pixel_ratio_inverse);
     // Pattern length * 32 is chosen experimentally, seems to provide good quality
-    highp float subt_multiple = (pattern.z - pattern.x) * pixel_ratio_inverse * pixels_to_tile_units * aspect * 32.0;
+    highp float subt_multiple = float(pattern.z - pattern.x) * pixel_ratio_inverse * pixels_to_tile_units * aspect * 32.0;
     highp float subt = floor(a_pattern_data.z / subt_multiple) * subt_multiple;
 
     // Offset caused by vertices extended forward or backward from line point

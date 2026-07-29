@@ -1,21 +1,21 @@
-import {getImage, ResourceType} from '../util/ajax';
-import {getExpiryDataFromHeaders, prevPowerOfTwo} from '../util/util';
-import browser from '../util/browser';
-import offscreenCanvasSupported from '../util/offscreen_canvas_supported';
+import {ResourceType} from '../util/ajax';
+import {parseExpiryData} from '../util/util';
 import {OverscaledTileID} from './tile_id';
+import {parseTileJSONRequest} from './load_tilejson';
+import {processTileJSON} from './tile_provider';
 import RasterTileSource from './raster_tile_source';
 // Import DEMData as a module with side effects to ensure
 // it's registered as a serializable class on the main thread
 import '../data/dem_data';
 
 import type {Evented} from '../util/evented';
-import type DEMData from '../data/dem_data';
 import type Dispatcher from '../util/dispatcher';
 import type Tile from './tile';
 import type {Callback} from '../types/callback';
-import type {TextureImage} from '../render/texture';
+import type {Cancelable} from '../types/cancelable';
 import type {RasterDEMSourceSpecification} from '../style-spec/types';
-import type {WorkerSourceDEMTileRequest} from './worker_source';
+import type {TileJSON} from '../types/tilejson';
+import type {WorkerSourceDEMTileRequest, WorkerSourceDEMTileResult} from './worker_source';
 
 class RasterDEMTileSource extends RasterTileSource<'raster-dem'> {
     encoding: 'mapbox' | 'terrarium';
@@ -24,79 +24,99 @@ class RasterDEMTileSource extends RasterTileSource<'raster-dem'> {
         super(id, options, dispatcher, eventedParent);
         this.type = 'raster-dem';
         this.maxzoom = 22;
-        this._options = Object.assign({type: 'raster-dem'}, options);
+        this._options = {type: 'raster-dem', ...options};
         this.encoding = options.encoding || "mapbox";
-        this.customTags = options.customTags;
+    }
+
+    override loadTileJSONWithProvider(tileProvider: {name: string; url: string}, callback: Callback<TileJSON>): Cancelable {
+        this.provider = tileProvider.name;
+        const {request, options} = parseTileJSONRequest(this._options, this.map._requestManager);
+
+        const controller = new AbortController();
+        this.dispatcher.broadcast('loadTileProvider', {
+            name: tileProvider.name,
+            url: tileProvider.url,
+            source: this.id,
+            scope: this.scope,
+            type: this.type,
+            options,
+            request,
+        }, {keepResult: true, signal: controller.signal})
+            .then((results) => {
+                const tileJSON = results ? results.find((r) => r != null) : null;
+                const result = processTileJSON(this._options, tileJSON, this.map._requestManager);
+                if (result instanceof Error) {
+                    callback(result);
+                } else {
+                    callback(null, result);
+                }
+            })
+            .catch((err: Error) => {
+                if (err.name !== 'AbortError') callback(err);
+            });
+
+        return {cancel: () => controller.abort()};
     }
 
     override loadTile(tile: Tile, callback: Callback<undefined>) {
         const url = this.map._requestManager.normalizeTileURL(tile.tileID.canonical.url(this.tiles, this.scheme), false, this.tileSize);
+        const request = this.map._requestManager.transformRequest(url, ResourceType.Tile);
 
-        tile.request = getImage(this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, tile.tileID.canonical), imageLoaded.bind(this));
+        const params: WorkerSourceDEMTileRequest = {
+            uid: tile.uid,
+            tileID: tile.tileID,
+            source: this.id,
+            type: this.type,
+            scope: this.scope,
+            request,
+            encoding: this.encoding,
+        };
 
-        function imageLoaded(
-            this: RasterDEMTileSource,
-            err?: Error | null,
-            img?: TextureImage | null,
-            responseHeaders?: Headers,
-        ) {
+        if (!tile.actor || tile.state === 'expired') {
+            tile.actor = this.dispatcher.getActor();
+            tile.request = tile.actor.sendCancelable('loadTile', params, {}, done.bind(this));
+        }
+
+        function done(this: RasterDEMTileSource, err?: Error | null, result?: WorkerSourceDEMTileResult | null) {
             delete tile.request;
+
             if (tile.aborted) {
                 tile.state = 'unloaded';
-                callback(null);
-            } else if (err) {
+                return callback(null);
+            }
+
+            if (err) {
                 tile.state = 'errored';
-                callback(err);
-            } else if (img) {
-                const expiryData = getExpiryDataFromHeaders(responseHeaders);
-                if (this.map._refreshExpiredTiles) tile.setExpiryData(expiryData);
-                const transfer = ImageBitmap && img instanceof ImageBitmap && offscreenCanvasSupported();
-                // DEMData uses 1px padding. Handle cases with image buffer of 1 and 2 pxs, the rest assume default buffer 0
-                // in order to keep the previous implementation working (no validation against tileSize).
-                const buffer = (img.width - prevPowerOfTwo(img.width)) / 2;
-                // padding is used in getImageData. As DEMData has 1px padding, if DEM tile buffer is 2px, discard outermost pixels.
-                const padding = 1 - buffer;
-                const borderReady = padding < 1;
-                if (!borderReady && !tile.neighboringTiles) {
+                return callback(err);
+            }
+
+            if (result) {
+                if (this.map._refreshExpiredTiles) tile.setExpiryData(parseExpiryData(result.headers));
+
+                if (!result.borderReady && !tile.neighboringTiles) {
                     tile.neighboringTiles = this._getNeighboringTiles(tile.tileID);
                 }
 
-                // @ts-expect-error - TS2345 - Argument of type 'TextureImage' is not assignable to parameter of type 'CanvasImageSource'.
-                const rawImageData = transfer ? img : browser.getImageData(img, padding);
-                const params: WorkerSourceDEMTileRequest = {
-                    uid: tile.uid,
-                    tileID: tile.tileID,
-                    source: this.id,
-                    type: this.type,
-                    scope: this.scope,
-                    rawImageData,
-                    encoding: this.encoding,
-                    padding
-                };
-
-                if (!tile.actor || tile.state === 'expired') {
-                    tile.actor = this.dispatcher.getActor();
-
-                    tile.actor.send('loadTile', params, done.bind(this), undefined, true);
-                }
-            }
-        }
-
-        function done(this: RasterDEMTileSource, err?: Error | null, dem?: DEMData | null) {
-            if (err) {
-                tile.state = 'errored';
-                callback(err);
-            }
-
-            if (dem) {
-                tile.dem = dem;
+                tile.dem = result.dem;
                 tile.dem.onDeserialize();
                 tile.needsHillshadePrepare = true;
                 tile.needsDEMTextureUpload = true;
-                tile.state = 'loaded';
-                callback(null);
             }
+
+            tile.state = 'loaded';
+            callback(null);
         }
+    }
+
+    override abortTile(tile: Tile, callback?: Callback<undefined>) {
+        if (tile.request) {
+            tile.request.abort();
+            delete tile.request;
+        }
+        if (tile.actor) {
+            tile.actor.send('abortTile', {uid: tile.uid, type: this.type, source: this.id, scope: this.scope}, {skipResult: true});
+        }
+        if (callback) callback();
     }
 
     _getNeighboringTiles(tileID: OverscaledTileID): {[key: number]: {backfilled: boolean}} {

@@ -2,6 +2,7 @@ import {default as ValidationError, ValidationWarning} from '../error/validation
 import validate from './validate';
 import {getType, isObject, isString} from '../util/get_type';
 import {unbundle} from '../util/unbundle_jsonlint';
+import {TRANSITION_KEY_RE, USE_THEME_KEY_RE} from '../util/properties';
 
 import type {StyleReference} from '../reference/latest';
 import type {StyleSpecification} from '../types';
@@ -31,8 +32,8 @@ export default function validateTerrain(options: TerrainValidatorOptions): Valid
 
     let errors: ValidationError[] = [];
     for (const key in terrain) {
-        const transitionMatch = key.match(/^(.*)-transition$/);
-        const useThemeMatch = key.match(/^(.*)-use-theme$/);
+        const transitionMatch = key.match(TRANSITION_KEY_RE);
+        const useThemeMatch = key.match(USE_THEME_KEY_RE);
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (useThemeMatch && terrainSpec[useThemeMatch[1]]) {
@@ -73,7 +74,7 @@ export default function validateTerrain(options: TerrainValidatorOptions): Valid
     } else if (!isString(terrain.source)) {
         errors.push(new ValidationError(`${key}.source`, terrain.source, `source must be a string`));
     } else {
-        const source = style.sources && style.sources[terrain.source];
+        const source = style.sources && Object.hasOwn(style.sources, terrain.source) ? style.sources[terrain.source] : undefined;
         const sourceType = source && unbundle(source.type) as string;
         if (!source) {
             errors.push(new ValidationError(`${key}.source`, terrain.source, `source "${terrain.source}" not found`));

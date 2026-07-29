@@ -19,7 +19,7 @@ function isFeatureConstant(e: Expression): boolean {
             e.name === 'id'
         ) {
             return false;
-        } else if (/^filter-/.test(e.name)) {
+        } else if (e.name.startsWith('filter-')) {
             return false;
         }
     }
@@ -56,13 +56,17 @@ function isStateConstant(e: Expression): boolean {
     return result;
 }
 
-function isGlobalPropertyConstant(e: Expression, properties: Array<string>): boolean {
-    if (e instanceof CompoundExpression && properties.indexOf(e.name) >= 0) { return false; }
+function isGlobalPropertyConstantSet(e: Expression, properties: ReadonlySet<string>): boolean {
+    if (e instanceof CompoundExpression && properties.has(e.name)) { return false; }
     let result = true;
     e.eachChild((arg) => {
-        if (result && !isGlobalPropertyConstant(arg, properties)) { result = false; }
+        if (result && !isGlobalPropertyConstantSet(arg, properties)) { result = false; }
     });
     return result;
 }
 
-export {isFeatureConstant, isGlobalPropertyConstant, isStateConstant};
+function isGlobalPropertyConstant(e: Expression, properties: Array<string>): boolean {
+    return isGlobalPropertyConstantSet(e, new Set(properties));
+}
+
+export {isFeatureConstant, isGlobalPropertyConstant, isGlobalPropertyConstantSet, isStateConstant};

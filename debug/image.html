@@ -22,11 +22,9 @@
 <div id="option">
     <label><input id="terrain-checkbox" type="checkbox"> terrain</label><br />
 </div>
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
-
-mapboxgl.accessToken = getAccessToken();
 
 var imageStyle = {
     "version": 8,
@@ -65,6 +63,7 @@ var imageStyle = {
 };
 
 var map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     minZoom: 14,

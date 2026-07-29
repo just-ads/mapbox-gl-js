@@ -5,7 +5,7 @@ import Grid from './grid_index';
 import {mat4, vec2, vec4} from 'gl-matrix';
 import ONE_EM from '../symbol/one_em';
 import {FOG_SYMBOL_CLIPPING_THRESHOLD, getFogOpacityAtTileCoord} from '../style/fog_helpers';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import * as symbolProjection from '../symbol/projection';
 import {degToRad, wrap} from '../util/util';
 import {clipLines} from '../util/line_clipping';
@@ -23,6 +23,7 @@ import type {SingleCollisionBox} from '../data/bucket/symbol_bucket';
 import type {GlyphOffsetArray, SymbolLineVertexArray, PlacedSymbol} from '../data/array_types';
 import type {FogState} from '../style/fog_helpers';
 import type {CollisionGroup} from '../symbol/placement';
+import type {CollisionDetector} from './placement_algorithm';
 
 export type PlacedCollisionBox = {
     box: Array<number>;
@@ -37,7 +38,7 @@ export type PlacedCollisionCircles = {
     occluded: boolean;
 };
 
-type ScreenAnchorPoint = {
+export type ScreenAnchorPoint = {
     occluded: boolean;
     perspectiveRatio: number;
     point: Point;
@@ -52,6 +53,8 @@ type ScreenAnchorPoint = {
 // stability, but it's expensive.
 const viewportPadding = 100;
 
+type CollisionKey = {bucketInstanceId: number; featureIndex: number; collisionGroupID: number};
+
 /**
  * A collision index used to prevent symbols from overlapping. It keep tracks of
  * where previous symbols have been placed and is used to check if a new
@@ -64,9 +67,9 @@ const viewportPadding = 100;
  *
  * @private
  */
-class CollisionIndex {
-    grid: Grid;
-    ignoredGrid: Grid;
+class CollisionIndex implements CollisionDetector {
+    grid: Grid<CollisionKey>;
+    ignoredGrid: Grid<CollisionKey>;
     transform: Transform;
     pitchfactor: number;
     screenRightBoundary: number;
@@ -74,24 +77,50 @@ class CollisionIndex {
     gridRightBoundary: number;
     gridBottomBoundary: number;
     fogState: FogState | null | undefined;
+    // Tracks (bucketInstanceId -> set of featureIndexes) for symbols hidden by clip regions.
+    // Used to exclude them from queryRenderedFeatures results.
+    clippedSymbols: Map<number, Set<number>>;
 
-    constructor(
-        transform: Transform,
-        fogState?: FogState | null,
-        grid: Grid = new Grid(transform.width + 2 * viewportPadding, transform.height + 2 * viewportPadding, 25),
-        ignoredGrid: Grid = new Grid(transform.width + 2 * viewportPadding, transform.height + 2 * viewportPadding, 25)
-    ) {
+    constructor(transform: Transform, fogState?: FogState | null) {
+        this.gridRightBoundary = 0;
+        this.gridBottomBoundary = 0;
+        this.clippedSymbols = new Map();
+        this.reset(transform, fogState);
+    }
+
+    reset(transform: Transform, fogState?: FogState | null) {
+        const newWidth = transform.width + 2 * viewportPadding;
+        const newHeight = transform.height + 2 * viewportPadding;
+
+        if (newWidth !== this.gridRightBoundary || newHeight !== this.gridBottomBoundary) {
+            this.grid = new Grid<CollisionKey>(newWidth, newHeight, 25);
+            this.ignoredGrid = new Grid<CollisionKey>(newWidth, newHeight, 25);
+        } else {
+            this.grid.clear();
+            this.ignoredGrid.clear();
+        }
+
         this.transform = transform;
-
-        this.grid = grid;
-        this.ignoredGrid = ignoredGrid;
+        this.fogState = fogState;
         this.pitchfactor = Math.cos(transform._pitch) * transform.cameraToCenterDistance;
-
         this.screenRightBoundary = transform.width + viewportPadding;
         this.screenBottomBoundary = transform.height + viewportPadding;
-        this.gridRightBoundary = transform.width + 2 * viewportPadding;
-        this.gridBottomBoundary = transform.height + 2 * viewportPadding;
-        this.fogState = fogState;
+        this.gridRightBoundary = newWidth;
+        this.gridBottomBoundary = newHeight;
+        this.clippedSymbols.clear();
+    }
+
+    clearClippedSymbolsForBucket(bucketInstanceId: number) {
+        this.clippedSymbols.delete(bucketInstanceId);
+    }
+
+    markSymbolAsClipped(bucketInstanceId: number, featureIndex: number) {
+        let clipped = this.clippedSymbols.get(bucketInstanceId);
+        if (!clipped) {
+            clipped = new Set();
+            this.clippedSymbols.set(bucketInstanceId, clipped);
+        }
+        clipped.add(featureIndex);
     }
 
     placeCollisionBox(
@@ -105,8 +134,7 @@ class CollisionIndex {
         allowOverlap: boolean,
         textPixelRatio: number,
         posMatrix: mat4,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        collisionGroupPredicate?: any,
+        collisionGroupPredicate?: (key: CollisionKey) => boolean,
     ): PlacedCollisionBox {
         assert(!this.transform.elevation || collisionBox.elevation !== undefined);
 
@@ -216,7 +244,7 @@ class CollisionIndex {
         let {x: anchorX, y: anchorY, z: anchorZ} = projection.projectTilePoint(tileUnitAnchorPoint.x, tileUnitAnchorPoint.y, tileID.canonical);
         let elevationParams: symbolProjection.ElevationParams | null = null;
         if (hasElevation) {
-            const elevationFeature = renderElevatedRoads ? bucket.getElevationFeatureForText(symbolIndex) : null;
+            const elevationFeature = renderElevatedRoads && bucket.hdExt ? bucket.hdExt.getElevationFeatureForPlacedSymbol(bucket, bucket.text, symbolIndex) : null;
             elevationParams = {
                 getElevation,
                 elevation,
@@ -250,8 +278,7 @@ class CollisionIndex {
             lineOffsetX,
             lineOffsetY,
             (renderElevatedRoads && symbol.flipState === 1), // FlipState.flipRequired
-            // @ts-expect-error - TS2345 - Argument of type 'vec4' is not assignable to parameter of type 'vec3'.
-            labelPlaneAnchorPoint,
+            labelPlaneAnchorPoint as [number, number, number],
             tileUnitAnchorPoint,
             symbol,
             lineVertexArray,
@@ -435,22 +462,22 @@ class CollisionIndex {
         const features = this.grid.query(minX, minY, maxX, maxY)
             .concat(this.ignoredGrid.query(minX, minY, maxX, maxY));
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const seenFeatures: Record<string, any> = {};
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result: Record<string, any> = {};
+        const seenFeatures: {[bucketInstanceId: number]: {[featureIndex: number]: boolean}} = {};
+        const result: {[bucketInstanceId: number]: Array<number>} = {};
 
         for (const feature of features) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             const featureKey = feature.key;
             // Skip already seen features.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             if (seenFeatures[featureKey.bucketInstanceId] === undefined) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 seenFeatures[featureKey.bucketInstanceId] = {};
             }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             if (seenFeatures[featureKey.bucketInstanceId][featureKey.featureIndex]) {
+                continue;
+            }
+
+            // Skip symbols hidden by a clip region — they are invisible and should not be queried.
+            const clippedForBucket = this.clippedSymbols.get(featureKey.bucketInstanceId);
+            if (clippedForBucket && clippedForBucket.has(featureKey.featureIndex)) {
                 continue;
             }
 
@@ -469,14 +496,10 @@ class CollisionIndex {
                 continue;
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             seenFeatures[featureKey.bucketInstanceId][featureKey.featureIndex] = true;
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             if (result[featureKey.bucketInstanceId] === undefined) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 result[featureKey.bucketInstanceId] = [];
             }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             result[featureKey.bucketInstanceId].push(featureKey.featureIndex);
         }
 
@@ -511,7 +534,7 @@ class CollisionIndex {
         const p = [x, y, z, 1];
         let behindFog = false;
         if (z || this.transform.pitch > 0) {
-            vec4.transformMat4(p as [number, number, number, number], p as [number, number, number, number], posMatrix);
+            vec4.transformMat4(p, p, posMatrix);
             // Do not perform symbol occlusion on globe due to fog fixed range
             const isGlobe = bucketProjection.name === 'globe';
             if (this.fogState && tileID && !isGlobe) {

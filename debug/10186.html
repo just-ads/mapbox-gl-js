@@ -22,13 +22,12 @@
 <div id="checkboxes">
     <label><input id="show-tile-boundaries-checkbox" type="checkbox"> tile debug</label><br />
 </div>
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
 
-mapboxgl.accessToken = getAccessToken();
-
 const map = window.map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     style: {

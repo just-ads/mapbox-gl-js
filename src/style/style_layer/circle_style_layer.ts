@@ -1,4 +1,5 @@
-import StyleLayer from '../style_layer';
+import StyleLayer, {rawLayoutMayUseHD} from '../style_layer';
+import {prepareHD} from '../../../modules/hd_worker';
 import CircleBucket from '../../data/bucket/circle_bucket';
 import {polygonIntersectsBufferedPoint} from '../../util/intersection_tests';
 import {getMaximumPaintValue, translateDistance, tilespaceTranslate} from '../query_utils';
@@ -6,7 +7,7 @@ import {getLayoutProperties, getPaintProperties} from './circle_style_layer_prop
 import {vec4, vec3} from 'gl-matrix';
 import Point from '@mapbox/point-geometry';
 import ProgramConfiguration from '../../data/program_configuration';
-import assert from 'assert';
+import assert from '../../style-spec/util/assert';
 import {latFromMercatorY, mercatorZfromAltitude} from '../../geo/mercator_coordinate';
 import EXTENT from '../../style-spec/data/extent';
 import {circleDefinesValues} from '../../render/program/circle_program';
@@ -21,6 +22,7 @@ import type {LayerSpecification} from '../../style-spec/types';
 import type {TilespaceQueryGeometry} from '../query_geometry';
 import type {DEMSampler} from '../../terrain/elevation';
 import type {VectorTileFeature} from '@mapbox/vector-tile';
+import type {RuntimeModuleType} from '../style_layer';
 import type {CreateProgramParams} from '../../render/painter';
 import type {DynamicDefinesType} from '../../render/program/program_uniforms';
 import type {LUT} from "../../util/lut";
@@ -44,7 +46,7 @@ class CircleStyleLayer extends StyleLayer {
         super(layer, properties, scope, lut, options);
     }
 
-    createBucket(parameters: BucketParameters<CircleStyleLayer>): CircleBucket<CircleStyleLayer> {
+    override createBucket(parameters: BucketParameters<this>): CircleBucket<CircleStyleLayer> {
         return new CircleBucket(parameters);
     }
 
@@ -101,6 +103,14 @@ class CircleStyleLayer extends StyleLayer {
 
     override hasElevation(): boolean {
         return this.layout && this.layout.get('circle-elevation-reference') !== 'none';
+    }
+
+    override mayUse(type: RuntimeModuleType): boolean {
+        return type === 'HD' && rawLayoutMayUseHD(this, 'circle-elevation-reference', v => v === 'hd-road-markup');
+    }
+
+    override prepare(): Promise<void> {
+        return this.mayUse('HD') ? prepareHD() : Promise.resolve();
     }
 }
 

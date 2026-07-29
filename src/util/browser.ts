@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import offscreenCanvasSupported from './offscreen_canvas_supported';
 
 import type {Cancelable} from '../types/cancelable';
@@ -17,6 +17,17 @@ let hasCanvasFingerprintNoise: boolean | undefined;
  * @private
  */
 const exported = {
+    requestIdleCallback: (callback: (deadline: IdleDeadline) => void): number | undefined => {
+        if (typeof requestIdleCallback !== 'undefined') {
+            return requestIdleCallback(callback);
+        } else {
+            // Fallback for environments without requestIdleCallback: emulate a fresh idle
+            // window (50ms is the spec maximum) via setTimeout so callers that rely on
+            // deadline.timeRemaining() still make progress.
+            setTimeout(() => callback({didTimeout: false, timeRemaining: () => 50}), 0);
+        }
+    },
+
     /**
      * Returns either performance.now() or a value set by setNow.
      * @returns {number} Time value in milliseconds.
@@ -96,6 +107,7 @@ const exported = {
 
         const offscreenCanvas = new OffscreenCanvas(255 / 3, 1);
         const offscreenCanvasContext = offscreenCanvas.getContext('2d', {willReadFrequently: true});
+        assert(offscreenCanvasContext, 'OffscreenCanvas 2D context unavailable');
         let inc = 0;
         // getImageData is lossy with premultiplied alpha.
         for (let i = 0; i < offscreenCanvas.width; ++i) {
@@ -116,3 +128,5 @@ const exported = {
 };
 
 export default exported;
+
+export const {setNow, restoreNow} = exported;

@@ -50,26 +50,6 @@ export function cacheClose() {
     sharedCache = undefined;
 }
 
-let responseConstructorSupportsReadableStream;
-
-function prepareBody(response: Response, callback: (body?: Blob | ReadableStream | null) => void) {
-    if (responseConstructorSupportsReadableStream === undefined) {
-        try {
-            new Response(new ReadableStream());
-            responseConstructorSupportsReadableStream = true;
-        } catch (e) {
-            // Edge
-            responseConstructorSupportsReadableStream = false;
-        }
-    }
-
-    if (responseConstructorSupportsReadableStream) {
-        callback(response.body);
-    } else {
-        response.blob().then(callback).catch((e: Error) => warnOnce(e.message));
-    }
-}
-
 // https://fetch.spec.whatwg.org/#null-body-status
 function isNullBodyStatus(status: Response["status"]): boolean {
     if (status === 200 || status === 404) {
@@ -79,7 +59,7 @@ function isNullBodyStatus(status: Response["status"]): boolean {
     return [101, 103, 204, 205, 304].includes(status);
 }
 
-export function cachePut(request: Request, response: Response, requestTime: number) {
+export async function cachePut(request: Request, response: Response, requestTime: number): Promise<void> {
     cacheOpen();
     const url = request.headers.get('CacheUrl') || request.url;
     if (sharedCache == null) {
@@ -87,22 +67,20 @@ export function cachePut(request: Request, response: Response, requestTime: numb
         return;
     }
 
-    const cacheControl = parseCacheControl(response.headers.get('Cache-Control') || '');
+    const cacheControl = parseCacheControl(response.headers.get('cache-control') || '');
     if (cacheControl['no-store']) return;
 
     const options: ResponseOptions = {
         status: response.status,
         statusText: response.statusText,
-        headers: new Headers()
+        headers: new Headers(response.headers)
     };
-
-    response.headers.forEach((v, k) => options.headers.set(k, v));
 
     if (cacheControl['max-age']) {
         options.headers.set('Expires', new Date(requestTime + cacheControl['max-age'] * 1000).toUTCString());
     }
 
-    const expires = options.headers.get('Expires') || EXPIRED_TIME;
+    const expires = options.headers.get('expires') || EXPIRED_TIME;
     if (!expires) return;
 
     const timeUntilExpiry = new Date(expires).getTime() - requestTime;
@@ -119,22 +97,23 @@ export function cachePut(request: Request, response: Response, requestTime: numb
         strippedURL = setQueryParameters(strippedURL, {range});
     }
 
-    prepareBody(response, body => {
-        const clonedResponse = new Response(isNullBodyStatus(response.status) ? null : body, options);
+    const clonedResponse = new Response(isNullBodyStatus(response.status) ? null : response.body, options);
 
-        cacheOpen();
-        if (sharedCache == null) return;
-        sharedCache
-            .then(cache => cache.put(strippedURL, clonedResponse))
-            .catch((e: Error) => warnOnce(e.message));
-    });
+    cacheOpen();
+    if (sharedCache == null) return;
+    try {
+        const cache = await sharedCache;
+        await cache.put(strippedURL, clonedResponse);
+    } catch (e) {
+        warnOnce((e as Error).message);
+    }
 }
 
-export function cacheGet(
+export async function cacheGet(
     request: Request,
-    callback: (error?: Error, response?: Response, fresh?: boolean) => void,
-): void {
+): Promise<{response: Response; fresh: boolean} | null> {
     cacheOpen();
+    if (sharedCache == null) return null;
     const url = request.headers.get('CacheUrl') || request.url;
     const secondUrl = request.headers.get('SecondCacheUrl');
     request.headers.delete('CacheUrl');
@@ -182,13 +161,12 @@ export function cacheGet(
     } else {
         getCache(url, callback);
     }
-
 }
 
 function isFresh(response: Response) {
     if (!response) return false;
-    const expires = new Date(response.headers.get('Expires') || EXPIRED_TIME);
-    const cacheControl = parseCacheControl(response.headers.get('Cache-Control') || '');
+    const expires = new Date(response.headers.get('expires') || EXPIRED_TIME);
+    const cacheControl = parseCacheControl(response.headers.get('cache-control') || '');
     return Number(expires) > Date.now() && !cacheControl['no-cache'];
 }
 
@@ -204,7 +182,7 @@ let globalEntryCounter = Infinity;
 export function cacheEntryPossiblyAdded(dispatcher: Dispatcher) {
     globalEntryCounter++;
     if (globalEntryCounter > cacheCheckThreshold) {
-        dispatcher.getActor().send('enforceCacheSizeLimit', cacheLimit);
+        dispatcher.getActor().send('enforceCacheSizeLimit', cacheLimit, {skipResult: true});
         globalEntryCounter = 0;
     }
 }

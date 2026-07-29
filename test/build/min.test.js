@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'fs';
 import path from 'path';
-import browserify from 'browserify';
+import {createRequire} from 'module';
 import {fileURLToPath} from 'url';
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -14,8 +14,8 @@ const {scripts} = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package
 const minBundle = fs.readFileSync('dist/mapbox-gl.js', 'utf8');
 
 test('production build removes asserts', () => {
-    assert(minBundle.indexOf('canary assert') === -1);
-    assert(minBundle.indexOf('canary debug run') === -1);
+    assert(!minBundle.includes('canary assert'));
+    assert(!minBundle.includes('canary debug run'));
 });
 
 test('trims package.json assets', () => {
@@ -23,7 +23,7 @@ test('trims package.json assets', () => {
     // the absence of each of our script strings
     for (const name in scripts) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
-        if (minBundle.indexOf(scripts[name]) >= 0) {
+        if (minBundle.includes(scripts[name])) {
             throw new Error(`script "${name}" found in minified bundle`);
         }
     }
@@ -33,14 +33,12 @@ test('trims reference.json fields', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     assert(reference.$root.version.doc);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
-    assert(minBundle.indexOf(reference.$root.version.doc) === -1);
+    assert(!minBundle.includes(reference.$root.version.doc));
 });
 
-test('can be browserified', () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    browserify(path.join(__dirname, 'browserify-test-fixture.js')).bundle((err) => {
-        assert(!err, `Browserify failed: ${err}`);
-    });
+test('can be required as CommonJS', () => {
+    const require = createRequire(import.meta.url);
+    assert.doesNotThrow(() => require(path.join(__dirname, '../../dist/mapbox-gl.js')));
 });
 
 test('evaluates without errors', async () => {

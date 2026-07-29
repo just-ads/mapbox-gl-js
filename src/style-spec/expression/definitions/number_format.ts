@@ -14,12 +14,14 @@ export default class NumberFormat implements Expression {
     minFractionDigits: Expression | null; // Default 0
     maxFractionDigits: Expression | null; // Default 3
 
-    constructor(number: Expression,
-                locale: Expression | null,
-                currency: Expression | null,
-                unit: Expression | null,
-                minFractionDigits: Expression | null,
-                maxFractionDigits: Expression | null) {
+    constructor(
+        number: Expression,
+        locale: Expression | null,
+        currency: Expression | null,
+        unit: Expression | null,
+        minFractionDigits: Expression | null,
+        maxFractionDigits: Expression | null
+    ) {
         this.type = StringType;
         this.number = number;
         this.locale = locale;

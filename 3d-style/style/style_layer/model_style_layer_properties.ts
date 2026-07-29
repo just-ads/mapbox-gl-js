@@ -19,11 +19,13 @@ import type {StylePropertySpecification} from '../../../src/style-spec/style-spe
 export type LayoutProps = {
     "visibility": DataConstantProperty<"visible" | "none">;
     "model-id": DataDrivenProperty<string>;
+    "model-allow-density-reduction": DataConstantProperty<boolean>;
 };
 let layout: Properties<LayoutProps>;
 export const getLayoutProperties = (): Properties<LayoutProps> => layout || (layout = new Properties({
     "visibility": new DataConstantProperty(styleSpec["layout_model"]["visibility"]),
     "model-id": new DataDrivenProperty(styleSpec["layout_model"]["model-id"]),
+    "model-allow-density-reduction": new DataConstantProperty(styleSpec["layout_model"]["model-allow-density-reduction"]),
 }));
 
 export type PaintProps = {
@@ -43,6 +45,7 @@ export type PaintProps = {
     "model-cutoff-fade-range": DataConstantProperty<number>;
     "model-front-cutoff": DataConstantProperty<[number, number, number]>;
     "model-elevation-reference": DataConstantProperty<"sea" | "ground" | "hd-road-markup">;
+    "model-line-cutout-mode": DataConstantProperty<"enabled" | "disabled" | "enabled-above-cutout">;
     "model-color-use-theme": DataDrivenProperty<string>;
 };
 
@@ -64,5 +67,6 @@ export const getPaintProperties = (): Properties<PaintProps> => paint || (paint 
     "model-cutoff-fade-range": new DataConstantProperty(styleSpec["paint_model"]["model-cutoff-fade-range"]),
     "model-front-cutoff": new DataConstantProperty(styleSpec["paint_model"]["model-front-cutoff"]),
     "model-elevation-reference": new DataConstantProperty(styleSpec["paint_model"]["model-elevation-reference"]),
+    "model-line-cutout-mode": new DataConstantProperty(styleSpec["paint_model"]["model-line-cutout-mode"]),
     "model-color-use-theme": new DataDrivenProperty({"type":"string","default":"default","property-type":"data-driven"}),
 }));

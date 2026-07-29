@@ -1,5 +1,5 @@
-import assert from 'assert';
-import {clone, easeCubicInOut, sphericalDirectionToCartesian, sphericalPositionToCartesian} from '../util/util';
+import assert from '../style-spec/util/assert';
+import {easeCubicInOut, sphericalDirectionToCartesian, sphericalPositionToCartesian} from '../util/util';
 import * as interpolate from '../style-spec/util/interpolate';
 import {number as interpolateValue} from '../style-spec/util/interpolate';
 import {normalizePropertyExpression} from '../style-spec/expression/index';
@@ -24,6 +24,7 @@ import type {
 import type {ConfigOptions} from '../style-spec/types/config_options';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {Type} from '../style-spec/expression/types';
+import type {FormattedSection} from '../style-spec/expression/types/formatted';
 
 export type {ConfigOptions};
 
@@ -160,7 +161,7 @@ class TransitionablePropertyValue<T, R> {
 
     transitioned(parameters: TransitionParameters, prior: TransitioningPropertyValue<T, R>): TransitioningPropertyValue<T, R> {
         return new TransitioningPropertyValue(this.property, this.value, prior,
-            Object.assign({}, parameters.transition, this.transition), parameters.now);
+            ({...parameters.transition, ...this.transition}), parameters.now);
     }
 
     untransitioned(): TransitioningPropertyValue<T, R> {
@@ -176,8 +177,8 @@ class TransitionablePropertyValue<T, R> {
  */
 type TransitionablePropertyValues<Properties> = {
     [Key in keyof Properties]: Properties[Key] extends Property<infer T, infer R> ?
-    TransitionablePropertyValue<T, R> :
-    never;
+        TransitionablePropertyValue<T, R> :
+        never;
 };
 
 /**
@@ -208,16 +209,16 @@ export class Transitionable<Props extends {[Key in keyof Props]: Props[Key]}> {
     }
 
     getValue<S extends keyof Props, T>(name: S): PropertyValueSpecification<T> | undefined {
-        return clone(this._values[name].value.value as PropertyValueSpecification<T> | undefined);
+        return structuredClone(this._values[name].value.value as PropertyValueSpecification<T> | undefined);
     }
 
     setValue<S extends keyof Props, T>(name: S, value?: PropertyValueSpecification<T>) {
-        if (!this._values.hasOwnProperty(name)) {
+        if (!Object.hasOwn(this._values, name)) {
             this._values[name] = new TransitionablePropertyValue(this._values[name].property, this._scope, this._options, this._iconImageUseTheme) as TransitionablePropertyValues<Props>[S];
         }
         // Note that we do not _remove_ an own property in the case where a value is being reset
         // to the default: the transition might still be non-default.
-        this._values[name].value = new PropertyValue(this._values[name].property, value === null ? undefined : clone(value), this._scope, this._options, this._iconImageUseTheme);
+        this._values[name].value = new PropertyValue(this._values[name].property, value === null ? undefined : structuredClone(value), this._scope, this._options, this._iconImageUseTheme);
         if (this._values[name].value.expression.configDependencies) {
             this.configDependencies = new Set([...this.configDependencies, ...this._values[name].value.expression.configDependencies]);
             this._isIndoorDependent = this._isIndoorDependent || this._values[name].value.isIndoorDependent();
@@ -234,24 +235,24 @@ export class Transitionable<Props extends {[Key in keyof Props]: Props[Key]}> {
                 if (name.endsWith('-transition')) {
                     const propName = name.slice(0, -'-transition'.length) as keyof Props;
                     if (specProperties[propName]) {
-                        this.setTransition(propName, value as TransitionSpecification);
+                        this.setTransition(propName, value);
                     }
-                } else if (specProperties.hasOwnProperty(name)) { // skip unrecognized properties
-                    this.setValue(name as unknown as keyof Props, value);
+                } else if (Object.hasOwn(specProperties, name)) { // skip unrecognized properties
+                    this.setValue(name, value);
                 }
             }
         }
     }
 
     getTransition<S extends keyof Props>(name: S): TransitionSpecification | undefined {
-        return clone(this._values[name].transition);
+        return structuredClone(this._values[name].transition);
     }
 
     setTransition<S extends keyof Props>(name: S, value?: TransitionSpecification) {
-        if (!this._values.hasOwnProperty(name)) {
+        if (!Object.hasOwn(this._values, name)) {
             this._values[name] = new TransitionablePropertyValue(this._values[name].property) as TransitionablePropertyValues<Props>[S];
         }
-        this._values[name].transition = clone(value) || undefined;
+        this._values[name].transition = structuredClone(value) || undefined;
     }
 
     serialize(): PropertyValueSpecifications<Props> {
@@ -368,8 +369,8 @@ class TransitioningPropertyValue<T, R> {
  */
 type TransitioningPropertyValues<Properties> = {
     [Key in keyof Properties]: Properties[Key] extends Property<infer T, infer R> ?
-    TransitioningPropertyValue<T, R> :
-    never;
+        TransitioningPropertyValue<T, R> :
+        never;
 };
 
 /**
@@ -433,7 +434,7 @@ type PropertyValues<Props> = {
  *
  * @private
  */
-type PropertyValueSpecifications<Props> = Partial<{
+export type PropertyValueSpecifications<Props> = Partial<{
     [Key in keyof Props]: Props[Key] extends Property<infer T, unknown> ?
         PropertyValueSpecification<T extends Color ? string : T> :
         never;
@@ -473,11 +474,11 @@ export class Layout<Props extends {
     }
 
     getValue<S extends keyof Props, T>(name: S): PropertyValueSpecification<T> | void {
-        return clone(this._values[name].value as PropertyValueSpecification<T> | void);
+        return structuredClone(this._values[name].value as PropertyValueSpecification<T> | void);
     }
 
     setValue<S extends keyof Props>(name: S, value: unknown) {
-        this._values[name] = new PropertyValue(this._values[name].property, value === null ? undefined : clone(value), this._scope, this._options, this._iconImageUseTheme) as PropertyValues<Props>[S];
+        this._values[name] = new PropertyValue(this._values[name].property, value === null ? undefined : structuredClone(value), this._scope, this._options, this._iconImageUseTheme) as PropertyValues<Props>[S];
         if (this._values[name].expression.configDependencies) {
             this.configDependencies = new Set([...this.configDependencies, ...this._values[name].expression.configDependencies]);
             this._isIndoorDependent = this._isIndoorDependent || this._values[name].isIndoorDependent();
@@ -577,8 +578,9 @@ export class PossiblyEvaluatedPropertyValue<T> {
         featureState: FeatureState,
         canonical?: CanonicalTileID,
         availableImages?: ImageId[],
+        formattedSection?: FormattedSection
     ): T {
-        return this.property.evaluate(this.value, this.parameters, feature, featureState, canonical, availableImages, this.iconImageUseTheme);
+        return this.property.evaluate(this.value, this.parameters, feature, featureState, canonical, availableImages, this.iconImageUseTheme, formattedSection);
     }
 }
 
@@ -719,12 +721,13 @@ export class DataDrivenProperty<T> implements Property<T, PossiblyEvaluatedPrope
         featureState: FeatureState,
         canonical?: CanonicalTileID,
         availableImages?: ImageId[],
-        iconImageUseTheme?: string
+        iconImageUseTheme?: string,
+        formattedSection?: FormattedSection
     ): T {
         if (value.kind === 'constant') {
             return value.value;
         } else {
-            return value.evaluate(parameters, feature, featureState, canonical, availableImages, undefined, iconImageUseTheme);
+            return value.evaluate(parameters, feature, featureState, canonical, availableImages, formattedSection, iconImageUseTheme);
         }
     }
 }
@@ -833,9 +836,8 @@ export class Properties<Props extends {[Key in keyof Props]: Props[Key]}> {
         const defaultParameters = new EvaluationParameters(0, {});
         for (const property in properties) {
             const prop = properties[property];
-            // @ts-expect-error - TS2339 - Property 'overridable' does not exist on type 'StylePropertySpecification'.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            if (prop.specification.overridable) {
+            const spec = (prop as {specification?: {overridable?: boolean}}).specification;
+            if (spec && spec.overridable) {
                 this.overridableProperties.push(property);
             }
 

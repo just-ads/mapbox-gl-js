@@ -5,17 +5,18 @@ import toEvaluationFeature from '../../../src/data/evaluation_feature';
 import EvaluationParameters from '../../../src/style/evaluation_parameters';
 import {vec3} from 'gl-matrix';
 import {InstanceVertexArray} from '../../../src/data/array_types';
-import assert from 'assert';
+import assert from '../../../src/style-spec/util/assert';
 import {warnOnce} from '../../../src/util/util';
 import {rotationScaleYZFlipMatrix} from '../../util/model_util';
 import {tileToMeter} from '../../../src/geo/mercator_coordinate';
 import {instanceAttributes} from '../model_attributes';
 import {regionsEquals, transformPointToTile, pointInFootprint, skipClipping} from '../../../3d-style/source/replacement_source';
 import {LayerTypeMask} from '../../../3d-style/util/conflation';
-import {isValidUrl} from '../../../src/style-spec/validate/validate_model';
 import {type FeatureState, type GlobalProperties} from '../../../src/style-spec/expression/index';
 import Point from '@mapbox/point-geometry';
+import {getElevationFeature} from '../../elevation/get_elevation_feature';
 
+import type {ElevationFeature} from '../../elevation/elevation_feature';
 import type ModelStyleLayer from '../../style/style_layer/model_style_layer';
 import type {ReplacementSource, Region} from '../../../3d-style/source/replacement_source';
 import type {EvaluationFeature} from '../../../src/data/evaluation_feature';
@@ -64,6 +65,7 @@ class PerModelAttributes {
     instancedDataArray: InstanceVertexArray;
     instancedDataBuffer: VertexBuffer;
     instancesEvaluatedElevation: Array<number>; // Gets added to DEM elevation of the instance to produce value in instancedDataArray.
+    instancesRoadElevation: Array<number> | undefined;
 
     features: Array<ModelFeature>;
     idToFeaturesIndex: Partial<Record<string | number, number>>; // via this.features, enable lookup instancedDataArray based on feature ID.
@@ -137,6 +139,8 @@ class PerModelAttributes {
 }
 
 class ModelBucket implements Bucket {
+    requiresStandardRuntime = true;
+
     zoom: number;
     index: number;
     canonical: CanonicalTileID;
@@ -223,6 +227,10 @@ class ModelBucket implements Bucket {
     }
 
     updateAppearances(_canonical?: CanonicalTileID, _featureState?: FeatureStates, _availableImages?: Array<ImageId>, _globalProperties?: GlobalProperties) {
+        return {
+            hasLayoutChanges: false,
+            hasUboChanges: false
+        };
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
@@ -230,10 +238,14 @@ class ModelBucket implements Bucket {
         const needGeometry = this.layers[0]._featureFilter.needGeometry;
         this.lookup = new Uint8Array(this.lookupDim * this.lookupDim);
 
+        // Only use elevation features when model-elevation-reference is set to hd-road-markup
+        const usesHdRoadMarkupElevation = this.layers[0].paint.get('model-elevation-reference') === 'hd-road-markup';
+        const elevationFeatures = usesHdRoadMarkupElevation ? options.elevationFeatures : undefined;
+
         for (const {feature, id, index, sourceLayerIndex} of features) {
             // use non numeric id, if in properties, too.
             const featureId = (id != null) ? id :
-                (feature.properties && feature.properties.hasOwnProperty("id")) ? feature.properties["id"] : undefined;
+                (feature.properties && Object.hasOwn(feature.properties, "id")) ? feature.properties["id"] : undefined;
             const evaluationFeature = toEvaluationFeature(feature, needGeometry);
 
             if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom, {worldview: this.worldview, activeFloors: options.activeFloors}), evaluationFeature, canonical))
@@ -249,7 +261,7 @@ class ModelBucket implements Bucket {
                 patterns: {}
             };
 
-            const modelId = this.addFeature(bucketFeature, bucketFeature.geometry, evaluationFeature);
+            const modelId = this.addFeature(bucketFeature, bucketFeature.geometry, evaluationFeature, elevationFeatures, canonical);
 
             if (modelId) {
                 // Since 3D model geometry extends over footprint or point geometry, it is important
@@ -295,7 +307,7 @@ class ModelBucket implements Bucket {
         for (const modelId in this.instancesPerModel) {
             const instances: PerModelAttributes = this.instancesPerModel[modelId];
             for (const id in states) {
-                if (instances.idToFeaturesIndex.hasOwnProperty(id)) {
+                if (Object.hasOwn(instances.idToFeaturesIndex, id)) {
                     const feature = instances.features[instances.idToFeaturesIndex[id]];
                     this.evaluate(feature, states[id], instances, true);
                     this.uploaded = false;
@@ -442,9 +454,12 @@ class ModelBucket implements Bucket {
         feature: BucketFeature,
         geometry: Array<Array<Point>>,
         evaluationFeature: EvaluationFeature,
+        elevationFeatures?: ElevationFeature[],
+        canonical?: CanonicalTileID
     ): string {
         const layer = this.layers[0];
         const modelIdProperty = layer.layout.get('model-id');
+        const modelAllowDensityReductionProperty = layer.layout.get('model-allow-density-reduction');
         assert(modelIdProperty);
 
         const modelId = modelIdProperty.evaluate(evaluationFeature, {}, this.canonical);
@@ -452,18 +467,8 @@ class ModelBucket implements Bucket {
             warnOnce(`modelId is not evaluated for layer ${layer.id} and it is not going to get rendered.`);
             return modelId;
         }
-        // check if it's a valid model (absolute) URL
-        if (isValidUrl(modelId, false)) {
-            if (!this.modelUris.includes(modelId)) {
-                this.modelUris.push(modelId);
-            }
-        } else {
-            // Check if it's a style model
-            if (this.styleDefinedModelURLs[modelId] !== undefined) {
-                if (!this.modelUris.includes(modelId)) {
-                    this.modelUris.push(modelId);
-                }
-            }
+        if ((modelId.includes('://') || this.styleDefinedModelURLs[modelId]) && !this.modelUris.includes(modelId)) {
+            this.modelUris.push(modelId);
         }
         if (!this.instancesPerModel[modelId]) {
             this.instancesPerModel[modelId] = new PerModelAttributes();
@@ -473,13 +478,20 @@ class ModelBucket implements Bucket {
         const instancedDataArray = perModelVertexArray.instancedDataArray;
 
         const modelFeature = new ModelFeature(evaluationFeature, instancedDataArray.length);
+
+        // Query elevation feature once per feature
+        let tiledElevation: ElevationFeature | undefined;
+        if (elevationFeatures) {
+            tiledElevation = getElevationFeature(feature, elevationFeatures);
+        }
+
         for (const geometries of geometry) {
             for (const point of geometries) {
                 if (point.x < 0 || point.x >= EXTENT || point.y < 0 || point.y >= EXTENT) {
                     continue; // Clip on tile borders to prevent duplicates
                 }
                 // reduce density
-                if (this.lookupDim !== 0) {
+                if (this.lookupDim !== 0 && modelAllowDensityReductionProperty) {
                     const tileToLookup = (this.lookupDim - 1.0) / EXTENT;
                     const lookupIndex = this.lookupDim * ((point.y * tileToLookup) | 0) + (point.x * tileToLookup) | 0;
                     if (this.lookup) {
@@ -492,6 +504,14 @@ class ModelBucket implements Bucket {
                 this.instanceCount++;
                 const i = instancedDataArray.length;
                 instancedDataArray.resize(i + 1);
+
+                if (elevationFeatures) {
+                    if (!perModelVertexArray.instancesRoadElevation) {
+                        perModelVertexArray.instancesRoadElevation = [];
+                    }
+                    const roadElevation = tiledElevation ? tiledElevation.pointElevation(new Point(point.x, point.y)) : 0;
+                    perModelVertexArray.instancesRoadElevation.push(roadElevation);
+                }
                 perModelVertexArray.instancesEvaluatedElevation.push(0);
                 instancedDataArray.float32[i * 16] = point.x;
                 instancedDataArray.float32[i * 16 + 1] = point.y;
@@ -525,10 +545,10 @@ class ModelBucket implements Bucket {
 
         // When layer.paint.get('model-color') is constant, evaluate returns the object defined in the spec.
         // If we don't create a new object here we would be updating that, causing problems afterwards
-        const color = Object.assign({}, layer.paint.get('model-color').evaluate(evaluationFeature, featureState, canonical));
-        color.a = layer.paint.get('model-color-mix-intensity').evaluate(evaluationFeature, featureState, canonical);
+        const {r, g, b} = layer.paint.get('model-color').evaluate(evaluationFeature, featureState, canonical);
+        const a = layer.paint.get('model-color-mix-intensity').evaluate(evaluationFeature, featureState, canonical);
 
-        const rotationScaleYZFlip = [];
+        const rotationScaleYZFlip: mat4 = [];
         if (this.maxVerticalOffset < translation[2]) this.maxVerticalOffset = translation[2];
 
         // Track per model and per bucket maximum scaling as well as per instance translation
@@ -544,7 +564,7 @@ class ModelBucket implements Bucket {
         const constantTileToMeterAcrossTile = 10;
         assert(perModelVertexArray.instancedDataArray.bytesPerElement === 64);
 
-        const vaOffset2 = Math.round(100.0 * color.a) + color.b / 1.05;
+        const vaOffset2 = Math.round(100.0 * a) + b / 1.05;
 
         for (let i = 0; i < feature.instancedDataCount; ++i) {
             const instanceOffset = feature.instancedDataOffset + i;
@@ -563,8 +583,8 @@ class ModelBucket implements Bucket {
             // originally in range [0..1], scaled to range [0..0.952(arbitrary, just needs to be
             // under 1)].
             const pointY = va[offset + 1] | 0; // point.y stored in integer part
-            va[offset] = (va[offset] | 0) + color.r / 1.05; // point.x stored in integer part
-            va[offset + 1] = pointY + color.g / 1.05;
+            va[offset] = (va[offset] | 0) + r / 1.05; // point.x stored in integer part
+            va[offset + 1] = pointY + g / 1.05;
             // Element 2: packs color's alpha (as integer part) and blue component in fractional part.
             va[offset + 2] = vaOffset2;
             // tileToMeter is taken at center of tile. Prevent recalculating it over again for
@@ -574,25 +594,17 @@ class ModelBucket implements Bucket {
             // Elements [4..6]: translation evaluated for the feature.
             va[offset + 4] = translation[0];
             va[offset + 5] = translation[1];
-            va[offset + 6] = translation[2] + terrainElevationContribution;
+            const roadElevationContribution = perModelVertexArray.instancesRoadElevation ? perModelVertexArray.instancesRoadElevation[instanceOffset] : 0;
+            va[offset + 6] = translation[2] + roadElevationContribution + terrainElevationContribution;
             // Elements [7..16] Instance modelMatrix holds combined rotation and scale 3x3,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 7]  = rotationScaleYZFlip[0];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 8]  = rotationScaleYZFlip[1];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 9]  = rotationScaleYZFlip[2];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 10] = rotationScaleYZFlip[4];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 11] = rotationScaleYZFlip[5];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 12] = rotationScaleYZFlip[6];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 13] = rotationScaleYZFlip[8];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 14] = rotationScaleYZFlip[9];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             va[offset + 15] = rotationScaleYZFlip[10];
             perModelVertexArray.instancesEvaluatedElevation[instanceOffset] = translation[2];
         }

@@ -1,5 +1,7 @@
+import Color from '../style-spec/util/color';
 import DepthMode from '../gl/depth_mode';
 import CullFaceMode from '../gl/cull_face_mode';
+import ColorMode from '../gl/color_mode';
 import StencilMode from '../gl/stencil_mode';
 import Texture from './texture';
 import {
@@ -7,19 +9,27 @@ import {
     linePatternUniformValues,
     lineDefinesValues
 } from './program/line_program';
+import {lineBlendCompositeUniformValues, LINE_BLEND_MODE_MULTIPLY, LINE_BLEND_MODE_ADDITIVE} from './program/line_blend_composite_program';
+import {lineBlendReduceUniformValues} from './program/line_blend_reduce_program';
 import browser from '../util/browser';
 import {clamp, nextPowerOfTwo, warnOnce} from '../util/util';
-import {calculateGroundShadowFactor} from '../../3d-style/render/shadow_renderer';
+import {calculateGroundShadowFactor} from '../../3d-style/render/shadow_utils';
 import {renderColorRamp} from '../util/color_ramp';
 import EXTENT from '../style-spec/data/extent';
 import ResolvedImage from '../style-spec/expression/types/resolved_image';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import pixelsToTileUnits from '../source/pixels_to_tile_units';
+import Framebuffer from '../gl/framebuffer';
+import {HD} from '../../modules/hd_main';
 
+import type Context from '../gl/context';
 import type Painter from './painter';
 import type SourceCache from '../source/source_cache';
 import type LineStyleLayer from '../style/style_layer/line_style_layer';
 import type LineBucket from '../data/bucket/line_bucket';
+import type Program from './program';
+import type ProgramConfiguration from '../data/program_configuration';
+import type SegmentVector from '../data/segment';
 import type {UniformValues} from './uniform_binding';
 import type {OverscaledTileID} from '../source/tile_id';
 import type {DynamicDefinesType} from './program/program_uniforms';
@@ -54,13 +64,39 @@ export function prepare(layer: LineStyleLayer, sourceCache: SourceCache, painter
 }
 
 export default function drawLine(painter: Painter, sourceCache: SourceCache, layer: LineStyleLayer, coords: Array<OverscaledTileID>) {
-    if (painter.renderPass !== 'translucent') return;
-
     const opacity = layer.paint.get('line-opacity');
     const width = layer.paint.get('line-width');
 
     if (opacity.constantOr(1) === 0 || width.constantOr(1) === 0) return;
 
+    const blendMode = layer.paint.get('line-blend-mode');
+    const isDraping = painter.terrain && painter.terrain.renderingToTexture;
+
+    if (blendMode !== 'default' && painter.transform.projection.name !== 'globe') {
+        if (isDraping) {
+            drawLineBlendDraped(painter, sourceCache, layer, coords, blendMode);
+            return;
+        }
+        // Non-draped blend: fullscreen offscreen FBO + composite path.
+        if (painter.renderPass === 'offscreen') {
+            drawLineToFbo(painter, sourceCache, layer, coords, blendMode);
+            return;
+        }
+        if (painter.renderPass === 'translucent') {
+            const fbo = layer.lineBlendFbos && layer.lineBlendFbos.fbo;
+            if (fbo) drawLineBlendComposite(painter, layer, blendMode, fbo, null);
+            return;
+        }
+        return;
+    }
+
+    if (painter.renderPass !== 'translucent') return;
+
+    drawLineTiles(painter, sourceCache, layer, coords);
+}
+
+function drawLineTiles(painter: Painter, sourceCache: SourceCache, layer: LineStyleLayer, coords: Array<OverscaledTileID>, colorModeOverride?: Readonly<ColorMode>, forceDrapingMatrix?: boolean) {
+    const width = layer.paint.get('line-width');
     const constantEmissiveStrength = layer.paint.get('line-emissive-strength').isConstant();
     assert(painter.emissiveMode !== 'constant' || constantEmissiveStrength);
     const emissiveStrengthForDrapedLayers = layer.paint.get('line-emissive-strength').constantOr(0.0);
@@ -80,8 +116,8 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
     const hasCrossSlope = crossSlope !== undefined;
     const crossSlopeHorizontal = crossSlope < 1.0;
 
-    const colorMode = painter.colorModeForDrapableLayerRenderPass(constantEmissiveStrength ? emissiveStrengthForDrapedLayers : null);
-    const isDraping = painter.terrain && painter.terrain.renderingToTexture;
+    const colorMode = colorModeOverride ? colorModeOverride : painter.colorModeForDrapableLayerRenderPass(constantEmissiveStrength ? emissiveStrengthForDrapedLayers : null);
+    const isDraping = (painter.terrain && painter.terrain.renderingToTexture) || forceDrapingMatrix;
     const pixelRatio = isDraping ? 1.0 : browser.devicePixelRatio;
 
     const dasharrayProperty = layer.paint.get('line-dasharray');
@@ -133,6 +169,15 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
         definesValues.push("VARIABLE_LINE_WIDTH");
     }
 
+    const emissiveStrength = layer.paint.get('line-emissive-strength');
+    if (!image && emissiveStrength.value.kind !== 'constant' && emissiveStrength.value.isLineProgressConstant === false) {
+        definesValues.push("VARIABLE_LINE_EMISSIVE_STRENGTH");
+    }
+
+    if (painter._debugParams.showElevationIdDebug) {
+        definesValues.push('DEBUG_ELEVATION_ID');
+    }
+
     if (isDraping) {
         if (painter.emissiveMode === 'dual-source-blending' && !constantEmissiveStrength) {
             definesValues.push('DUAL_SOURCE_BLENDING');
@@ -140,6 +185,20 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
             definesValues.push('USE_MRT1');
         }
     }
+
+    // Cache line-width evaluation per bucket zoom for dash anchoring to avoid evaluating per tile.
+    const floorwidthByZoom: Record<number, number> = {};
+
+    // Collect tiles with partial polygon coverage for second pass stencil rendering.
+    // Per-level segments are looked up at draw time via bucket.frcData.frcPerLevel.get(frc) — zero alloc.
+    const polygonCoverageTiles: Array<{
+        coord: OverscaledTileID; bucket: LineBucket;
+        uniformValues: UniformValues<LineUniformsType | LinePatternUniformsType>;
+        programConfiguration: ProgramConfiguration;
+        program: Program<LineUniformsType | LinePatternUniformsType>;
+        depthMode: DepthMode; colorMode: Readonly<ColorMode>;
+        frcMask: number;
+    }> = [];
 
     const renderTiles = (coords: OverscaledTileID[], baseDefines: DynamicDefinesType[], depthMode: DepthMode, stencilMode3D: StencilMode, elevated: boolean, firstPass: boolean) => {
         for (const coord of coords) {
@@ -163,7 +222,7 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
                 if (directionalLight && ambientLight) {
                     groundShadowFactor = calculateGroundShadowFactor(painter.style, directionalLight, ambientLight);
                 }
-                defines.push('RENDER_SHADOWS', 'DEPTH_TEXTURE', 'NORMAL_OFFSET');
+                defines.push('RENDER_SHADOWS', 'NORMAL_OFFSET');
             }
 
             const programConfiguration = bucket.programConfigurations.get(layer.id);
@@ -184,6 +243,10 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
 
             if (patternTransition > 0 && (transitionableConstantPattern || !!programConfiguration.getPatternTransitionVertexBuffer('line-pattern'))) {
                 defines.push('LINE_PATTERN_TRANSITION');
+            }
+
+            if (bucket.elevationGroundScaleVertexBuffer) {
+                defines.push('ELEVATION_GROUND_SCALE');
             }
 
             const affectedByFog = painter.isTileAffectedByFog(coord);
@@ -221,6 +284,25 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
             const matrix = isDraping ? coord.projMatrix : null;
             const lineWidthScale = unitInMeters ? (1.0 / bucket.tileToMeter) / pixelsToTileUnits(tile, 1, painter.transform.zoom) : 1.0;
             const lineFloorWidthScale = unitInMeters ? (1.0 / bucket.tileToMeter) / pixelsToTileUnits(tile, 1, Math.floor(painter.transform.zoom)) : 1.0;
+
+            // Avoid dash flickering while loading ideal tiles on zoom level traversal.
+            // Override the floorwidth paint property to use width evaluated at bucket zoom
+            // instead of camera zoom. This ensures stable dash texture coordinates when an
+            // overscaled lower-zoom tile is temporarily rendered. Restore after draw.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            const widthProperty: {value: {kind: string; value: number}} | null = dasharray ? (layer.paint as any)._values['line-floorwidth'] : null;
+            let savedFloorwidth: number | undefined;
+            if (widthProperty && widthProperty.value.kind === 'constant') {
+                const bz = bucket.zoom;
+                if (!(bz in floorwidthByZoom)) {
+                    floorwidthByZoom[bz] = Math.max(0.01, layer.widthExpression().evaluate({zoom: bz}));
+                }
+                savedFloorwidth = widthProperty.value.value;
+                const floorZoom = Math.floor(painter.transform.zoom);
+                const zoomDiff = floorZoom - tile.tileID.overscaledZ;
+                widthProperty.value.value = floorwidthByZoom[bz] * Math.pow(2, zoomDiff);
+            }
+
             const uniformValues: UniformValues<LineUniformsType | LinePatternUniformsType> = image ?
                 linePatternUniformValues(painter, tile, layer, matrix, pixelRatio, lineWidthScale, lineFloorWidthScale, [trimStart, trimEnd], groundShadowFactor, patternTransition) :
                 lineUniformValues(painter, tile, layer, matrix, bucket.lineClipsArray.length, pixelRatio, lineWidthScale, lineFloorWidthScale, [trimStart, trimEnd], groundShadowFactor);
@@ -241,12 +323,14 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
                         const maxTextureCoverage = lineLength * maxTilePixelSize * potentialOverzoom;
                         textureResolution = clamp(nextPowerOfTwo(maxTextureCoverage), 256, context.maxTextureSize);
                     }
+                    const ignoreLut = layer.paint.get('line-gradient-use-theme').constantOr('default') === 'none';
                     layerGradient.gradient = renderColorRamp({
                         expression: layer.gradientExpression(),
                         evaluationKey: 'lineProgress',
                         resolution: textureResolution,
                         image: layerGradient.gradient || undefined,
-                        clips: bucket.lineClipsArray
+                        clips: bucket.lineClipsArray,
+                        lut: ignoreLut ? null : layer.lut
                     });
                     if (layerGradient.texture) {
                         layerGradient.texture.update(layerGradient.gradient);
@@ -274,22 +358,48 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
                 programConfiguration.updatePaintBuffers();
             }
 
-            if (elevated && !elevationFromSea) {
+            if (elevated) {
                 assert(painter.terrain);
                 painter.terrain.setupElevationDraw(tile, program);
             }
             painter.uploadCommonUniforms(context, program, coord.toUnwrapped());
 
-            const renderLine = (stencilMode: StencilMode) => {
+            // FRC coverage routing (snapshot lookup, polygon-geometry probe, second-pass
+            // collector push) lives in HD. When HD is not loaded, snapshot is null →
+            // detect returns null → renderLine/fade pass below skip the FRC paths.
+            const frcCtx = HD.drawLineFrcCoverageDetect ?
+                HD.drawLineFrcCoverageDetect(painter, bucket, coord, elevated,
+                    uniformValues, programConfiguration, program, depthMode, colorMode,
+                    polygonCoverageTiles) :
+                null;
+            const drawWithSegments = (stencilMode: StencilMode, segs: SegmentVector | undefined, opacityMultiplier?: number) => {
+                if (!segs || segs.get().length === 0) return;
                 if (lineOpacityForOcclusion != null) {
                     lineOpacityForOcclusion.value = lineOpacity * occlusionOpacity;
                 }
+                if (opacityMultiplier !== undefined) {
+                    uniformValues['u_opacity_multiplier'] = opacityMultiplier;
+                }
                 program.draw(painter, gl.TRIANGLES, depthMode,
                     stencilMode, colorMode, CullFaceMode.disabled, uniformValues,
-                    layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer, bucket.segments,
-                    layer.paint, painter.transform.zoom, programConfiguration, [bucket.layoutVertexBuffer2, bucket.patternVertexBuffer, bucket.zOffsetVertexBuffer]);
+                    layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer, segs,
+                    layer.paint, painter.transform.zoom, programConfiguration, [bucket.layoutVertexBuffer2, bucket.patternVertexBuffer, bucket.zOffsetVertexBuffer, bucket.elevationIdColVertexBuffer, bucket.elevationGroundScaleVertexBuffer]);
+                if (opacityMultiplier !== undefined) {
+                    uniformValues['u_opacity_multiplier'] = 1.0;
+                }
                 if (lineOpacityForOcclusion != null) {
                     lineOpacityForOcclusion.value = lineOpacity; //restore
+                }
+            };
+
+            // First-pass renderLine: draws "above" content. Per-level FRC dispatch (zero
+            // alloc — N extra draw calls per uncovered level) is delegated to HD when
+            // active. Otherwise the plain draw runs.
+            const renderLine = (stencilMode: StencilMode) => {
+                if (frcCtx && frcCtx.active && HD.drawLineFrcRenderLine) {
+                    HD.drawLineFrcRenderLine(bucket, frcCtx, stencilMode, drawWithSegments);
+                } else {
+                    drawWithSegments(stencilMode, bucket.segments);
                 }
             };
 
@@ -324,6 +434,17 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
                     uniformValues['u_alpha_discard_threshold'] = 0.0;
                 }
                 renderLine(elevated ? stencilMode3D : painter.stencilModeForClipping(coord));
+            }
+            // FRC fade pass for full-tile coverage (Case A): render covered segments at
+            // faded opacity. Skipped by HD when partial polygon coverage applies (handled
+            // by the second pass below).
+            if (frcCtx && HD.drawLineFrcFadePass) {
+                HD.drawLineFrcFadePass(painter, bucket, coord, frcCtx, elevated, stencilMode3D, drawWithSegments);
+            }
+
+            // Restore floorwidth paint property after draw
+            if (savedFloorwidth !== undefined) {
+                widthProperty.value.value = savedFloorwidth;
             }
         }
     };
@@ -376,6 +497,11 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
         painter.forceTerrainMode = false;
     }
 
+    // Second pass: per-FRC-level stencil passes for polygon coverage
+    if (HD.drawLineFrcCoverageSecondPass) {
+        HD.drawLineFrcCoverageSecondPass(painter, layer, polygonCoverageTiles);
+    }
+
     // When rendering to stencil, reset the mask to make sure that the tile
     // clipping reverts the stencil mask we may have drawn in the buffer.
     // The stamp could be reverted by an extra draw call of line geometry,
@@ -388,4 +514,366 @@ export default function drawLine(painter: Painter, sourceCache: SourceCache, lay
     if (occlusionOpacity !== 0 && !painter.depthOcclusion && !isDraping) {
         painter.layersWithOcclusionOpacity.push(painter.currentLayer);
     }
+}
+
+export class LineBlendFbos {
+    fbo: Framebuffer | null | undefined;
+    drapeFbo: Framebuffer | null | undefined;
+
+    destroy() {
+        if (this.fbo) {
+            this.fbo.destroy();
+            this.fbo = null;
+        }
+        if (this.drapeFbo) {
+            this.drapeFbo.destroy();
+            this.drapeFbo = null;
+        }
+    }
+}
+
+export class LineBlendDensityReadback {
+    pbo: WebGLBuffer;
+    sync: WebGLSync | null;
+    // Ping-pong FBOs used by the hierarchical reduce passes.
+    fboA: Framebuffer | null | undefined;
+    fboB: Framebuffer | null | undefined;
+    // Cached value from the last completed readback
+    maxDensity: number;
+
+    constructor(gl: WebGL2RenderingContext) {
+        this.pbo = gl.createBuffer();
+        this.sync = null;
+        this.fboA = null;
+        this.fboB = null;
+        this.maxDensity = 0;
+    }
+
+    destroy(gl: WebGL2RenderingContext) {
+        if (this.sync) {
+            gl.deleteSync(this.sync);
+            this.sync = null;
+        }
+        gl.deleteBuffer(this.pbo);
+        if (this.fboA) {
+            this.fboA.destroy();
+            this.fboA = null;
+        }
+        if (this.fboB) {
+            this.fboB.destroy();
+            this.fboB = null;
+        }
+    }
+}
+
+type BlendMode = 'additive' | 'multiply';
+const blendModeSetup: Record<BlendMode, {clearColor: Color, colorMode?: ColorMode, compositeUniformValue: number}> = {
+    'additive': {
+        clearColor: new Color(0, 0, 0, 0),
+        colorMode: ColorMode.additiveAlphaWeighted,
+        compositeUniformValue: LINE_BLEND_MODE_ADDITIVE,
+    },
+    'multiply': {
+        clearColor: new Color(1, 1, 1, 1),
+        colorMode: ColorMode.multiply,
+        compositeUniformValue: LINE_BLEND_MODE_MULTIPLY,
+    }
+};
+
+function hasFloatRenderTarget(context: Context): boolean {
+    return !!(context.extRenderToTextureHalfFloat || context.extColorBufferFloat);
+}
+
+function getColorMode(blendMode: BlendMode, context: Context): Readonly<ColorMode> {
+    if (blendMode === 'additive' && hasFloatRenderTarget(context)) {
+        // For additive blend when RGBA16F is supported we can accumulate alpha >1.0
+        // and store density information for a better composite
+        return ColorMode.additiveAlphaWeightedUnboundedAlpha;
+    }
+    return blendModeSetup[blendMode].colorMode;
+}
+
+function scheduleGpuReduceReadback(painter: Painter, layer: LineStyleLayer, sourceFbo: Framebuffer) {
+    const context = painter.context;
+    const gl = context.gl;
+
+    // --- Reduce passes: halve resolution until we reach 1×1 ---
+    let srcWidth = sourceFbo.width;
+    let srcHeight = sourceFbo.height;
+    let srcTexture = sourceFbo.colorAttachment0.get();
+
+    // Create or reuse the readback object before the reduce loop so the
+    // ping-pong FBOs can be stored on it.
+    if (!layer.lineBlendDensityReadback) {
+        layer.lineBlendDensityReadback = new LineBlendDensityReadback(gl);
+    }
+    const readback = layer.lineBlendDensityReadback;
+
+    // Ping-pong between two cached FBOs each pass,
+    // repeatedly halving the resolution until we reach 1×1.
+    let slotIndex = 0;
+    let firstPass = true;
+
+    while (srcWidth > 1 || srcHeight > 1) {
+        const dstWidth = Math.max(1, Math.floor(srcWidth / 2));
+        const dstHeight = Math.max(1, Math.floor(srcHeight / 2));
+
+        const slot = slotIndex === 0 ? 'fboA' : 'fboB';
+        readback[slot] = Framebuffer.createWithTexture(context, readback[slot], dstWidth, dstHeight, false);
+        const dstFbo = readback[slot];
+
+        context.bindFramebuffer.set(dstFbo.framebuffer);
+        context.viewport.set([0, 0, dstWidth, dstHeight]);
+
+        context.activeTexture.set(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, srcTexture);
+
+        painter.getOrCreateProgram('lineBlendReduce').draw(
+            painter, gl.TRIANGLES,
+            DepthMode.disabled, StencilMode.disabled,
+            ColorMode.unblended, CullFaceMode.disabled,
+            lineBlendReduceUniformValues(0, [1 / srcWidth, 1 / srcHeight], firstPass),
+            layer.id, painter.viewportBuffer, painter.quadTriangleIndexBuffer,
+            painter.viewportSegments, layer.paint, painter.transform.zoom,
+        );
+
+        srcWidth = dstWidth;
+        srcHeight = dstHeight;
+        srcTexture = dstFbo.colorAttachment0.get();
+        slotIndex = 1 - slotIndex;
+        firstPass = false;
+    }
+
+    // --- Async readback into a PBO ---
+    const isFloat = hasFloatRenderTarget(context);
+    const byteLength = isFloat ? 16 : 4;
+
+    // Discard previous fence — we replace it with this frame's result.
+    if (readback.sync) {
+        gl.deleteSync(readback.sync);
+        readback.sync = null;
+    }
+
+    // readPixels with a bound PIXEL_PACK_BUFFER is non-blocking: the GPU
+    // writes the result into the PBO asynchronously and this call returns
+    // immediately without stalling the CPU.
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, readback.pbo);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, byteLength, gl.STREAM_READ);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, isFloat ? gl.FLOAT : gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+
+    // Fence sync so we can poll for completion next frame without blocking.
+    readback.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+    // Restore viewport to the full painter dimensions.
+    context.viewport.set([0, 0, painter.width, painter.height]);
+}
+
+function pollAndConsumeReduceReadback(readback: LineBlendDensityReadback, gl: WebGL2RenderingContext, context: Context) {
+    if (!readback.sync) return;
+
+    // Use getSyncParameter rather than clientWaitSync. The WebGL2 spec
+    // guarantees a sync object cannot transition to SIGNALED in the same frame
+    // it was created, so clientWaitSync with timeout=0 always returns
+    // TIMEOUT_EXPIRED within the issuing frame. getSyncParameter correctly
+    // returns SIGNALED on a subsequent frame without that restriction.
+    const status = gl.getSyncParameter(readback.sync, gl.SYNC_STATUS) as GLenum;
+    if (status !== gl.SIGNALED) return;
+
+    // Fence signalled — PBO data is ready to read on the CPU.
+    gl.deleteSync(readback.sync);
+    readback.sync = null;
+
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, readback.pbo);
+    if (hasFloatRenderTarget(context)) {
+        const pixel = new Float32Array(4);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixel);
+        const densitySum = pixel[0];
+        const count = pixel[1];
+        const meanOccupiedDensity = count > 0 ? densitySum / count : 0;
+
+        // place the occupied mean in the center of the tone-mapping curve
+        const SCALE = 2.0;
+        readback.maxDensity = Math.max(meanOccupiedDensity * SCALE, 1);
+    } else {
+        readback.maxDensity = 1;
+    }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+}
+
+// Returns the cached max density value for the composite shader, or null if no
+// GPU result has been received yet. A null return means the caller should skip
+// compositing entirely — hiding the layer until the first real value arrives
+// rather than flashing at full brightness with an incorrect default.
+function resolveMaxDensity(painter: Painter, layer: LineStyleLayer): number | null {
+    const clamp = layer.paint.get('line-blend-additive-clamp');
+    if (clamp > 0) return clamp;
+    const readback = layer.lineBlendDensityReadback;
+    if (!readback || readback.maxDensity === 0) return null;
+    return readback.maxDensity;
+}
+
+// Called after the FBO has been rendered into. Polls any outstanding fence then
+// either waits or schedules a fresh readback.
+//
+// triggerRepaint is called only once, immediately after a new readback is
+// scheduled, to guarantee the fence is polled even if the map would otherwise
+// go idle. While a sync is already in flight but not yet signalled we do NOT
+// call triggerRepaint — we simply wait for the next natural render (tile load,
+// camera move, etc.) to poll it. This prevents an idle render loop when the GPU
+// is slow to signal (e.g. Firefox).
+function updateDensityReadback(painter: Painter, layer: LineStyleLayer, fbo: Framebuffer) {
+    if (!hasFloatRenderTarget(painter.context)) return;
+
+    const gl = painter.context.gl;
+    const readback = layer.lineBlendDensityReadback;
+
+    if (readback && readback.sync) {
+        // A readback is already in flight — poll without rescheduling.
+        pollAndConsumeReduceReadback(readback, gl, painter.context);
+
+        if (!readback.sync) {
+            // Fence was just consumed — schedule a fresh readback from the
+            // current FBO and request one follow-up frame to collect it.
+            scheduleGpuReduceReadback(painter, layer, fbo);
+            painter.style.map.triggerRepaint();
+        }
+        // If sync is still set the GPU isn't done yet. Do nothing — the next
+        // natural render will poll again without us forcing an extra frame.
+    } else {
+        // No sync in flight — schedule the first (or next) readback and
+        // request one follow-up frame so the fence can be polled.
+        scheduleGpuReduceReadback(painter, layer, fbo);
+        painter.style.map.triggerRepaint();
+    }
+}
+
+function drawLineToFbo(painter: Painter, sourceCache: SourceCache, layer: LineStyleLayer, coords: Array<OverscaledTileID>, blendMode: BlendMode) {
+    const context = painter.context;
+
+    const width = Math.ceil(painter.width);
+    const height = Math.ceil(painter.height);
+    if (!layer.lineBlendFbos) layer.lineBlendFbos = new LineBlendFbos();
+    layer.lineBlendFbos.fbo = Framebuffer.createWithTexture(context, layer.lineBlendFbos.fbo, width, height, true);
+
+    context.clear({color: blendModeSetup[blendMode].clearColor, depth: 1, stencil: 0});
+
+    const savedStencilSource = painter.currentStencilSource;
+    const savedStencilIDs = painter._tileClippingMaskIDs;
+    const savedNextStencilID = painter.nextStencilID;
+    painter.currentStencilSource = undefined;
+    painter._tileClippingMaskIDs = {};
+    painter.nextStencilID = 1;
+    painter._renderTileClippingMasks(layer, sourceCache, coords);
+
+    const savedRenderPass = painter.renderPass;
+    painter.renderPass = 'translucent';
+
+    drawLineTiles(painter, sourceCache, layer, coords, getColorMode(blendMode, painter.context));
+
+    painter.renderPass = savedRenderPass;
+
+    painter.currentStencilSource = savedStencilSource;
+    painter._tileClippingMaskIDs = savedStencilIDs;
+    painter.nextStencilID = savedNextStencilID;
+
+    context.viewport.set([0, 0, painter.width, painter.height]);
+
+    if (blendMode === 'additive') {
+        updateDensityReadback(painter, layer, layer.lineBlendFbos.fbo);
+    }
+}
+
+function drawLineBlendComposite(
+    painter: Painter,
+    layer: LineStyleLayer,
+    blendMode: BlendMode,
+    sourceFbo: Framebuffer,
+    targetFbo: Framebuffer | WebGLFramebuffer | null,
+    viewport?: [number, number]
+) {
+    const context = painter.context;
+    const gl = context.gl;
+
+    const opacity = blendMode === 'additive' ? 1.0 : layer.paint.get('line-opacity').constantOr(1);
+    const maxDensity = blendMode === 'additive' ? resolveMaxDensity(painter, layer) : 1.0;
+
+    // No GPU result yet — skip compositing to avoid a full-brightness flash on
+    // the first frames before the async readback has completed.
+    if (maxDensity === null) return;
+
+    context.bindFramebuffer.set(targetFbo);
+    if (viewport) {
+        context.viewport.set([0, 0, viewport[0], viewport[1]]);
+    }
+
+    context.activeTexture.set(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sourceFbo.colorAttachment0.get());
+
+    const colorMode = getColorMode(blendMode, painter.context);
+
+    painter.getOrCreateProgram('lineBlendComposite').draw(painter, gl.TRIANGLES,
+        DepthMode.disabled, StencilMode.disabled, colorMode, CullFaceMode.disabled,
+        lineBlendCompositeUniformValues(0, opacity, blendModeSetup[blendMode].compositeUniformValue, maxDensity),
+        layer.id, painter.viewportBuffer, painter.quadTriangleIndexBuffer,
+        painter.viewportSegments, layer.paint, painter.transform.zoom);
+}
+
+function drawLineBlendDraped(painter: Painter, sourceCache: SourceCache, layer: LineStyleLayer, coords: Array<OverscaledTileID>, blendMode: BlendMode) {
+    if (painter.renderPass !== 'translucent') return;
+
+    const context = painter.context;
+    const gl = context.gl;
+    const terrain = painter.terrain;
+    if (!terrain) return;
+
+    const drapeFbo = context.bindFramebuffer.current;
+
+    const isMrt = painter.emissiveMode === 'mrt-fallback';
+
+    const drapeWidth = terrain.drapeBufferSize[0];
+    const drapeHeight = terrain.drapeBufferSize[1];
+    if (!layer.lineBlendFbos) layer.lineBlendFbos = new LineBlendFbos();
+    layer.lineBlendFbos.drapeFbo = Framebuffer.createWithTexture(context, layer.lineBlendFbos.drapeFbo, drapeWidth, drapeHeight, true);
+
+    if (isMrt) {
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    }
+
+    context.clear({color: blendModeSetup[blendMode].clearColor, depth: 1, stencil: 0});
+
+    const savedStencilSource = painter.currentStencilSource;
+    const savedStencilIDs = painter._tileClippingMaskIDs;
+    const savedNextStencilID = painter.nextStencilID;
+    painter.currentStencilSource = undefined;
+    painter._tileClippingMaskIDs = {};
+    painter.nextStencilID = 1;
+
+    const savedTerrain = painter._terrain;
+    painter._terrain = null;
+    painter._renderTileClippingMasks(layer, sourceCache, coords);
+
+    // Force draping matrix since we temporarily set painter._terrain = null
+    // but still need terrain-style projection for globe/terrain rendering
+    drawLineTiles(painter, sourceCache, layer, coords, getColorMode(blendMode, painter.context), true);
+
+    painter._terrain = savedTerrain;
+
+    painter.currentStencilSource = savedStencilSource;
+    painter._tileClippingMaskIDs = savedStencilIDs;
+    painter.nextStencilID = savedNextStencilID;
+
+    if (isMrt) {
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    }
+
+    const bufferSize = terrain.drapeBufferSize;
+    const fbo = layer.lineBlendFbos && layer.lineBlendFbos.drapeFbo;
+    if (!fbo) return;
+
+    if (blendMode === 'additive') {
+        updateDensityReadback(painter, layer, fbo);
+    }
+
+    drawLineBlendComposite(painter, layer, blendMode, fbo, drapeFbo, bufferSize);
 }

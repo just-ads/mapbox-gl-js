@@ -1,6 +1,7 @@
 import {isValue} from '../values';
 import {BooleanType} from '../types';
 import {updateBBox, boxWithinBox, pointWithinPolygon, segmentIntersectSegment} from '../../util/geometry_util';
+import {mercatorXfromLng, mercatorYfromLat} from '../../util/mercator';
 
 import type Point from '@mapbox/point-geometry';
 import type {Type} from '../types';
@@ -13,14 +14,6 @@ import type {BBox} from '../../util/geometry_util';
 type GeoJSONPolygons = GeoJSON.Polygon | GeoJSON.MultiPolygon;
 
 const EXTENT = 8192;
-
-function mercatorXfromLng(lng: number) {
-    return (180 + lng) / 360;
-}
-
-function mercatorYfromLat(lat: number) {
-    return (180 - (180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)))) / 360;
-}
 
 function getTileCoordinates(p: GeoJSON.Position, canonical: CanonicalTileID) {
     const x = mercatorXfromLng(p[0]);

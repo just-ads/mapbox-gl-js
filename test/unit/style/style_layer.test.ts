@@ -207,20 +207,32 @@ describe('StyleLayer#setLayoutProperty', () => {
         layer.setLayoutProperty('visibility', 'none');
         expect(layer.getLayoutProperty('visibility')).toEqual('none');
     });
+
+    test('updates visibility for clip layer', () => {
+        const layer = createStyleLayer({
+            id: 'clip',
+            type: 'clip',
+            source: 'composite',
+            layout: {
+                visibility: 'none'
+            }
+        });
+
+        expect(layer.getLayoutProperty('visibility')).toEqual('none');
+        expect(layer.isHidden(0)).toBeTruthy();
+    });
 });
 
 describe('StyleLayer#serialize', () => {
     function createSymbolLayer(layer) {
-        return Object.assign({
-            id: 'symbol',
+        return {id: 'symbol',
             type: 'symbol',
             paint: {
                 'text-color': 'blue'
             },
             layout: {
                 'text-transform': 'uppercase'
-            }
-        }, layer);
+            }, ...layer};
     }
 
     test('serializes layers', () => {
@@ -285,8 +297,7 @@ describe('StyleLayer#serialize', () => {
 
 describe('StyleLayer#serialize', () => {
     function createSymbolLayer(layer) {
-        return Object.assign({
-            id: 'symbol',
+        return {id: 'symbol',
             type: 'symbol',
             paint: {
                 'text-color': 'blue'
@@ -309,8 +320,7 @@ describe('StyleLayer#serialize', () => {
                         "icon-size": 1
                     }
                 }
-            ]
-        }, layer);
+            ], ...layer};
     }
 
     test('serializes layers', () => {
@@ -357,8 +367,7 @@ describe('StyleLayer#serialize', () => {
 
 describe('StyleLayer#appearances', () => {
     function createSymbolLayer(layer): SymbolLayerSpecification {
-        return Object.assign({
-            id: 'symbol',
+        return {id: 'symbol',
             type: 'symbol',
             paint: {
                 'text-color': 'blue'
@@ -406,8 +415,7 @@ describe('StyleLayer#appearances', () => {
                         "icon-size": 1
                     }
                 }
-            ]
-        }, layer);
+            ], ...layer};
     }
 
     test('Correctly parses appearances', () => {
@@ -420,7 +428,7 @@ describe('StyleLayer#appearances', () => {
         expect(appearances.length).toEqual(symbolLayer.appearances.length);
         appearances.forEach((a, index) => {
             expect(a.getName(), symbolLayer.appearances[index].name);
-            const properties = a.getUnevaluatedProperties();
+            const properties = a.getUnevaluatedLayoutProperties();
             Object.keys(symbolLayer.appearances[index].properties).forEach(k => {
                 expect(properties._properties.properties[k]).toBeDefined();
             });
@@ -457,7 +465,7 @@ describe('StyleLayer#appearances', () => {
         const appearances = styleLayer.getAppearances();
 
         appearances.forEach((a, index) => {
-            const properties = a.getUnevaluatedProperties();
+            const properties = a.getUnevaluatedLayoutProperties();
             Object.keys(symbolLayer.appearances[index].properties).forEach(k => {
                 expect(properties.getValue(k)).toEqual(symbolLayer.appearances[index].properties[k]);
             });
@@ -465,3 +473,4 @@ describe('StyleLayer#appearances', () => {
 
     });
 });
+

@@ -41,7 +41,7 @@ function MockSourceType(id, sourceOptions, _dispatcher, eventedParent) {
                     expires: sourceOptions.expires
                 });
             }
-            // eslint-disable-next-line @typescript-eslint/no-implied-eval, @typescript-eslint/no-unsafe-argument
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             setTimeout(callback, 0);
         }
         loaded() {
@@ -79,10 +79,8 @@ export function createSourceCache(options, used) {
 
     const eventedParent = new Evented();
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    const sc = new SourceCache('id', create('id', Object.assign({
-        tileSize: 512,
-        type: 'mock-source-type'
-    }, spec), /* dispatcher */ {}, eventedParent));
+    const sc = new SourceCache('id', create('id', {tileSize: 512,
+        type: 'mock-source-type', ...spec}, /* dispatcher */ {}, eventedParent));
     sc.used = typeof used === 'boolean' ? used : true;
     sc.transform = new Transform();
     sc.map = {painter: {transform: sc.transform}};
@@ -701,6 +699,7 @@ describe('SourceCache#update', () => {
         });
 
         sourceCache._source.type = 'raster';
+        sourceCache._supportsFading = true;
         await new Promise(resolve => {
             eventedParent.on('data', (e) => {
                 if (e.sourceDataType === 'metadata') {
@@ -747,6 +746,7 @@ describe('SourceCache#update', () => {
         });
 
         sourceCache._source.type = 'raster';
+        sourceCache._supportsFading = true;
         await new Promise(resolve => {
             eventedParent.on('data', (e) => {
                 if (e.sourceDataType === 'metadata') {
@@ -792,6 +792,7 @@ describe('SourceCache#update', () => {
         });
 
         sourceCache._source.type = 'raster';
+        sourceCache._supportsFading = true;
 
         await new Promise(resolve => {
             eventedParent.on('data', (e) => {
@@ -829,6 +830,7 @@ describe('SourceCache#update', () => {
         });
 
         sourceCache._source.type = 'raster';
+        sourceCache._supportsFading = true;
 
         await new Promise(resolve => {
             eventedParent.on('data', (e) => {
@@ -871,6 +873,7 @@ describe('SourceCache#update', () => {
         });
 
         sourceCache._source.type = 'raster';
+        sourceCache._supportsFading = true;
 
         await new Promise(resolve => {
             eventedParent.on('data', (e) => {
@@ -1872,15 +1875,11 @@ describe('SourceCache loads tiles recursively', () => {
 
         const {sourceCache, eventedParent} = createSourceCache({
             maxzoom: 14,
-            loadTile(tile, callback) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            loadTile(tile: Tile, callback: (error: unknown, data?: {status: number}) => void) {
                 if (tile.tileID.canonical.z > maxAvailableZoom) {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                    setTimeout(() => callback({status: 404}), 0);
+                    setTimeout(callback, 0, {status: 404});
                 } else {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                     tile.state = 'loaded';
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                     callback(null);
                 }
             }
@@ -1894,7 +1893,7 @@ describe('SourceCache loads tiles recursively', () => {
                 }
 
                 if (e.tile && e.sourceDataType !== 'error') loadedTiles++;
-                if (loadedTiles === 4) setTimeout(() => assert(resolve), 0);
+                if (loadedTiles === 4) setTimeout(assert, 0, resolve);
             });
 
             sourceCache.getSource().onAdd();
@@ -1941,9 +1940,8 @@ describe('SourceCache loads tiles recursively', () => {
         transform.zoom = 1;
 
         const {sourceCache, eventedParent} = createSourceCache({
-            loadTile(tile, callback) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                setTimeout(() => callback({status: 404}), 0);
+            loadTile(tile: Tile, callback: (error: unknown, data?: {status: number}) => void) {
+                setTimeout(callback, 0, {status: 404});
             }
         });
 
@@ -2234,3 +2232,32 @@ describe('shadow caster tiles', () => {
     });
 });
 
+describe('SourceCache#hasTransition', () => {
+    test('returns true for raster-array source with fading tile', () => {
+        const {sourceCache} = createSourceCache({
+            type: 'raster-array',
+            hasTransition: () => false
+        });
+
+        const tileID = new OverscaledTileID(0, 0, 0, 0, 0);
+        const tile = new Tile(tileID, 512, 0);
+        tile.fadeEndTime = browser.now() + 300;
+        sourceCache._tiles[tileID.key] = tile;
+
+        expect(sourceCache.hasTransition()).toBe(true);
+    });
+
+    test('returns false for raster-array source when fade is complete', () => {
+        const {sourceCache} = createSourceCache({
+            type: 'raster-array',
+            hasTransition: () => false
+        });
+
+        const tileID = new OverscaledTileID(0, 0, 0, 0, 0);
+        const tile = new Tile(tileID, 512, 0);
+        tile.fadeEndTime = browser.now() - 300;
+        sourceCache._tiles[tileID.key] = tile;
+
+        expect(sourceCache.hasTransition()).toBe(false);
+    });
+});

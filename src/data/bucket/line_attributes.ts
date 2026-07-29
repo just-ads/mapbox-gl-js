@@ -9,7 +9,15 @@ export const lineLayoutAttributes: StructArrayLayout = createLayout([
 ], 4);
 
 export const lineZOffsetAttributes: StructArrayLayout = createLayout([
-    {name: 'a_z_offset_width', components: 3, type: 'Float32'}
+    {name: 'a_z_offset_width', components: 4, type: 'Float32'}
+], 4);
+
+export const lineElevationIdColAttributes: StructArrayLayout = createLayout([
+    {name: 'a_elevation_id_col', components: 3, type: 'Float32'}
+], 4);
+
+export const lineElevationGroundScaleAttributes: StructArrayLayout = createLayout([
+    {name: 'a_elevation_ground_scale', components: 1, type: 'Float32'}
 ], 4);
 
 export const {members, size, alignment} = lineLayoutAttributes;

@@ -1,5 +1,5 @@
-import {CircleLayoutArray, CircleGlobeExtArray, CircleExtLayoutArray} from '../array_types';
-import {circleAttributes, circleAttributesExt, circleGlobeAttributesExt} from './circle_attributes';
+import {CircleLayoutArray, CircleGlobeExtArray} from '../array_types';
+import {circleAttributes, circleGlobeAttributesExt} from './circle_attributes';
 import SegmentVector from '../segment';
 import {ProgramConfigurationSet} from '../program_configuration';
 import {TriangleIndexArray} from '../index_array_type';
@@ -8,10 +8,10 @@ import toEvaluationFeature from '../evaluation_feature';
 import EXTENT from '../../style-spec/data/extent';
 import {register} from '../../util/web_worker_transfer';
 import EvaluationParameters from '../../style/evaluation_parameters';
-import Point from '@mapbox/point-geometry';
-import {ElevationFeatures, type ElevationFeature} from '../../../3d-style/elevation/elevation_feature';
-import assert from 'assert';
 
+import type Point from '@mapbox/point-geometry';
+import type {ElevationFeature} from '../../../3d-style/elevation/elevation_feature';
+import type {CircleHDExtension} from '../../../3d-style/data/bucket/circle_hd_extension';
 import type {CanonicalTileID, UnwrappedTileID} from '../../source/tile_id';
 import type {
     Bucket,
@@ -55,8 +55,6 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
 
     layoutVertexArray: CircleLayoutArray;
     layoutVertexBuffer: VertexBuffer;
-    elevatedLayoutVertexArray: CircleExtLayoutArray | undefined;
-    elevatedLayoutVertexBuffer: VertexBuffer | undefined;
     globeExtVertexArray: CircleGlobeExtArray | null | undefined;
     globeExtVertexBuffer: VertexBuffer | null | undefined;
 
@@ -69,11 +67,15 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
     uploaded: boolean;
     projection: ProjectionSpecification;
 
-    elevationMode: 'none' | 'hd-road-markup';
-    hasElevation: boolean;
-
     worldview: string | undefined;
     hasAppearances: boolean | null;
+
+    // Optional HD augmentation, populated by maybeAttachCircleHDExt
+    // (3d-style/data/bucket/circle_hd_extension.ts) when the layer declares
+    // `circle-elevation-reference: 'hd-road-markup'`. Owns the elevated vertex array
+    // and buffer; CircleBucket delegates per-feature / per-vertex elevation writes
+    // to it during addFeature.
+    hdExt: CircleHDExtension | undefined;
 
     constructor(options: BucketParameters<Layer>) {
         this.zoom = options.zoom;
@@ -90,12 +92,6 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
         this.programConfigurations = new ProgramConfigurationSet(options.layers, {zoom: options.zoom, lut: options.lut});
         this.stateDependentLayerIds = this.layers.filter((l) => l.isStateDependent()).map((l) => l.id);
 
-        this.elevationMode = (this.layers[0] as CircleStyleLayer).layout.get('circle-elevation-reference');
-        this.hasElevation = false;
-        if (this.elevationMode !== 'none') {
-            this.elevatedLayoutVertexArray = new CircleExtLayoutArray();
-        }
-
         this.worldview = options.worldview;
         this.hasAppearances = null;
     }
@@ -104,6 +100,10 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
     }
 
     updateAppearances(_canonical?: CanonicalTileID, _featureState?: FeatureStates, _availableImages?: Array<ImageId>, _globalProperties?: GlobalProperties) {
+        return {
+            hasLayoutChanges: false,
+            hasUboChanges: false
+        };
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
@@ -173,13 +173,15 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
             options.featureIndex.insert(feature, geometry, index, sourceLayerIndex, this.index);
         }
 
-        if (!this.hasElevation) {
-            this.elevatedLayoutVertexArray = undefined;
-        }
+        if (this.hdExt) this.hdExt.finalize();
     }
 
     update(states: FeatureStates, vtLayer: VectorTileLayer, availableImages: ImageId[], imagePositions: SpritePositions, layers: ReadonlyArray<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
         this.programConfigurations.updatePaintArrays(states, vtLayer, layers, availableImages, imagePositions, isBrightnessChanged, brightness, this.worldview);
+    }
+
+    updateExpressions(layers: ReadonlyArray<TypedStyleLayer>) {
+        this.programConfigurations.updateExpressions(layers);
     }
 
     isEmpty(): boolean {
@@ -199,10 +201,7 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
                 this.globeExtVertexBuffer = context.createVertexBuffer(this.globeExtVertexArray, circleGlobeAttributesExt.members);
             }
 
-            if (this.elevatedLayoutVertexArray) {
-                assert(this.layoutVertexArray.length === this.elevatedLayoutVertexArray.length);
-                this.elevatedLayoutVertexBuffer = context.createVertexBuffer(this.elevatedLayoutVertexArray, circleAttributesExt.members);
-            }
+            if (this.hdExt) this.hdExt.upload(context);
         }
         this.programConfigurations.upload(context);
         this.uploaded = true;
@@ -217,16 +216,11 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
         if (this.globeExtVertexBuffer) {
             this.globeExtVertexBuffer.destroy();
         }
-        if (this.elevatedLayoutVertexBuffer) {
-            this.elevatedLayoutVertexBuffer.destroy();
-        }
+        if (this.hdExt) this.hdExt.destroy();
     }
 
     addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, availableImages: ImageId[], canonical: CanonicalTileID, projection?: Projection | null, brightness?: number | null, elevationFeatures?: ElevationFeature[]) {
-        let tiledElevation: ElevationFeature | undefined;
-        if (this.elevationMode !== 'none') {
-            tiledElevation = ElevationFeatures.getElevationFeature(feature, elevationFeatures);
-        }
+        if (this.hdExt) this.hdExt.beginFeature(feature, elevationFeatures);
 
         for (const ring of geometry) {
             for (const point of ring) {
@@ -262,13 +256,7 @@ class CircleBucket<Layer extends CircleStyleLayer | HeatmapStyleLayer = CircleSt
                 this.addCircleVertex(x, y, 1, 1);
                 this.addCircleVertex(x, y, -1, 1);
 
-                if (this.elevationMode !== 'none') {
-                    const z = tiledElevation ? tiledElevation.pointElevation(new Point(x, y)) : 0.0;
-                    this.hasElevation = this.hasElevation || z !== 0.0;
-                    for (let i = 0; i < 4; i++) {
-                        this.elevatedLayoutVertexArray.emplaceBack(z);
-                    }
-                }
+                if (this.hdExt) this.hdExt.writeVertexQuad(x, y);
 
                 this.indexArray.emplaceBack(index, index + 1, index + 2);
                 this.indexArray.emplaceBack(index, index + 2, index + 3);

@@ -13,11 +13,9 @@
 <body>
 
 <div id="map"></div>
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
-
-mapboxgl.accessToken = getAccessToken();
 
 var places = {
     "type": "FeatureCollection",
@@ -125,6 +123,7 @@ var style = {
 };
 
 var map = window.map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     style

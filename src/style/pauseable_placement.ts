@@ -1,6 +1,6 @@
 import browser from '../util/browser';
 import {Placement} from '../symbol/placement';
-import {PerformanceUtils} from '../util/performance';
+import {algorithms} from '../symbol/placement_algorithms';
 import {makeFQID} from '../util/fqid';
 
 import type Transform from '../geo/transform';
@@ -8,8 +8,10 @@ import type {TypedStyleLayer} from './style_layer/typed_style_layer';
 import type SymbolStyleLayer from './style_layer/symbol_style_layer';
 import type Tile from '../source/tile';
 import type {BucketPart} from '../symbol/placement';
+import type {PlacementAlgorithmName} from '../symbol/placement_algorithms';
 import type {FogState} from './fog_helpers';
 import type BuildingIndex from '../source/building_index';
+import type {CollisionDetector} from '../symbol/placement_algorithm';
 
 class LayerPlacement {
     _sortAcrossTiles: boolean;
@@ -72,21 +74,49 @@ class PauseablePlacement {
     _forceFullPlacement: boolean;
     _showCollisionBoxes: boolean;
     _inProgressLayer: LayerPlacement | null | undefined;
+    _fadeDuration: number;
+    _retiredCI: CollisionDetector | null = null;
 
-    constructor(transform: Transform, order: Array<string>,
-                forceFullPlacement: boolean,
-                showCollisionBoxes: boolean,
-                fadeDuration: number,
-                crossSourceCollisions: boolean,
-                prevPlacement?: Placement,
-                fogState?: FogState | null,
-                buildingIndex?: BuildingIndex | null
-    ) {
-        this.placement = new Placement(transform, fadeDuration, crossSourceCollisions, prevPlacement, fogState, buildingIndex);
+    startNewPlacement(
+        transform: Transform,
+        order: Array<string>,
+        showCollisionBoxes: boolean,
+        fadeDuration: number,
+        crossSourceCollisions: boolean,
+        prevPlacement?: Placement,
+        fogState?: FogState | null,
+        buildingIndex?: BuildingIndex | null,
+        placementAlgorithmName?: PlacementAlgorithmName,
+    ): PauseablePlacement {
+        const algorithm = algorithms[placementAlgorithmName || 'default'];
+        this.placement = new Placement(transform, fadeDuration, crossSourceCollisions, algorithm, prevPlacement, fogState, buildingIndex, this._retiredCI);
+        this._retiredCI = null;
         this._currentPlacementIndex = order.length - 1;
-        this._forceFullPlacement = forceFullPlacement;
+        this._forceFullPlacement = false;
         this._showCollisionBoxes = showCollisionBoxes;
+        this._fadeDuration = fadeDuration;
         this._done = false;
+        this._inProgressLayer = null;
+        return this;
+    }
+
+    requestFullPlacement(): void {
+        this._forceFullPlacement = true;
+    }
+
+    isFullPlacementRequested(): boolean {
+        return this._forceFullPlacement;
+    }
+
+    setStale(): void {
+        if (this.placement) {
+            this.placement.stale = true;
+        }
+    }
+
+    isStale(): boolean {
+        if (!this.placement) return false;
+        return this.placement.stale;
     }
 
     isDone(): boolean {
@@ -97,8 +127,8 @@ class PauseablePlacement {
         const startTime = browser.now();
 
         const shouldPausePlacement = () => {
-            const elapsedTime = browser.now() - startTime;
-            return this._forceFullPlacement ? false : elapsedTime > 2;
+            if (this.isFullPlacementRequested() || this._fadeDuration === 0) return false;
+            return this.placement.algorithm.shouldPause(browser.now() - startTime);
         };
 
         while (this._currentPlacementIndex >= 0) {
@@ -130,7 +160,6 @@ class PauseablePlacement {
                 const pausePlacement = inProgressLayer.continuePlacement(sortTileByY ? layerTilesInYOrder[sourceId] : layerTiles[sourceId], this.placement, this._showCollisionBoxes, layer, shouldPausePlacement, scaleFactor);
 
                 if (pausePlacement) {
-                    PerformanceUtils.recordPlacementTime(browser.now() - startTime);
                     // We didn't finish placing all layers within 2ms,
                     // but we can keep rendering with a partial placement
                     // We'll resume here on the next frame
@@ -142,11 +171,12 @@ class PauseablePlacement {
 
             this._currentPlacementIndex--;
         }
-        PerformanceUtils.recordPlacementTime(browser.now() - startTime);
+        this._forceFullPlacement = false;
         this._done = true;
     }
 
     commit(now: number): Placement {
+        this._retiredCI = this.placement.prevPlacement ? this.placement.prevPlacement.collisionIndex : null;
         this.placement.commit(now);
         return this.placement;
     }

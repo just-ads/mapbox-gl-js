@@ -2,24 +2,38 @@ import {resolve} from 'node:path';
 import {existsSync} from 'node:fs';
 import {writeFile} from 'node:fs/promises';
 import serveStatic from 'serve-static';
-import {tilesets, staticFolders} from './test/integration/lib/middlewares.js';
+import {staticFolders} from './test/integration/lib/middlewares.js';
 import {getAllStyleFixturePaths, generateFixtureJson} from './test/integration/lib/generate-fixture-json.js';
-import {getHTML} from './test/util/html_generator';
+import {getHTML, getDiagnosticsHTML} from './test/util/html_generator';
 
+import type {DiagnosticInfo} from './test/util/html_generator';
 import type {Plugin} from 'vite';
+
+export function suiteDirs(name: 'render-tests' | 'query-tests'): string[] {
+    const dirs = [`test/integration/${name}`];
+    const internalDir = `internal/test/integration/${name}`;
+    if (existsSync(internalDir)) dirs.push(internalDir);
+    return dirs;
+}
+
+// On CI, test assets are immutable for the duration of the run. Telling the
+// browser to cache them aggressively eliminates repeated conditional-request
+// round-trips for tiles, glyphs, sprites, and models shared across tests.
+const isCI = process.env.CI === 'true';
+const staticCacheOptions = isCI ?
+    {maxAge: '1h', immutable: true, etag: false, lastModified: false} :
+    {};
 
 function getShardedTests(suiteDir: string): string[] {
     const testFiles = getAllStyleFixturePaths(suiteDir);
 
     const shardId = parseInt(process.env.POOL_SHARD_ID || '0');
     const totalShards = parseInt(process.env.POOL_SHARDS || '1');
-    const testsPerShard = Math.ceil(testFiles.length / totalShards);
 
-    const start = shardId * testsPerShard;
-    const end = Math.min(start + testsPerShard, testFiles.length);
-    const shardedTests = testFiles.slice(start, end);
-
-    return shardedTests;
+    // Interleave by index rather than slicing contiguously. Render tests are
+    // sorted alphabetically, so heavy tests cluster by feature name and a
+    // contiguous slice produces very unbalanced shards.
+    return testFiles.filter((_, i) => i % totalShards === shardId);
 }
 
 export function integrationTests({suiteDirs, includeImages}: {suiteDirs: string[], includeImages?: boolean}): Plugin {
@@ -63,17 +77,39 @@ export function integrationTests({suiteDirs, includeImages}: {suiteDirs: string[
     };
 }
 
-export function setupIntegrationTestsMiddlewares({reportPath}: {reportPath: string}): Plugin {
+function detectConfigFileFromArgv(): string | undefined {
+    const argv = process.argv;
+    const idx = argv.indexOf('--config');
+    if (idx >= 0 && idx + 1 < argv.length) return argv[idx + 1];
+    const eq = argv.find((a) => a.startsWith('--config='));
+    if (eq) return eq.slice('--config='.length);
+    return undefined;
+}
+
+function detectReproduceCommand(): string | undefined {
+    // argv[0] is node, argv[1] is the vitest entry; skip them for a clean npx invocation.
+    const rest = process.argv.slice(2);
+    if (rest.length) return `npx vitest ${rest.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}`;
+    const configFile = detectConfigFileFromArgv();
+    if (configFile) return `npx vitest run --config ${configFile}`;
+    return undefined;
+}
+
+export function setupIntegrationTestsMiddlewares({reportPath, suiteName}: {
+    reportPath: string;
+    suiteName?: string;
+}): Plugin {
     return {
         name: 'setup-integration-tests-middlewares',
         configureServer(server) {
             const reportFragmentsMap = new Map<number, string>();
+            let browserDiagnostics: Partial<DiagnosticInfo> = {};
             staticFolders.forEach((folder) => {
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
-                server.middlewares.use(`/${folder}`, serveStatic(resolve(__dirname, `test/integration/${folder}`)));
+                server.middlewares.use(`/${folder}`, serveStatic(resolve(__dirname, `test/integration/${folder}`), staticCacheOptions));
                 const internalPath = resolve(__dirname, `internal/test/integration/${folder}`);
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
-                if (existsSync(internalPath)) server.middlewares.use(`/${folder}`, serveStatic(internalPath));
+                if (existsSync(internalPath)) server.middlewares.use(`/${folder}`, serveStatic(internalPath, staticCacheOptions));
             });
             server.middlewares.use('/report-html/send-fragment', (req, res) => {
                 let body = '';
@@ -92,6 +128,21 @@ export function setupIntegrationTestsMiddlewares({reportPath}: {reportPath: stri
                 });
             });
 
+            server.middlewares.use('/report-html/send-diagnostics', (req, res) => {
+                let body = '';
+                req.on('data', (data) => { body += data; });
+                return req.on('end', () => {
+                    try {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                        browserDiagnostics = JSON.parse(body);
+                    } catch (err) {
+                        console.error('Error parsing browser diagnostics:', err);
+                    }
+                    res.writeHead(200, {'Content-Type': 'application/json'});
+                    res.end(JSON.stringify({status: 'ok'}));
+                });
+            });
+
             server.middlewares.use('/report-html/flush', (req, res) => {
                 const statsContent = reportFragmentsMap.get(0);
                 const testsContent = Array.from(reportFragmentsMap.entries()).sort((a, b) => a[0] - b[0]).map((r) => r[1]).slice(1).join('');
@@ -99,17 +150,41 @@ export function setupIntegrationTestsMiddlewares({reportPath}: {reportPath: stri
                 res.writeHead(200, {'Content-Type': 'application/json'});
                 res.end(JSON.stringify({status: 'ok'}));
 
-                writeFile(reportPath, getHTML(statsContent, testsContent)).catch((err) => {
+                const shardId = process.env.POOL_SHARD_ID;
+                const totalShards = process.env.POOL_SHARDS;
+                const diagnostics: DiagnosticInfo = {
+                    platform: 'Mapbox GL JS (Web)',
+                    generatedAt: new Date().toISOString(),
+                    testSuite: suiteName,
+                    configFile: detectConfigFileFromArgv(),
+                    reproduceCommand: detectReproduceCommand(),
+                    spriteFormat: process.env.SPRITE_FORMAT,
+                    nodeVersion: process.version,
+                    shard: shardId && totalShards ? `${Number(shardId) + 1} / ${totalShards}` : undefined,
+                    ...browserDiagnostics,
+                };
+                const diagnosticsContent = getDiagnosticsHTML(diagnostics);
+
+                writeFile(reportPath, getHTML(statsContent, testsContent, diagnosticsContent)).catch((err) => {
                     console.error('Error writing report file:', err);
                 });
             });
 
-            // eslint-disable-next-line @typescript-eslint/no-misused-promises
-            server.middlewares.use('/tilesets', tilesets);
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
-            server.middlewares.use('/mapbox-gl-styles', serveStatic(resolve(__dirname, 'node_modules/mapbox-gl-styles')));
+            server.middlewares.use('/mapbox-gl-styles', serveStatic(resolve(__dirname, 'node_modules/@mapbox/mapbox-gl-styles'), staticCacheOptions));
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
-            server.middlewares.use('/mvt-fixtures', serveStatic(resolve(__dirname, 'node_modules/@mapbox/mvt-fixtures')));
+            server.middlewares.use('/mvt-fixtures', serveStatic(resolve(__dirname, 'node_modules/@mapbox/mvt-fixtures'), staticCacheOptions));
         }
+    };
+}
+
+// Serve pre-built dist bundles as-is, bypassing Vite's transformMiddleware
+export function serveDistPlugin(): Plugin {
+    return {
+        name: 'serve-dist',
+        configureServer(server) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
+            server.middlewares.use('/dist', serveStatic(resolve(__dirname, 'dist')));
+        },
     };
 }

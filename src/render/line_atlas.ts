@@ -67,7 +67,7 @@ class LineAtlas {
 
         const ranges: DashRange[] = [];
 
-        let left = oddDashArray ? -dasharray[dasharray.length - 1] * stretch : 0;
+        let left = oddDashArray ? -dasharray.at(-1) * stretch : 0;
         let right = dasharray[0] * stretch;
         let isDash = true;
 
@@ -103,7 +103,7 @@ class LineAtlas {
                 const distLeft = Math.abs(x - range.left);
                 const distRight = Math.abs(x - range.right);
                 const minDist = Math.min(distLeft, distRight);
-                let signedDistance;
+                let signedDistance: number;
 
                 const distMiddle =  y / n * (halfStretch + 1);
                 if (range.isDash) {
@@ -113,7 +113,6 @@ class LineAtlas {
                     signedDistance = halfStretch - Math.sqrt(minDist * minDist + distMiddle * distMiddle);
                 }
 
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 this.image.data[index + x] = Math.max(0, Math.min(255, signedDistance + 128));
             }
         }
@@ -136,7 +135,7 @@ class LineAtlas {
 
         // Combine the first and last parts if possible
         const first = ranges[0];
-        const last = ranges[ranges.length - 1];
+        const last = ranges.at(-1);
         if (first.isDash === last.isDash) {
             first.left = last.left - this.width;
             last.right = first.right + this.width;
@@ -205,9 +204,12 @@ class LineAtlas {
 
         this.nextRow += height;
 
+        const lengthInt = Math.floor(length);
+        const lengthFract = Math.round((length - lengthInt) * 65535);
+
         const pos = {
             tl: [y, n],
-            br: [length, 0]
+            br: [lengthInt, lengthFract]
         } as SpritePosition;
         this.positions[key] = pos;
         return pos;

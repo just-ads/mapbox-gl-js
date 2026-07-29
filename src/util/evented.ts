@@ -18,8 +18,8 @@ interface ErrorLike {
 export class ErrorEvent extends Event<EventRegistry, 'error'> {
     error: ErrorLike;
 
-    constructor(error: ErrorLike, data: EventData = {} as EventData) {
-        super('error', Object.assign({error}, data));
+    constructor(error: ErrorLike, data: EventData = {}) {
+        super('error', {error, ...data});
     }
 }
 
@@ -45,7 +45,7 @@ type Listeners<R extends EventRegistry, Target = unknown> = {
 };
 
 function _addEventListener<R extends EventRegistry, T extends keyof R>(type: T, listener: Listener<R, T, Evented<R>>, listenerList: Listeners<R>) {
-    const listenerExists = listenerList[type] && listenerList[type].indexOf(listener) !== -1;
+    const listenerExists = listenerList[type] && listenerList[type].includes(listener);
     if (!listenerExists) {
         listenerList[type] = listenerList[type] || [];
         listenerList[type].push(listener);
@@ -138,6 +138,7 @@ export class Evented<R extends EventRegistry = EventRegistry> {
         // Compatibility with (type: string, properties: Object) signature from previous versions.
         // See https://github.com/mapbox/mapbox-gl-js/issues/6522,
         //     https://github.com/mapbox/mapbox-gl-draw/issues/766
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- needed for conditional type narrowing
         const event = typeof e === 'string' ? new Event(e, eventData as R[T] extends void ? [] : [R[T]]) : (e as Event<R, T>);
         const type = event.type;
 

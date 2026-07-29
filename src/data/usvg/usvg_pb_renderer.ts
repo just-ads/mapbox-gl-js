@@ -31,35 +31,40 @@ class ColorReplacements {
 }
 
 function getStyleColor(iconColor: Color, opacity: number = 255, colorReplacements: Map<string, Color>) {
-    const alpha = opacity / 255;
-    const serializedColor = iconColor.toString();
-    const color = colorReplacements.has(serializedColor) ? colorReplacements.get(serializedColor).clone() : iconColor.clone();
-
-    color.a *= alpha;
-
-    return color.toString();
-}
-
-function getCanvas(width: number, height: number): OffscreenCanvas | HTMLCanvasElement {
-    if (!offscreenCanvasSupported()) {
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        return canvas;
-    }
-
-    return new OffscreenCanvas(width, height);
+    const color = colorReplacements.get(iconColor.toString()) || iconColor;
+    if (opacity === 255) return color.toString();
+    return new Color(color.r, color.g, color.b, color.a * opacity / 255).toString();
 }
 
 type Context = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
 
-let canvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-let context: Context;
+// Pool of 2D contexts reused across renderIcon calls, indexed by nesting depth.
+// Rendering is synchronous, so only one context per depth is live at a time.
+const contextPool: Context[] = [];
+let contextDepth = 0;
+
+function acquireContext(width: number, height: number): Context {
+    if (contextDepth >= contextPool.length) {
+        const ctx = offscreenCanvasSupported() ?
+            new OffscreenCanvas(width, height).getContext('2d', {willReadFrequently: true}) :
+            document.createElement('canvas').getContext('2d', {willReadFrequently: true});
+        contextPool.push(ctx);
+    }
+    const ctx = contextPool[contextDepth++];
+    ctx.canvas.width = width;
+    ctx.canvas.height = height;
+    return ctx;
+}
+
+function releaseContext() {
+    contextDepth--;
+}
+
 /**
  * Renders a uSVG icon to an ImageData object.
  *
  * @param icon uSVG icon.
- * @param transform Transformation matrix.
+ * @param options Rasterization options.
  * @returns ImageData object.
  */
 export function renderIcon(icon: Icon, options: RasterizationOptions): ImageData {
@@ -79,16 +84,12 @@ export function renderIcon(icon: Icon, options: RasterizationOptions): ImageData
         0, 0
     ]);
 
-    if (canvas === null) {
-        canvas = getCanvas(10, 10);
-        context = canvas.getContext('2d', {willReadFrequently: true}) as Context;
-    }
+    const context = acquireContext(renderedWidth, renderedHeight);
 
-    canvas.width = renderedWidth;
-    canvas.height = renderedHeight;
-
-    renderNodes(context, finalTr, tree, tree as unknown as Group, colorReplacements);
-    return context.getImageData(0, 0, renderedWidth, renderedHeight);
+    renderNodes(context, finalTr, tree, tree, colorReplacements);
+    const imageData = context.getImageData(0, 0, renderedWidth, renderedHeight);
+    releaseContext();
+    return imageData;
 }
 
 function renderNodes(context: Context, transform: DOMMatrix, tree: UsvgTree, parent: Group, colorReplacements: Map<string, Color>) {
@@ -128,8 +129,7 @@ function renderGroup(context: Context, transform: DOMMatrix, tree: UsvgTree, gro
         return;
     }
 
-    const groupCanvas = getCanvas(context.canvas.width, context.canvas.height);
-    const groupContext = groupCanvas.getContext('2d') as Context;
+    const groupContext = acquireContext(context.canvas.width, context.canvas.height);
 
     renderNodes(groupContext, transform, tree, group, colorReplacements);
 
@@ -141,7 +141,8 @@ function renderGroup(context: Context, transform: DOMMatrix, tree: UsvgTree, gro
     }
 
     context.globalAlpha = group.opacity / 255;
-    context.drawImage(groupCanvas, 0, 0);
+    context.drawImage(groupContext.canvas, 0, 0);
+    releaseContext();
 }
 
 function renderPath(context: Context, transform: DOMMatrix, tree: UsvgTree, path: Path, colorReplacements: Map<string, Color>) {
@@ -303,8 +304,7 @@ function convertRadialGradient(context: Context, gradient: RadialGradient, alpha
 
 function renderClipPath(context: Context, transform: DOMMatrix, tree: UsvgTree, clipPath: ClipPath) {
     const tr = clipPath.transform ? makeTransform(clipPath.transform).preMultiplySelf(transform) : transform;
-    const groupCanvas = getCanvas(context.canvas.width, context.canvas.height);
-    const groupContext = groupCanvas.getContext('2d') as Context;
+    const groupContext = acquireContext(context.canvas.width, context.canvas.height);
 
     for (const node of clipPath.children) {
         if (node.group) {
@@ -324,18 +324,19 @@ function renderClipPath(context: Context, transform: DOMMatrix, tree: UsvgTree, 
     }
 
     context.globalCompositeOperation = 'source-over';
-    context.drawImage(groupCanvas, 0, 0);
+    context.drawImage(groupContext.canvas, 0, 0);
+    releaseContext();
 }
 
 function applyClipPath(context: Context, transform: DOMMatrix, tree: UsvgTree, clipPath: ClipPath) {
-    const maskCanvas = getCanvas(context.canvas.width, context.canvas.height);
-    const maskContext = maskCanvas.getContext('2d') as Context;
+    const maskContext = acquireContext(context.canvas.width, context.canvas.height);
 
     renderClipPath(maskContext, transform, tree, clipPath);
 
     // Canvas doesn't support mixed fill rules in a single clip path, so we'll use masking via canvas compositing instead of context.clip
     context.globalCompositeOperation = 'destination-in';
-    context.drawImage(maskCanvas, 0, 0);
+    context.drawImage(maskContext.canvas, 0, 0);
+    releaseContext();
 }
 
 function applyMask(context: Context, transform: DOMMatrix, tree: UsvgTree, mask: Mask, colorReplacements: Map<string, Color>) {
@@ -351,8 +352,7 @@ function applyMask(context: Context, transform: DOMMatrix, tree: UsvgTree, mask:
     const width = context.canvas.width;
     const height = context.canvas.height;
 
-    const maskCanvas = getCanvas(width, height);
-    const maskContext = maskCanvas.getContext('2d') as Context;
+    const maskContext = acquireContext(width, height);
 
     // clip mask to its defined size
     const maskWidth = mask.width;
@@ -387,7 +387,8 @@ function applyMask(context: Context, transform: DOMMatrix, tree: UsvgTree, mask:
     maskContext.putImageData(maskImageData, 0, 0);
 
     context.globalCompositeOperation = 'destination-in';
-    context.drawImage(maskCanvas, 0, 0);
+    context.drawImage(maskContext.canvas, 0, 0);
+    releaseContext();
 }
 
 // Transform

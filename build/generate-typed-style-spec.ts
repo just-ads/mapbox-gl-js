@@ -1,5 +1,5 @@
 import fs from 'fs';
-import assert from 'assert';
+import assert from '../src/style-spec/util/assert';
 import spec from '../src/style-spec/reference/latest';
 import {supportsPropertyExpression, supportsZoomExpression} from '../src/style-spec/util/properties';
 
@@ -79,9 +79,7 @@ function tsType(property, overrideFn?: (any) => string) {
         return `PropertyValueSpecification<${baseType}>`;
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     } else if (property.expression) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        if (property.type === 'enum') return `${baseType} | ExpressionSpecification`;
-        return `ExpressionSpecification`;
+        return `${baseType} | ExpressionSpecification`;
     } else {
         return baseType;
     }
@@ -116,7 +114,7 @@ function tsObjectDeclaration(key, properties, overrides = {}) {
 function tsObject(properties, indent, overrides = {}) {
     return `{
 ${// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-Object.keys(properties)
+    Object.keys(properties)
         .flatMap(k => {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             let property = `    ${indent}${tsProperty(k, properties[k], overrides[k])}`;
@@ -288,6 +286,9 @@ const lightTypes = Object.keys(spec['light-3d'].type.values);
 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
 const layerTypes = Object.keys(spec.layer.type.values);
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+const rootLayerKeys = Object.keys(spec.layer).filter(k => !['id', 'type', 'source', 'source-layer', 'metadata', 'paint', 'layout'].includes(k));
+
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
 const {source, ...updatableTerrainSpec} = spec.terrain;
 
@@ -424,7 +425,7 @@ ${tsObjectDeclaration('SelectorPropertySpecification', spec.selectorProperty)}
 ${tsObjectDeclaration('AppearanceSpecification', spec.appearance)}
 
 ${// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-spec.source.map(key => {
+    spec.source.map(key => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const sourceSpecName = tsSourceSpecificationTypeName(key);
         if (sourceSpecName === 'GeoJSONSourceSpecification') {
@@ -439,14 +440,14 @@ spec.source.map(key => {
 
 export type SourceSpecification =
 ${// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-spec.source.map(key => `    | ${tsSourceSpecificationTypeName(key)}`// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-).join('\n')};
+    spec.source.map(key => `    | ${tsSourceSpecificationTypeName(key)}`// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    ).join('\n')};
 
 export type IconsetSpecification =
 ${// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-spec.iconset.map(key => `    | ${// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-tsObject(spec[key], '    ')}`// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-).join('\n')};
+    spec.iconset.map(key => `    | ${// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        tsObject(spec[key], '    ')}`// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    ).join('\n')};
 
 export type ModelSpecification = ${tsType(spec.model)};
 
@@ -463,6 +464,8 @@ ${layerTypes.map(key => `    | ${tsLayerSpecificationTypeName(key)}`).join('\n')
 export type LayoutSpecification = UnionToIntersection<NonNullable<LayerSpecification['layout']>>;
 
 export type PaintSpecification = UnionToIntersection<NonNullable<LayerSpecification['paint']>>;
+
+export type LayerBaseSpecification = Pick<LayerSpecification, ${rootLayerKeys.map(k => JSON.stringify(k)).join(' | ')}>;
 
 // Aliases for easier migration from @types/mapbox-gl
 

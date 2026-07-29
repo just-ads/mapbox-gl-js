@@ -212,14 +212,14 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
             this.tileBounds = new TileBounds(this._implementation.bounds, this.minzoom, this.maxzoom);
         }
 
-        // @ts-expect-error - TS2339 - Property 'update' does not exist on type 'CustomSourceInterface<T>'.
-        implementation.update = this._update.bind(this);
-
-        // @ts-expect-error - TS2339 - Property 'clearTiles' does not exist on type 'CustomSourceInterface<T>'.
-        implementation.clearTiles = this._clearTiles.bind(this);
-
-        // @ts-expect-error - TS2339 - Property 'coveringTiles' does not exist on type 'CustomSourceInterface<T>'.
-        implementation.coveringTiles = this._coveringTiles.bind(this);
+        const impl = implementation as CustomSourceInterface<T> & {
+            update: () => void;
+            clearTiles: () => void;
+            coveringTiles: () => {z: number; x: number; y: number}[];
+        };
+        impl.update = this._update.bind(this);
+        impl.clearTiles = this._clearTiles.bind(this);
+        impl.coveringTiles = this._coveringTiles.bind(this);
 
         Object.assign(this, pick(implementation, ['dataType', 'scheme', 'minzoom', 'maxzoom', 'tileSize', 'attribution', 'minTileCacheSize', 'maxTileCacheSize']));
     }
@@ -264,12 +264,10 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
     loadTile(tile: Tile, callback: Callback<undefined>): void {
         const {x, y, z} = tile.tileID.canonical;
         const controller = new AbortController();
-        const signal = controller.signal;
+        tile.request = controller;
 
-        // @ts-expect-error - TS2741 - Property 'cancel' is missing in type 'Promise<void | Awaited<T>>' but required in type 'Cancelable'.
-        tile.request = Promise
-            .resolve(this._implementation.loadTile({x, y, z}, {signal}))
-
+        Promise
+            .resolve(this._implementation.loadTile({x, y, z}, {signal: controller.signal}))
             .then(tileLoaded.bind(this))
             .catch((error?: Error | DOMException | AJAXError) => {
                 // silence AbortError
@@ -277,8 +275,6 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
                 tile.state = 'errored';
                 callback(error);
             });
-
-        tile.request.cancel = () => controller.abort();
 
         function tileLoaded(this: CustomSource<T>, data?: T | null) {
             delete tile.request;
@@ -347,8 +343,8 @@ class CustomSource<T> extends Evented<SourceEvents> implements ISource {
     }
 
     abortTile(tile: Tile, callback?: Callback<undefined>): void {
-        if (tile.request && tile.request.cancel) {
-            tile.request.cancel();
+        if (tile.request) {
+            tile.request.abort();
             delete tile.request;
         }
 

@@ -2,6 +2,7 @@ import {unbundle, deepUnbundle} from '../util/unbundle_jsonlint';
 import {isExpression} from '../expression/index';
 import {isFunction} from '../function/index';
 import validateImport from './validate_import';
+import validateOption from './validate_option';
 import validateFunction from './validate_function';
 import validateExpression from './validate_expression';
 import validateObject from './validate_object';
@@ -54,6 +55,7 @@ const VALIDATORS: Record<string, (...args: unknown[]) => ValidationError[]> = {
     'projection': validateProjection,
     'import': validateImport,
     'iconset': validateIconset,
+    'option': validateOption,
 };
 
 export type ValidatorOptions = {
@@ -115,10 +117,11 @@ export default function validate(options: ValidatorOptions, arrayAsExpression: b
         return errors;
     }
 
-    const errors = validateObject(Object.assign({}, options, {
+    const errors = validateObject({
+        ...options,
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         valueSpec: valueSpec.type ? styleSpec[valueSpec.type] : valueSpec
-    }));
+    });
 
     return errors;
 }

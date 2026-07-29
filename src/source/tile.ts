@@ -28,11 +28,14 @@ import {transitionTileAABBinECEF, globeNormalizeECEF, tileCoordToECEF, globeToMe
 import {vec3, mat4} from 'gl-matrix';
 
 import type RasterParticleState from '../render/raster_particle_state';
+import type {RenderSourceType} from './render_source_type';
 import type FeatureIndex from '../data/feature_index';
 import type {Bucket} from '../data/bucket';
 import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
 import type {WorkerSourceVectorTileResult, WorkerSourceVectorTileCallback} from './worker_source';
+import type {FrcCoveragePolygons} from './frc_coverage_snapshot';
 import type Actor from '../util/actor';
+import type {WorkerInbox} from '../util/actor_messages';
 import type DEMData from '../data/dem_data';
 import type {AlphaImage, SpritePositions} from '../util/image';
 import type ImageAtlas from '../render/image_atlas';
@@ -42,8 +45,7 @@ import type Context from '../gl/context';
 import type {CanonicalTileID, OverscaledTileID} from './tile_id';
 import type Framebuffer from '../gl/framebuffer';
 import type Transform from '../geo/transform';
-import type {FeatureStates} from './source_state';
-import type {Cancelable} from '../types/cancelable';
+import type {FeatureStates, LayerFeatureStates} from './source_state';
 import type {FilterSpecification} from '../style-spec/types';
 import type {TilespaceQueryGeometry} from '../style/query_geometry';
 import type VertexBuffer from '../gl/vertex_buffer';
@@ -74,7 +76,7 @@ export type ExpiryData = {
 // a tile bounds outline used for getting reprojected tile geometry in non-mercator projections
 const BOUNDS_FEATURE = (() => {
     return {
-        type: 2,
+        type: 2 as const,
         extent: EXTENT,
         loadGeometry() {
             return [[
@@ -126,16 +128,18 @@ class Tile {
     expiredRequestCount: number;
     state: TileState;
     timeAdded: number | null;
-    fadeEndTime: number | null;
+    fadeEndTime: number | undefined;
     collisionBoxArray: CollisionBoxArray | null | undefined;
     redoWhenDone: boolean;
     showCollisionBoxes: boolean;
     placementSource: unknown;
-    actor: Actor | null | undefined;
+    actor: Actor<WorkerInbox> | null | undefined;
     vtLayers: {
         [_: string]: VectorTileLayer;
     };
-    isSymbolTile: boolean | null | undefined;
+    renderSourceType: RenderSourceType | null | undefined;
+    frcCoveragePolygons: FrcCoveragePolygons | null | undefined;
+    hasDeferredRoadStructure: boolean;
     isExtraShadowCaster: boolean | null | undefined;
     isRaster: boolean | null | undefined;
     _tileTransform: TileTransform;
@@ -147,7 +151,7 @@ class Tile {
     aborted: boolean | null | undefined;
     needsHillshadePrepare: boolean | null | undefined;
     needsDEMTextureUpload: boolean | null | undefined;
-    request: Cancelable | null | undefined;
+    request: AbortController | null | undefined;
     requestTime?: number;
     texture: Texture | null | undefined | UserManagedTexture;
     emissiveTexture: Texture | null | undefined | UserManagedTexture;
@@ -161,6 +165,7 @@ class Tile {
 
     symbolFadeHoldUntil: number | null | undefined;
     hasSymbolBuckets: boolean;
+    hasTunnelGeometry: boolean;
     hasRTLText: boolean;
     dependencies: Record<string, Record<StringifiedImageId, boolean>>;
     projection: Projection;
@@ -181,6 +186,8 @@ class Tile {
     _globeTileDebugTextBuffer: VertexBuffer | null | undefined;
     _lastUpdatedBrightness: number | null | undefined;
     _hasAppearances: boolean | null;
+    _lastAvailableImagesCount: number;
+    _firstPrepareComplete: boolean;
 
     worldview: string | undefined;
 
@@ -199,12 +206,15 @@ class Tile {
         this.expirationTime = null;
         this.queryPadding = 0;
         this.hasSymbolBuckets = false;
+        this.hasTunnelGeometry = false;
         this.hasRTLText = false;
         this.dependencies = {};
         this.isRaster = isRaster;
         if (painter && painter.style) {
             this._lastUpdatedBrightness = painter.style.getBrightness();
         }
+        this._lastAvailableImagesCount = 0;
+        this._firstPrepareComplete = false;
 
         // Counts the number of times a response was already expired when
         // received. We're using this to add a delay when making a new request
@@ -225,7 +235,7 @@ class Tile {
     registerFadeDuration(duration: number) {
         const fadeEndTime = duration + this.timeAdded;
         if (fadeEndTime < browser.now()) return;
-        if (this.fadeEndTime && fadeEndTime < this.fadeEndTime) return;
+        if (this.fadeEndTime !== undefined && fadeEndTime < this.fadeEndTime) return;
 
         this.fadeEndTime = fadeEndTime;
     }
@@ -278,7 +288,13 @@ class Tile {
         this.collisionBoxArray = data.collisionBoxArray;
         this.buckets = deserializeBucket(data.buckets, painter.style);
 
+        if (data.frcCoveragePolygons && data.frcCoveragePolygons.length > 0) {
+            this.frcCoveragePolygons = data.frcCoveragePolygons;
+        }
+        this.hasDeferredRoadStructure = !!data.hasDeferredRoadStructure;
+
         this.hasSymbolBuckets = false;
+        this.hasTunnelGeometry = !!data.hasTunnelGeometry;
         for (const id in this.buckets) {
             const bucket = this.buckets[id];
             if (bucket instanceof SymbolBucket) {
@@ -310,12 +326,13 @@ class Tile {
             const bucket = this.buckets[id];
             const layer = painter.style.getOwnLayer(id);
             if (!layer) continue;
-            const queryRadius = layer.queryRadius(bucket);
+            const queryRadius = layer.queryRadius(bucket) || 0;
             this.queryPadding = Math.max(this.queryPadding, queryRadius);
         }
 
         if (data.imageAtlas) {
-            this.imageAtlas = data.imageAtlas;
+            // Use the cache to reuse atlases with same content across tiles
+            this.imageAtlas = painter.style.imageManager.imageAtlasCache.getOrCache(data.imageAtlas);
         }
         if (data.glyphAtlasImage) {
             this.glyphAtlasImage = data.glyphAtlasImage;
@@ -348,7 +365,9 @@ class Tile {
         }
 
         if (this.imageAtlasTexture) {
-            this.imageAtlasTexture.destroy();
+            // Don't destroy the texture here - it may be shared across tiles via atlas caching.
+            // The ImageAtlasCache is responsible for destroying textures when atlases are GC'd.
+            this.imageAtlasTexture = null;
         }
 
         if (this.glyphAtlasTexture) {
@@ -415,7 +434,7 @@ class Tile {
 
         if (data.resourceTiming) this.resourceTiming = data.resourceTiming;
 
-        this.buckets = Object.assign({}, this.buckets, deserializeBucket(data.buckets, painter.style));
+        this.buckets = {...this.buckets, ...deserializeBucket(data.buckets, painter.style)};
 
         if (data.featureIndex) {
             this.latestFeatureIndex = data.featureIndex;
@@ -466,10 +485,16 @@ class Tile {
 
         const gl = context.gl;
         const atlas = this.imageAtlas;
-        if (atlas && !atlas.uploaded) {
-            const hasPattern = !!atlas.patternPositions.size;
-            this.imageAtlasTexture = new Texture(context, atlas.image, gl.RGBA8, {useMipmap: hasPattern});
-            (this.imageAtlas).uploaded = true;
+        if (atlas && painter) {
+            // Always go through the cache so the atlas is pinned for this frame and
+            // its texture can't be LRU-evicted by another tile's upload before render.
+            // This also picks up a fresh texture if a previous LRU eviction destroyed
+            // the one we were holding.
+            //
+            // Don't destroy old texture - it may be shared with other tiles via atlas caching.
+            // The ImageAtlasCache owns destruction.
+            this.imageAtlasTexture = painter.style.imageManager.imageAtlasCache.getTextureForAtlas(atlas, context, gl.RGBA8);
+            atlas.uploaded = true;
         }
 
         if (this.glyphAtlasImage) {
@@ -484,24 +509,50 @@ class Tile {
     }
 
     prepare(imageManager: ImageManager, painter: Painter | null | undefined, scope: string) {
-        if (this.imageAtlas && this.imageAtlasTexture) {
-            this.imageAtlas.patchUpdatedImages(imageManager, this.imageAtlasTexture, scope);
+        if (this.imageAtlas && this.imageAtlasTexture && painter) {
+            const lut = painter.style.getLut(scope);
+            this.imageAtlas.patchUpdatedImages(imageManager, this.imageAtlasTexture, scope, lut);
         }
 
         if (!painter || !this.latestFeatureIndex || !this.latestFeatureIndex.rawTileData) {
             return;
         }
         const brightness = painter.style.getBrightness();
+        const availableImages = painter.style.listImages();
+        const currentImagesCount = availableImages.length;
+
+        // Check for paint property updates
+        const updatedPaintProps = painter.style._changes.getUpdatedPaintProperties();
+        const hasPaintUpdate = Object.keys(this.buckets).some(id => {
+            const bucket = this.buckets[id];
+            return bucket.layers.some(layer => updatedPaintProps.has(layer.fqid));
+        });
+
+        // Check for transitions (e.g., opacity animations)
+        const hasTransition = Object.keys(this.buckets).some(id => {
+            const bucket = this.buckets[id];
+            return bucket.layers.some(layer => layer.hasTransition && layer.hasTransition());
+        });
+
+        // Track image count changes (only after first prepare to avoid sprite loading false positives)
+        const hasImageCountChanged = this._firstPrepareComplete && currentImagesCount !== this._lastAvailableImagesCount;
+
         if (this._hasAppearances === null) {
             this._hasAppearances = this.hasAppearances(painter);
         }
-        if (!this._lastUpdatedBrightness && !brightness && !this._hasAppearances) {
+
+        // Update tracking state BEFORE early returns to ensure consistent state
+        const isBrightnessChanged = this._lastUpdatedBrightness !== brightness;
+        this._lastAvailableImagesCount = currentImagesCount;
+        this._firstPrepareComplete = true;
+
+        if (!this._lastUpdatedBrightness && !brightness && !this._hasAppearances && !hasPaintUpdate && !hasTransition && !hasImageCountChanged) {
             return;
         }
-        if (!this._hasAppearances && this._lastUpdatedBrightness && brightness && Math.abs(this._lastUpdatedBrightness - brightness) < 0.001) {
+        if (!this._hasAppearances && !hasPaintUpdate && !hasTransition && !hasImageCountChanged && this._lastUpdatedBrightness && brightness && Math.abs(this._lastUpdatedBrightness - brightness) < 0.001) {
             return;
         }
-        this.updateBuckets(painter, this._lastUpdatedBrightness !== brightness);
+        this.updateBuckets(painter, isBrightnessChanged, undefined, hasImageCountChanged || hasPaintUpdate || hasTransition, updatedPaintProps, availableImages);
         this._lastUpdatedBrightness = brightness;
     }
 
@@ -526,6 +577,7 @@ class Tile {
         transform: Transform,
         sourceCacheTransform: Transform,
         visualizeQueryGeometry: boolean,
+        scope: string | undefined
     ): QueryResult {
         Debug.run(() => {
             if (visualizeQueryGeometry) {
@@ -560,7 +612,8 @@ class Tile {
                 availableImages,
                 tileTransform: this.tileTransform,
                 worldview: this.worldview,
-                queryRadius: maxFeatureQueryRadius
+                queryRadius: maxFeatureQueryRadius,
+                scope
             }
         );
     }
@@ -668,17 +721,18 @@ class Tile {
                 return 1000 * (1 << Math.min(this.expiredRequestCount - 1, 31));
             } else {
                 // Max value for `setTimeout` implementations is a 32 bit integer; cap this accordingly
-                return Math.min(this.expirationTime - new Date().getTime(), Math.pow(2, 31) - 1);
+                return Math.min(this.expirationTime - Date.now(), Math.pow(2, 31) - 1);
             }
         }
     }
 
-    refreshFeatureState(painter?: Painter) {
+    refreshFeatureState(painter?: Painter, states?: LayerFeatureStates) {
         if (!this.latestFeatureIndex || !(this.latestFeatureIndex.rawTileData || this.latestFeatureIndex.is3DTile) || !painter) {
             return;
         }
 
-        this.updateBuckets(painter);
+        const availableImages = painter.style.listImages();
+        this.updateBuckets(painter, false, states, undefined, undefined, availableImages);
     }
 
     hasAppearances(painter: Painter) {
@@ -691,12 +745,14 @@ class Tile {
         return false;
     }
 
-    updateBuckets(painter: Painter, isBrightnessChanged?: boolean) {
+    updateBuckets(painter: Painter, isBrightnessChanged?: boolean, states?: LayerFeatureStates, needsSymbolUBOUpdate?: boolean, updatedPaintProps?: Set<string>, availableImages?: ImageId[]) {
         if (!this.latestFeatureIndex) return;
         if (!painter.style) return;
 
-        const availableImages = painter.style.listImages();
+        const images = availableImages || painter.style.listImages();
         const brightness = painter.style.getBrightness();
+
+        const paintProps = updatedPaintProps || new Set<string>();
 
         for (const id in this.buckets) {
             if (!painter.style.hasLayer(id)) continue;
@@ -707,8 +763,13 @@ class Tile {
             const sourceLayerId = bucketLayer['sourceLayer'] || '_geojsonTileLayer';
             const sourceCache = painter.style.getLayerSourceCache(bucketLayer);
 
-            let sourceLayerStates: FeatureStates = {};
-            if (sourceCache) {
+            const hasPaintUpdate = bucket.layers.some(layer => paintProps.has(layer.fqid));
+
+            // Get fresh layer reference for UBO updates when paint properties or images changed.
+            const freshLayerFromStyle = ((needsSymbolUBOUpdate || hasPaintUpdate) && bucket instanceof SymbolBucket) ? painter.style.getOwnLayer(id) : undefined;
+
+            let sourceLayerStates: FeatureStates = (states && states[sourceLayerId]) || {};
+            if (sourceCache && !states) { // only fetch the full state if it's not an incremental state update
                 sourceLayerStates = sourceCache._state.getState(sourceLayerId, undefined) as FeatureStates;
             }
 
@@ -716,10 +777,56 @@ class Tile {
             const withStateUpdates = Object.keys(sourceLayerStates).length > 0 && !isBrightnessChanged;
             bucket.hasAppearances = bucket.layers.some(layer => layer.appearances && layer.appearances.length > 0);
             const layers = withStateUpdates ? bucket.stateDependentLayers : bucket.layers;
-            if ((withStateUpdates && bucket.stateDependentLayers.length !== 0) || isBrightnessChanged) {
+            if ((withStateUpdates && bucket.stateDependentLayers.length !== 0) || isBrightnessChanged || hasPaintUpdate || needsSymbolUBOUpdate) {
                 const vtLayers = this.latestFeatureIndex.loadVTLayers();
                 const sourceLayer = vtLayers[sourceLayerId];
-                bucket.update(sourceLayerStates, sourceLayer, availableImages, imagePositions, layers, isBrightnessChanged, brightness);
+                bucket.update(sourceLayerStates, sourceLayer, images, imagePositions, layers, isBrightnessChanged, brightness, this.tileID.canonical);
+
+                // Handle UBO updates for paint/image property changes in symbol buckets.
+                // Normally skipped when isBrightnessChanged because bucket.update() calls updateDynamicExpressions.
+                // Exception: when all data-driven properties are light-constant, bucket.update() skips the
+                // brightness re-evaluation, so we must handle any concurrent paint/image updates here instead.
+                const brightnessUpdateSkipped = isBrightnessChanged && bucket instanceof SymbolBucket &&
+                    ((bucket.text.uboBinder ? bucket.text.uboBinder.isLightConstant : true) ||
+                     (bucket.icon.uboBinder ? bucket.icon.uboBinder.isLightConstant : true));
+                if ((needsSymbolUBOUpdate || hasPaintUpdate) && (!isBrightnessChanged || brightnessUpdateSkipped) && bucket instanceof SymbolBucket && freshLayerFromStyle && freshLayerFromStyle.type === 'symbol') {
+                    const symbolBucket = bucket;
+
+                    // Re-evaluate all features with fresh paint properties or new images
+                    // TypeScript narrows freshLayerFromStyle to SymbolStyleLayer based on .type check
+                    if (symbolBucket.text && symbolBucket.text.uboBinder) {
+                        symbolBucket.text.uboBinder.updateDynamicExpressions(
+                            freshLayerFromStyle,
+                            sourceLayer,
+                            this.tileID.canonical,
+                            images,
+                            sourceLayerStates,
+                            brightness
+                        );
+                    }
+                    if (symbolBucket.icon && symbolBucket.icon.uboBinder) {
+                        symbolBucket.icon.uboBinder.updateDynamicExpressions(
+                            freshLayerFromStyle,
+                            sourceLayer,
+                            this.tileID.canonical,
+                            images,
+                            sourceLayerStates,
+                            brightness
+                        );
+                    }
+                }
+
+                // Upload updated UBO data for symbol buckets
+                if (bucket instanceof SymbolBucket) {
+                    const symbolBucket = bucket;
+                    const context = painter.context;
+                    if (symbolBucket.text && symbolBucket.text.uboBinder) {
+                        symbolBucket.text.uboBinder.upload(context);
+                    }
+                    if (symbolBucket.icon && symbolBucket.icon.uboBinder) {
+                        symbolBucket.icon.uboBinder.upload(context);
+                    }
+                }
             }
             if ((withStateUpdates && bucket.stateDependentLayers.length !== 0) || isBrightnessChanged || bucket.hasAppearances) {
                 const globalProperties = {
@@ -728,7 +835,17 @@ class Tile {
                     brightness: painter.style.getBrightness() || 0,
                     worldview: painter.worldview
                 };
-                bucket.updateAppearances(this.tileID.canonical, sourceLayerStates, availableImages, globalProperties);
+                const featureStateChanged = withStateUpdates && bucket.stateDependentLayers.length !== 0;
+                const result = bucket.updateAppearances(this.tileID.canonical, sourceLayerStates, images, globalProperties, painter.imageManager, featureStateChanged);
+                if (result && result.hasUboChanges) {
+                    const context = painter.context;
+                    if (bucket instanceof SymbolBucket && bucket.text && bucket.text.uboBinder) {
+                        bucket.text.uboBinder.upload(context);
+                    }
+                    if (bucket instanceof SymbolBucket && bucket.icon && bucket.icon.uboBinder) {
+                        bucket.icon.uboBinder.upload(context);
+                    }
+                }
             }
             if (bucket instanceof LineBucket || bucket instanceof FillBucket) {
                 if (painter._terrain && painter._terrain.enabled && sourceCache && bucket.uploadPending()) {
@@ -737,7 +854,7 @@ class Tile {
             }
             const layer = painter && painter.style && painter.style.getOwnLayer(id);
             if (layer) {
-                this.queryPadding = Math.max(this.queryPadding, layer.queryRadius(bucket));
+                this.queryPadding = Math.max(this.queryPadding, layer.queryRadius(bucket) || 0);
             }
         }
     }
@@ -807,7 +924,6 @@ class Tile {
         if (!projection || projection.name === 'mercator' || this._tileDebugBuffer) return;
 
         // reproject tile outline with adaptive resampling
-        // @ts-expect-error - TS2345 - Argument of type '{ type: number; extent: number; loadGeometry(): Point[][]; }' is not assignable to parameter of type 'FeatureWithGeometry'.
         const boundsLine = loadGeometry(BOUNDS_FEATURE, this.tileID.canonical, this.tileTransform)[0];
 
         // generate vertices for debugging tile boundaries
@@ -830,10 +946,10 @@ class Tile {
         if (this._tileBoundsBuffer || !projection || projection.name === 'mercator') return;
 
         // reproject tile outline with adaptive resampling
-        // @ts-expect-error - TS2345 - Argument of type '{ type: number; extent: number; loadGeometry(): Point[][]; }' is not assignable to parameter of type 'FeatureWithGeometry'.
         const boundsLine = loadGeometry(BOUNDS_FEATURE, this.tileID.canonical, this.tileTransform)[0];
 
-        let boundsVertices, boundsIndices;
+        let boundsVertices: TileBoundsArray;
+        let boundsIndices: TriangleIndexArray;
         if (this.isRaster) {
             // for raster tiles, generate an adaptive MARTINI mesh
             const mesh = getTileMesh(this.tileID.canonical, projection);
@@ -846,23 +962,19 @@ class Tile {
             boundsIndices = new TriangleIndexArray();
 
             for (const {x, y} of boundsLine) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                 boundsVertices.emplaceBack(x, y, 0, 0);
             }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
             const indices = earcut(boundsVertices.int16.subarray(0, boundsVertices.length * 4), undefined, 4);
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             for (let i = 0; i < indices.length; i += 3) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
                 boundsIndices.emplaceBack(indices[i], indices[i + 1], indices[i + 2]);
             }
         }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this._tileBoundsBuffer = context.createVertexBuffer(boundsVertices, boundsAttributes.members);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this._tileBoundsIndexBuffer = context.createIndexBuffer(boundsIndices);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
         this._tileBoundsSegments = SegmentVector.simpleSegment(0, 0, boundsVertices.length, boundsIndices.length);
     }
 
@@ -875,14 +987,12 @@ class Tile {
         const normalizationMatrix = globeNormalizeECEF(bounds);
 
         const phase = globeToMercatorTransition(transform.zoom);
-        let worldToECEFMatrix;
+        let worldToECEFMatrix: mat4 | undefined;
         if (phase > 0.0) {
             worldToECEFMatrix = mat4.invert(new Float64Array(16), transform.globeMatrix);
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this._makeGlobeTileDebugBorderBuffer(context, id, transform, normalizationMatrix, worldToECEFMatrix, phase);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this._makeGlobeTileDebugTextBuffer(context, id, transform, normalizationMatrix, worldToECEFMatrix, phase);
     }
 
@@ -1036,7 +1146,8 @@ class Tile {
         }
 
         if (this.imageAtlasTexture) {
-            this.imageAtlasTexture.destroy();
+            // Don't destroy the texture - it may be shared with other tiles via atlas caching.
+            // The ImageAtlasCache is responsible for destroying textures when atlases are GC'd.
             delete this.imageAtlasTexture;
         }
 

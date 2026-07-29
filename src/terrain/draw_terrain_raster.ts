@@ -2,7 +2,7 @@ import DepthMode from '../gl/depth_mode';
 import CullFaceMode from '../gl/cull_face_mode';
 import {terrainRasterUniformValues} from './terrain_raster_program';
 import {globeRasterUniformValues} from './globe_raster_program';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {easeCubicInOut} from '../util/util';
 import browser from '../util/browser';
 import {mercatorXfromLng, mercatorYfromLat} from '../geo/mercator_coordinate';
@@ -19,7 +19,7 @@ import {
     globeUseCustomAntiAliasing,
     getLatitudinalLod
 } from '../geo/projection/globe_util';
-import {calculateGroundShadowFactor} from '../../3d-style/render/shadow_renderer';
+import {calculateGroundShadowFactor} from '../../3d-style/render/shadow_utils';
 import {getCutoffParams} from '../render/cutoff';
 
 import type Program from '../render/program';
@@ -141,11 +141,6 @@ const SHADER_DEFAULT = 0;
 const SHADER_MORPHING = 1;
 const defaultDuration = 250;
 
-const shaderDefines = {
-    "0": null,
-    "1": 'TERRAIN_VERTEX_MORPHING'
-};
-
 function drawTerrainForGlobe(painter: Painter, terrain: Terrain, sourceCache: SourceCache, tileIDs: Array<OverscaledTileID>, now: number) {
     const context = painter.context;
     const gl = context.gl;
@@ -157,12 +152,12 @@ function drawTerrainForGlobe(painter: Painter, terrain: Terrain, sourceCache: So
 
     const setShaderMode = (coord: OverscaledTileID, mode: number) => {
         if (programMode === mode) return;
-        const defines = [shaderDefines[mode], 'PROJECTION_GLOBE_VIEW'];
-
+        const defines: DynamicDefinesType[] = [];
+        if (mode === SHADER_MORPHING) defines.push('TERRAIN_VERTEX_MORPHING');
+        defines.push('PROJECTION_GLOBE_VIEW');
         if (useCustomAntialiasing) defines.push('CUSTOM_ANTIALIASING');
 
         const affectedByFog = painter.isTileAffectedByFog(coord);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         program = painter.getOrCreateProgram('globeRaster', {defines, overrideFog: affectedByFog});
         programMode = mode;
     };
@@ -307,13 +302,12 @@ function drawTerrainRaster(painter: Painter, terrain: Terrain, sourceCache: Sour
             if (programMode === mode)
                 return;
             const modes: DynamicDefinesType[] = [];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            modes.push(shaderDefines[mode]);
+            if (mode === SHADER_MORPHING) modes.push('TERRAIN_VERTEX_MORPHING');
             if (cutoffParams.shouldRenderCutoff) {
                 modes.push('RENDER_CUTOFF');
             }
             if (shadowRenderer) {
-                modes.push('RENDER_SHADOWS', 'DEPTH_TEXTURE');
+                modes.push('RENDER_SHADOWS');
                 if (shadowRenderer.useNormalOffset) {
                     modes.push('NORMAL_OFFSET');
                 }
@@ -364,7 +358,7 @@ function drawTerrainRaster(painter: Painter, terrain: Terrain, sourceCache: Sour
 
                 const morph = vertexMorphing.getMorphValuesForProxy(coord.key);
                 const shaderMode = morph ? SHADER_MORPHING : SHADER_DEFAULT;
-                let elevationOptions;
+                let elevationOptions: {morphing: {srcDemTile: Tile, dstDemTile: Tile, phase: number}} | undefined;
 
                 if (morph) {
                     elevationOptions = {morphing: {srcDemTile: morph.from, dstDemTile: morph.to, phase: easeCubicInOut(morph.phase)}};
@@ -377,7 +371,6 @@ function drawTerrainRaster(painter: Painter, terrain: Terrain, sourceCache: Sour
                     continue;
                 }
 
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 terrain.setupElevationDraw(tile, program, elevationOptions);
 
                 const unwrappedId = coord.toUnwrapped();

@@ -5,4 +5,4 @@ import config from '../../../src/util/config';
 config.REQUIRE_ACCESS_TOKEN = false;
 
 mapboxgl.prewarm();
-mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js');
+mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.4.0/mapbox-gl-rtl-text.js');

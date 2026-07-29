@@ -971,6 +971,47 @@ test('Marker can set and update altitude', () => {
     map.remove();
 });
 
+test('Marker setAltitude restores shadow without changing element reference', () => {
+    const marker = new Marker({altitude: 100});
+    const element = marker.getElement();
+
+    marker.setAltitude(0);
+
+    expect(marker.getElement()).toBe(element);
+    const svg = marker.getElement().firstElementChild;
+    expect(svg.firstElementChild.tagName.toLowerCase()).toEqual('ellipse');
+});
+
+test('Marker setAltitude preserves popup element state across zero-crossing', () => {
+    const map = createMap();
+    const marker = new Marker()
+        .setLngLat([0, 0])
+        .addTo(map)
+        .setPopup(new Popup());
+
+    expect(marker.getElement().getAttribute('role')).toEqual('button');
+    expect(marker.getElement().getAttribute('tabindex')).toEqual('0');
+    expect(marker.getElement().getAttribute('aria-expanded')).toEqual('false');
+
+    marker.setAltitude(100);
+
+    expect(marker.getElement().getAttribute('role')).toEqual('button');
+    expect(marker.getElement().getAttribute('tabindex')).toEqual('0');
+    expect(marker.getElement().getAttribute('aria-expanded')).toEqual('false');
+
+    map.remove();
+});
+
+test('Marker setAltitude with custom element does not touch shadow logic', () => {
+    const customElement = document.createElement('div');
+    const marker = new Marker({element: customElement});
+
+    marker.setAltitude(100);
+    marker.setAltitude(0);
+
+    expect(marker.getElement()).toBe(customElement);
+});
+
 test('Marker transforms rotation with the map', () => {
     const map = createMap();
     const marker = new Marker({rotationAlignment: 'map'})

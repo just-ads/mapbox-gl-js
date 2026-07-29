@@ -1,5 +1,5 @@
 {
-  "name": "mapbox-gl-ts",
+  "name": "typescript-build-test",
   "scripts": {
     "pretest": "./pretest.sh",
     "tsc": "tsc --project tsconfig.json",
@@ -9,6 +9,6 @@
   "devDependencies": {
     "@types/geojson": "*",
     "@types/node": "*",
-    "typescript": "^5.8.3"
+    "typescript": "^6.0.2"
   }
 }

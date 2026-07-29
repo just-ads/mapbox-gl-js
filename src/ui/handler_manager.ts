@@ -17,7 +17,7 @@ import DragRotateHandler from './handler/shim/drag_rotate';
 import TouchZoomRotateHandler from './handler/shim/touch_zoom_rotate';
 import {bindAll} from '../util/util';
 import Point from '@mapbox/point-geometry';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {vec3} from 'gl-matrix';
 import {latFromMercatorY, mercatorScale} from '../geo/mercator_coordinate';
 
@@ -304,7 +304,7 @@ class HandlerManager {
     ): boolean {
         for (const name in activeHandlers) {
             if (name === myName) continue;
-            if (!allowed || allowed.indexOf(name) < 0) {
+            if (!allowed || !allowed.includes(name)) {
                 return true;
             }
         }
@@ -562,12 +562,12 @@ class HandlerManager {
                 // This scenario is possible if user is trying to zoom towards a feature like a hill or a mountain.
                 // Convert zoomDelta to a movement vector as if the camera would be orbiting around the picked point
                 const movement = tr.zoomDeltaToMovement(pickedPosition, zoomDelta);
-                vec3.scale(zoomVec as [number, number, number], aroundRay.dir, movement);
+                vec3.scale(zoomVec, aroundRay.dir, movement);
             }
         }
 
         // Mutate camera state via CameraAPI
-        const translation = vec3.add(panVec as [number, number, number], panVec as [number, number, number], zoomVec as [number, number, number]);
+        const translation = vec3.add(panVec, panVec, zoomVec);
         tr._translateCameraConstrained(translation);
 
         if (zoomDelta && Math.abs(tr.zoom - originalZoom) > 0.0001) {

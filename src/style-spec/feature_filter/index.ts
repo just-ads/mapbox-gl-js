@@ -2,7 +2,7 @@ import latest from '../reference/latest';
 import {deepUnbundle} from '../util/unbundle_jsonlint';
 import {createExpression} from '../expression/index';
 import {isFeatureConstant} from '../expression/is_constant';
-import assert from 'assert';
+import assert from '../util/assert';
 
 import type Point from '@mapbox/point-geometry';
 import type {CanonicalTileID} from '../types/tile_id';
@@ -160,7 +160,7 @@ ${JSON.stringify(filterExp, null, 2)}
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractStaticFilter(filter: any): any {
+function extractStaticFilter(filter: unknown | unknown[]): any {
     if (!isDynamicFilter(filter)) {
         return filter;
     }
@@ -169,7 +169,7 @@ function extractStaticFilter(filter: any): any {
     let result = deepUnbundle(filter);
 
     // 1. Union branches
-    unionDynamicBranches(result);
+    unionDynamicBranches(result as unknown[]);
 
     // 2. Collapse dynamic conditions to  `true`
     result = collapseDynamicBooleanExpressions(result);
@@ -202,59 +202,36 @@ function collapseDynamicBooleanExpressions(expression: any): any {
  *
  * @param {Array<any>} filter the filter expression mutated in-place.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function unionDynamicBranches(filter: any) {
+function unionDynamicBranches(filter: unknown[]) {
     let isBranchingDynamically = false;
-    const branches = [];
-
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const branches: unknown[] = [];
     if (filter[0] === 'case') {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         for (let i = 1; i < filter.length - 1; i += 2) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             isBranchingDynamically = isBranchingDynamically || isDynamicFilter(filter[i]);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             branches.push(filter[i + 1]);
         }
-
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        branches.push(filter[filter.length - 1]);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        branches.push(filter.at(-1));
     } else if (filter[0] === 'match') {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         isBranchingDynamically = isBranchingDynamically || isDynamicFilter(filter[1]);
-
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         for (let i = 2; i < filter.length - 1; i += 2) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             branches.push(filter[i + 1]);
         }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        branches.push(filter[filter.length - 1]);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        branches.push(filter.at(-1));
     } else if (filter[0] === 'step') {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         isBranchingDynamically = isBranchingDynamically || isDynamicFilter(filter[1]);
-
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         for (let i = 1; i < filter.length - 1; i += 2) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             branches.push(filter[i + 1]);
         }
     }
 
     if (isBranchingDynamically) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         filter.length = 0;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         filter.push('any', ...branches);
     }
 
     // traverse and recurse into children
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     for (let i = 1; i < filter.length; i++) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        unionDynamicBranches(filter[i]);
+        unionDynamicBranches(filter[i] as unknown[]);
     }
 }
 
@@ -347,10 +324,8 @@ function convertFilter(filter?: Array<any> | null): unknown {
         op === '>=' ? convertComparisonOp(filter[1], filter[2], op) :
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         op === 'any' ? convertDisjunctionOp(filter.slice(1)) :
-        // @ts-expect-error - TS2769 - No overload matches this call.
-        op === 'all' ? ['all'].concat(filter.slice(1).map(convertFilter)) :
-        // @ts-expect-error - TS2769 - No overload matches this call.
-        op === 'none' ? ['all'].concat(filter.slice(1).map(convertFilter).map(convertNegation)) :
+        op === 'all' ? (['all'] as unknown[]).concat(filter.slice(1).map(convertFilter)) :
+        op === 'none' ? (['all'] as unknown[]).concat(filter.slice(1).map(convertFilter).map(convertNegation)) :
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         op === 'in' ? convertInOp(filter[1], filter.slice(2)) :
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
@@ -380,8 +355,7 @@ function convertComparisonOp(property: string, value: any, op: string) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function convertDisjunctionOp(filters: Array<Array<any>>) {
-// @ts-expect-error - TS2769 - No overload matches this call.
-    return ['any'].concat(filters.map(convertFilter));
+    return (['any'] as unknown[]).concat(filters.map(convertFilter));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

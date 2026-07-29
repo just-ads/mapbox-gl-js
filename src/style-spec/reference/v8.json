@@ -593,6 +593,19 @@
           "ios": "11.0.0"
         }
       }
+    },
+    "shadow-draw-before-layer": {
+      "type": "string",
+      "property-type": "data-constant",
+      "doc": "Specify a layer before which shadows are drawn on the ground. If not specified, shadows are drawn after the last 3D layer. This property does not affect shadows on terrain.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.18.0",
+          "android": "11.18.0",
+          "ios": "11.18.0"
+        }
+      },
+      "experimental": true
     }
   },
   "properties_light_ambient": {
@@ -1428,6 +1441,10 @@
        },
       "doc": "Type of model source to be added. From single models to represent 2D layers to 3D tiled models covering a wide area."
     },
+    "url": {
+      "type": "string",
+      "doc": "A URL to a TileJSON resource. Supported protocols are `http:`, `https:`, and `mapbox://<Tileset ID>`. Required if `tiles` is not provided."
+    },
     "maxzoom": {
       "type": "number",
       "default": 18,
@@ -1828,6 +1845,21 @@
             "vector"
           ]
         }]
+    },
+    "model-allow-density-reduction": {
+      "type": "boolean",
+      "default": true,
+      "transition": false,
+      "experimental": true,
+      "doc": "If true, the models will be reduced in density based on the zoom level. This is useful for large datasets that may be slow to render.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "0.10.0",
+          "android": "2.0.1",
+          "ios": "2.0.0"
+        }
+      },
+      "property-type": "data-constant"
     }
   },
   "layout_clip": {
@@ -1866,6 +1898,30 @@
           "js": "3.6.0",
           "android": "11.7.0",
           "ios": "11.7.0"
+        }
+      },
+      "expression": {
+        "interpolated": false
+      },
+      "property-type": "data-constant"
+    },
+    "visibility": {
+      "type": "enum",
+      "values": {
+        "visible": {
+          "doc": "The layer is shown."
+        },
+        "none": {
+          "doc": "The layer is not shown."
+        }
+      },
+      "default": "visible",
+      "doc": "Whether this layer is displayed.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.18.0",
+          "android": "11.18.0",
+          "ios": "11.18.0"
         }
       },
       "expression": {
@@ -2151,6 +2207,22 @@
         "interpolated": false
       },
       "property-type": "constant"
+    },
+    "source-max-zoom": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 24,
+      "private": true,
+      "experimental": true,
+      "doc": "The maximum zoom level at which to load and parse source tiles for this layer. When set, tiles are never loaded or re-parsed above this zoom level. At higher zoom levels, the renderer reuses tiles from this zoom level without creating overscaled variants. This reduces the number of tiles parsed and prevents tile-border artifacts for layers like fill-extrusion.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.21.0",
+          "android": "11.21.0",
+          "ios": "11.21.0"
+        }
+      },
+      "property-type": "constant"
     }
   },
   "layout_building": {
@@ -2166,7 +2238,7 @@
       },
       "default": "visible",
       "doc": "Whether this layer is displayed.",
-      "private": true,      
+      "private": true,
       "sdk-support": {
         "basic functionality": {
           "js": "3.16.0",
@@ -2645,8 +2717,7 @@
     },
     "line-z-offset": {
       "type": "number",
-      "experimental": true,
-      "doc": "Vertical offset from ground, in meters. Defaults to 0. This is an experimental property with some known issues:\n * Not supported for globe projection at the moment \n * Elevated line discontinuity is possible on tile borders with terrain enabled \n * Rendering artifacts can happen near line joins and line caps depending on the line styling \n * Rendering artifacts relating to `line-opacity` and `line-blur` \n * Elevated line visibility is determined by layer order \n * Z-fighting issues can happen with intersecting elevated lines \n * Elevated lines don't cast shadows",
+      "doc": "Vertical offset from ground, in meters. Not supported for globe projection at the moment.",
       "default": 0,
       "requires": [
         "line-elevation-reference"
@@ -2691,7 +2762,6 @@
         }
       },
       "default": "none",
-      "experimental": true,
       "transition": false,
       "sdk-support": {
         "basic functionality": {
@@ -2782,6 +2852,38 @@
         ]
       },
       "property-type": "data-constant"
+    },
+    "line-elevation-ground-scale": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1,
+      "doc": "Controls how much the elevation of lines with `line-elevation-reference` set to `sea` scales with terrain exaggeration. A value of 0 keeps the line at a fixed altitude above sea level. A value of 1 scales the elevation proportionally with terrain exaggeration.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.19.0",
+          "android": "11.19.0",
+          "ios": "11.19.0"
+        },
+        "data-driven styling": {
+          "js": "3.19.0",
+          "android": "11.19.0",
+          "ios": "11.19.0"
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom",
+          "feature",
+          "line-progress"
+        ]
+      },
+      "requires": [
+        "line-z-offset"
+      ],
+      "transition": true,
+      "property-type": "data-driven"
     }
   },
   "layout_symbol": {
@@ -3154,7 +3256,6 @@
       "minimum": [0.1, 0.1],
       "maximum": [10, 10],
       "experimental": true,
-      "private": true,
       "expression": {
         "interpolated": false
       },
@@ -3671,7 +3772,6 @@
       "minimum": [0.1, 0.1],
       "maximum": [10, 10],
       "experimental": true,
-      "private": true,
       "expression": {
         "interpolated": false
       },
@@ -6586,13 +6686,6 @@
           "doc": "Projection where objects are of the same scale regardless of whether they are far away or near to the camera. Parallel lines remains parallel and there is no vanishing point."
         }
       },
-      "transition": true,
-      "expression": {
-        "interpolated": true,
-        "parameters": [
-          "zoom"
-        ]
-      },
       "sdk-support": {
         "basic functionality": {
           "js": "3.0.0",
@@ -7857,6 +7950,30 @@
       },
       "property-type": "data-constant"
     },
+    "fill-extrusion-front-cutoff": {
+      "type": "array",
+      "private": true,
+      "experimental": true,
+      "value": "number",
+      "property-type": "data-constant",
+      "transition": false,
+      "expression": {
+        "interpolated": true,
+        "parameters": ["zoom"]
+      },
+      "length": 3,
+      "default": [0.0, 0.0, 1.0],
+      "minimum": [0.0, 0.0, 0.0],
+      "maximum": [1.0, 1.0, 1.0],
+      "doc": "An array for configuring the fade-out effect for the front cutoff of content on pitched map views. It contains three values: start, range and final opacity. The start parameter defines the point at which the fade-out effect begins, with smaller values causing the effect to start earlier. The range parameter specifies how long the fade-out effect will last. A value of 0.0 for range makes content disappear immediately without a fade-out effect. The final opacity determines content opacity at the end of the fade-out effect. A value of 1.0 for final opacity means that the cutoff is completely disabled. Note: The property has no effect on the map if terrain or globe projection is enabled.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.21.0",
+          "android": "11.21.0",
+          "ios": "11.21.0"
+        }
+      }
+    },
     "fill-extrusion-emissive-strength": {
       "type": "number",
       "default": 0,
@@ -8171,7 +8288,7 @@
     },
     "building-cutoff-fade-range": {
       "type": "number",
-      "private": true,      
+      "private": true,
       "default": 0.0,
       "minimum": 0.0,
       "maximum": 1.0,
@@ -8188,6 +8305,30 @@
         }
       },
       "property-type": "data-constant"
+    },
+    "building-front-cutoff": {
+      "type": "array",
+      "private": true,
+      "experimental": true,
+      "value": "number",
+      "property-type": "data-constant",
+      "transition": false,
+      "expression": {
+        "interpolated": true,
+        "parameters": ["zoom"]
+      },
+      "length": 3,
+      "default": [0.0, 0.0, 1.0],
+      "minimum": [0.0, 0.0, 0.0],
+      "maximum": [1.0, 1.0, 1.0],
+      "doc": "An array for configuring the fade-out effect for the front cutoff of content on pitched map views. It contains three values: start, range and final opacity. The start parameter defines the point at which the fade-out effect begins, with smaller values causing the effect to start earlier. The range parameter specifies how long the fade-out effect will last. A value of 0.0 for range makes content disappear immediately without a fade-out effect. The final opacity determines content opacity at the end of the fade-out effect. A value of 1.0 for final opacity means that the cutoff is completely disabled. Note: The property has no effect on the map if terrain or globe projection is enabled.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.21.0",
+          "android": "11.21.0",
+          "ios": "11.21.0"
+        }
+      }
     },
     "building-flood-light-color": {
       "property-type": "data-constant",
@@ -8759,7 +8900,8 @@
         "interpolated": true,
         "parameters": [
           "zoom",
-          "measure-light"
+          "measure-light",
+          "line-progress"
         ]
       },
       "property-type": "data-driven"
@@ -8842,6 +8984,50 @@
         ]
       },
       "transition": true,
+      "property-type": "data-constant"
+    },
+    "line-blend-mode": {
+      "type": "enum",
+      "values": {
+        "default": { "doc": "Normal non-blended rendering mode." },
+        "multiply": { "doc": "Line features are composited using multiply blending." },
+        "additive": { "doc": "Line features are composited using additive density accumulation with tone mapping." }
+      },
+      "doc": "Controls the blend mode used for rendering line features.",
+      "default": "default",
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.21.0"
+        }
+      },
+      "expression": {
+        "interpolated": false,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "property-type": "data-constant"
+    },
+    "line-blend-additive-clamp": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "doc": "Controls the brightness of lines in additive blend mode. When set to 0 (the default), brightness is adjusted automatically based on the density of lines visible on screen. Increase this value if the lines appear too bright, or decrease it if they appear too faint.",
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.21.0"
+        }
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "zoom"
+        ]
+      },
       "property-type": "data-constant"
     }
   },
@@ -9367,6 +9553,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-occlusion-opacity": {
@@ -9400,6 +9587,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-emissive-strength": {
@@ -9432,6 +9620,7 @@
           "feature-state"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-emissive-strength": {
@@ -9464,6 +9653,7 @@
           "feature-state"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-color": {
@@ -9496,6 +9686,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-halo-color": {
@@ -9528,6 +9719,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-halo-width": {
@@ -9561,6 +9753,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-halo-blur": {
@@ -9594,6 +9787,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "icon-translate": {
@@ -9605,6 +9799,7 @@
         0
       ],
       "transition": true,
+      "appearance": true,
       "units": "pixels",
       "doc": "Distance that the icon's anchor is moved from its original placement. Positive values indicate right and down, while negative values indicate left and up.",
       "requires": [
@@ -9712,6 +9907,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-occlusion-opacity": {
@@ -9745,6 +9941,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-color": {
@@ -9778,6 +9975,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-halo-color": {
@@ -9810,6 +10008,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-halo-width": {
@@ -9843,6 +10042,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-halo-blur": {
@@ -9876,6 +10076,7 @@
           "measure-light"
         ]
       },
+      "appearance": true,
       "property-type": "data-driven"
     },
     "text-translate": {
@@ -9887,6 +10088,7 @@
         0
       ],
       "transition": true,
+      "appearance": true,
       "units": "pixels",
       "doc": "Distance that the text's anchor is moved from its original placement. Positive values indicate right and down, while negative values indicate left and up.",
       "requires": [
@@ -10021,6 +10223,7 @@
       "minimum": 0,
       "transition": true,
       "experimental": true,
+      "appearance": true,
       "sdk-support": {
         "basic functionality": {
           "js": "3.7.0",
@@ -10364,7 +10567,7 @@
     },
     "raster-elevation": {
       "type": "number",
-      "doc": "Specifies an uniform elevation from the ground, in meters.",
+      "doc": "Defines an uniform elevation from the base specified in raster-elevation-reference, in meters.",
       "default": 0,
       "minimum": 0,
       "transition": true,
@@ -10381,6 +10584,32 @@
         "parameters": [
           "zoom"
         ]
+      },
+      "property-type": "data-constant"
+    },
+    "raster-elevation-reference": {
+      "type": "enum",
+      "doc": "Selects the base of raster-elevation.",
+      "values": {
+        "sea": {
+          "doc": "Use this mode to elevate raster layers relative to the sea level."
+        },
+        "ground": {
+          "doc": "Use this mode to elevate raster layers relative to the ground's height below them."
+        }
+      },
+      "default": "sea",
+      "transition": false,
+      "experimental": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.19.0",
+          "android": "11.19.0",
+          "ios": "11.19.0"
+        }
+      },
+      "expression": {
+        "interpolated": false
       },
       "property-type": "data-constant"
     }
@@ -10514,7 +10743,7 @@
     },
     "raster-particle-elevation": {
       "type": "number",
-      "doc": "Specifies an uniform elevation from the ground, in meters.",
+      "doc": "Defines an uniform elevation from sea level, in meters.",
       "default": 0,
       "minimum": 0,
       "transition": true,
@@ -11397,7 +11626,7 @@
       "default": [0.0, 0.0, 1.0],
       "minimum": [0.0, 0.0, 0.0],
       "maximum": [1.0, 1.0, 1.0],
-      "doc": "An array for configuring the fade-out effect for the front cutoff of content on pitched map views. It contains three values: start, range and final opacity. The start parameter defines the point at which the fade-out effect begins, with smaller values causing the effect to start earlier. The range parameter specifies how long the fade-out effect will last. A value of 0.0 for range makes content disappear immediately without a fade-out effect. The final opacity determines content opacity at the end of the fade-out effect. A value of 1.0 for final opacity means that the cutoff is completely disabled.",
+      "doc": "An array for configuring the fade-out effect for the front cutoff of content on pitched map views. It contains three values: start, range and final opacity. The start parameter defines the point at which the fade-out effect begins, with smaller values causing the effect to start earlier. The range parameter specifies how long the fade-out effect will last. A value of 0.0 for range makes content disappear immediately without a fade-out effect. The final opacity determines content opacity at the end of the fade-out effect. A value of 1.0 for final opacity means that the cutoff is completely disabled. Note: The property has no effect on the map if terrain or globe projection is enabled.",
       "sdk-support": {
         "basic functionality": {
           "js": "3.5.0"
@@ -11406,7 +11635,7 @@
     },
     "model-elevation-reference": {
       "type": "enum",
-      "doc": "Selects the base of the model. Some modes might require precomputed elevation data in the tileset.",
+      "doc": "Selects the base of the model. Some modes might require precomputed elevation data in the tileset. When using vector tiled source as the model layer source and hd-road-markup elevation reference, this property acts as layout property and elevation is evaluated only in tile loading time.",
       "values": {
         "sea": {
           "doc": "Elevated rendering is enabled. Use this mode to elevate models relative to the sea level."
@@ -11429,6 +11658,36 @@
           "js": "3.17.0",
           "android": "11.10.0",
           "ios": "11.10.0"
+        }
+      }
+    },
+    "model-line-cutout-mode": {
+      "type": "enum",
+      "doc": "Selects the way the line cutout effect is applied to the model.",
+      "default": "enabled",
+      "values": {
+        "enabled": {
+          "doc": "The model receives the cutout without any special handling."
+        },
+        "disabled": {
+          "doc": "The cutout effect is disabled for the model."
+        },
+        "enabled-above-cutout": {
+          "doc": "Only enabled if the model is above the cutout plane, such as for models above cut tunnels."
+        }
+      },
+      "transition": false,
+      "expression": {
+        "interpolated": false
+      },
+      "property-type": "data-constant",
+      "experimental": true,
+      "private": true,
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.26.0",
+          "android": "11.26.0",
+          "ios": "11.26.0"
         }
       }
     }

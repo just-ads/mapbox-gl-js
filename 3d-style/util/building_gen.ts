@@ -235,9 +235,9 @@ type SetFacadeOptionsFunction = (facadeHeight: number, createEaves: number) => v
 type SetFauxFacadeOptionsFunction = (hasFacade: number, useUvXModifier: number, uvXModifier: number) => void;
 type SetFacadeClassifierOptionsFunction = (classificationDistance: number) => void;
 type AddFeatureFunction = (id: number, sourceId: number, minHeight: number, height: number, roofShape: number,
-                           coords: number, ringIndices: number, numRings: number) => void;
+    coords: number, ringIndices: number, numRings: number) => void;
 type AddFacadeFunction = (id: number, crossPerc: number, distanceToRoad: number, entrances: number, entrancesLength: number,
-                          coords: number, numCoords: number) => void;
+    coords: number, numCoords: number) => void;
 type GenerateMeshFunction = () => number;
 type GetLastErrorFunction = () => number;
 type GetOuterRingLengthFunction = () => number;

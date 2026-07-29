@@ -1,12 +1,13 @@
 import {mat4} from 'gl-matrix';
-import StyleLayer from '../style_layer';
-import assert from 'assert';
+import StyleLayer, {rawLayoutMayUseHD} from '../style_layer';
+import {prepareHD} from '../../../modules/hd_worker';
+import assert from '../../style-spec/util/assert';
 import SymbolBucket from '../../data/bucket/symbol_bucket';
 import resolveTokens from '../../util/resolve_tokens';
 import {getLayoutProperties, getPaintProperties} from './symbol_style_layer_properties';
 import {computeColorAdjustmentMatrix} from '../../util/util';
 import {
-    PossiblyEvaluatedPropertyValue
+    PossiblyEvaluatedPropertyValue,
 } from '../properties';
 import {
     isExpression,
@@ -45,6 +46,7 @@ import type {ImageId} from '../../style-spec/expression/types/image_id';
 import type {ProgramName} from '../../render/program';
 import type SymbolAppearance from '../appearance';
 import type {AppearanceProps} from '../appearance_properties';
+import type {RuntimeModuleType} from '../style_layer';
 
 let properties: {
     layout: Properties<LayoutProps>;
@@ -135,7 +137,7 @@ class SymbolStyleLayer extends StyleLayer {
             const deduped = [];
 
             for (const m of writingModes) {
-                if (deduped.indexOf(m) < 0) deduped.push(m);
+                if (!deduped.includes(m)) deduped.push(m);
             }
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             this.layout._values['text-writing-mode'] = deduped;
@@ -194,11 +196,11 @@ class SymbolStyleLayer extends StyleLayer {
         canonical: CanonicalTileID,
         availableImages: ImageId[],
     ) {
-        const property = appearance.getProperty(name) as unknown as PossiblyEvaluatedPropertyValue<LayoutProps[T]>;
+        const property = appearance.getLayoutProperty(name) as unknown as PossiblyEvaluatedPropertyValue<LayoutProps[T]>;
         if (!property) return;
 
         const value = property.evaluate(feature, {}, canonical, availableImages);
-        const unevaluated = appearance.getUnevaluatedProperties()._values[name];
+        const unevaluated = appearance.getUnevaluatedLayoutProperties()._values[name];
         if (!unevaluated.isDataDriven() && !isExpression(unevaluated.value) && value && typeof value === 'string') {
             return resolveTokens(feature.properties, value);
         }
@@ -206,7 +208,7 @@ class SymbolStyleLayer extends StyleLayer {
         return value;
     }
 
-    createBucket(parameters: BucketParameters<SymbolStyleLayer>): SymbolBucket {
+    override createBucket(parameters: BucketParameters<this>): SymbolBucket {
         return new SymbolBucket(parameters);
     }
 
@@ -240,8 +242,7 @@ class SymbolStyleLayer extends StyleLayer {
 
                     overriden.value.interpolationType)as CompositeExpression);
             }
-            // @ts-expect-error - TS2322 - Type 'PossiblyEvaluatedPropertyValue<PaintProps>' is not assignable to type 'never'.
-            this.paint._values[overridable] = new PossiblyEvaluatedPropertyValue(overriden.property,
+            (this.paint._values as unknown as Record<string, PossiblyEvaluatedPropertyValue<unknown>>)[overridable] = new PossiblyEvaluatedPropertyValue(overriden.property,
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argumentexpression,
                                                                                  overriden.parameters);
         }
@@ -310,6 +311,14 @@ class SymbolStyleLayer extends StyleLayer {
 
     override hasElevation(): boolean {
         return this.layout && this.layout.get('symbol-elevation-reference') === 'hd-road-markup';
+    }
+
+    override mayUse(type: RuntimeModuleType): boolean {
+        return type === 'HD' && rawLayoutMayUseHD(this, 'symbol-elevation-reference', v => v === 'hd-road-markup');
+    }
+
+    override prepare(): Promise<void> {
+        return this.mayUse('HD') ? prepareHD() : Promise.resolve();
     }
 }
 

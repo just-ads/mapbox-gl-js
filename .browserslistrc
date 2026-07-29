@@ -1,7 +1,25 @@
->0.2%,
-not dead,
-not op_mini all,
-not chrome < 56,
-not safari < 15,
-not android < 56,
-not ios < 15
+# Mapbox GL JS - Supported Browsers
+# ==================================
+# Static list based on required features:
+#   - WebGL 2
+#   - Worker type:'module'
+#   - Promise.allSettled
+#   - Object.hasOwn
+#   - Array.at
+#   - async/await
+#
+#   Browser        | Limiting Feature      | Min
+#   ---------------|-----------------------|----
+#   Chrome         | structuredClone       | 98
+#   Safari         | Array.at              | 15.4
+#   Firefox        | Object.hasOwn         | 115
+#   Edge           | structuredClone       | 98
+#   Chrome Android | structuredClone       | 98
+#   iOS Safari     | Array.at              | 15.4
+
+chrome >= 93
+safari >= 15.4
+firefox >= 115
+edge >= 98
+and_chr >= 98
+ios_saf >= 15.4

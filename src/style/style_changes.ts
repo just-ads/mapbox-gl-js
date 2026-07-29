@@ -47,9 +47,7 @@ class StyleChanges {
         this._changed = true;
     }
 
-    getUpdatedSourceCaches(): {
-        [_: string]: 'clear' | 'reload';
-        } {
+    getUpdatedSourceCaches(): Record<string, 'clear' | 'reload'> {
         return this._updatedSourceCaches;
     }
 
@@ -120,12 +118,7 @@ class StyleChanges {
      * Returns a list of layer ids that have been updated or removed grouped by the scope.
      * @returns {{[scope: string]: {updatedIds: Array<string>, removedIds: Array<string>}}}}
      */
-    getLayerUpdatesByScope(): {
-        [_: string]: {
-            updatedIds?: Array<string>;
-            removedIds?: Array<string>;
-        };
-        } {
+    getLayerUpdatesByScope(): Record<string, {updatedIds?: Array<string>; removedIds?: Array<string>}> {
         const updatesByScope: Record<string, {updatedIds?: Array<string>; removedIds?: Array<string>}> = {};
 
         for (const scope in this._updatedLayers) {

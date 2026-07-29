@@ -12,14 +12,15 @@ import FeaturePositionMap from './feature_position_map';
 import {
     Uniform1f,
     UniformColor,
-    Uniform4f
+    Uniform4ui
 } from '../render/uniform_binding';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 
 import type {Class} from '../../src/types/class';
 import type {CanonicalTileID} from '../source/tile_id';
 import type Context from '../gl/context';
 import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
+import type StyleLayer from '../style/style_layer';
 import type {StructArray, StructArrayMember} from '../util/struct_array';
 import type VertexBuffer from '../gl/vertex_buffer';
 import type {SpritePosition, SpritePositions} from '../util/image';
@@ -232,9 +233,11 @@ class PatternConstantBinder implements UniformBinder {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     getBinding(context: Context, name: string): IUniform<any> {
-        return name === 'u_pattern' || name === 'u_pattern_b' || name === 'u_dash' ?
-            new Uniform4f(context) :
-            new Uniform1f(context);
+        if (name === 'u_pattern' || name === 'u_pattern_b' || name === 'u_dash') {
+            return new Uniform4ui(context);
+        } else {
+            return new Uniform1f(context);
+        }
     }
 }
 
@@ -375,7 +378,7 @@ class CompositeExpressionBinder implements AttributeBinder, UniformBinder {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             const minColor = packColor(min.toPremultipliedRenderColor(lut));
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            const maxColor = packColor(min.toPremultipliedRenderColor(lut));
+            const maxColor = packColor(max.toPremultipliedRenderColor(lut));
             for (let i = start; i < end; i++) {
                 this.paintVertexArray.emplace(i, minColor[0], minColor[1], maxColor[0], maxColor[1]);
             }
@@ -537,10 +540,9 @@ export default class ProgramConfiguration {
         this.context = context;
 
         const keys = [];
+        const baseLayer = layer as StyleLayer;
         for (const property in layer.paint._values) {
-            // @ts-expect-error - TS2349 - This expression is not callable.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-            const value = layer.paint.get(property);
+            const value = baseLayer.paint.get(property);
 
             if (property.endsWith('-use-theme')) continue;
             if (!filterProperties(property)) continue;
@@ -553,11 +555,9 @@ export default class ProgramConfiguration {
             const useIntegerZoom = !!value.property.useIntegerZoom;
             const isPattern = property === 'line-dasharray' || property.endsWith('pattern');
 
-            // @ts-expect-error - TS2349 - This expression is not callable.
-            const valueUseTheme = layer.paint.get(`${property}-use-theme`) as PossiblyEvaluatedPropertyValue<string>;
-            // @ts-expect-error - TS2349 - This expression is not callable.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            const sourceException = (property === 'line-dasharray' && layer.layout.get('line-cap').value.kind !== 'constant') || (valueUseTheme && valueUseTheme.value.kind !== 'constant');
+            const valueUseTheme = baseLayer.paint.get(`${property}-use-theme`) as PossiblyEvaluatedPropertyValue<string>;
+            const isVariableLineCap = property === 'line-dasharray' && (baseLayer.layout.get('line-cap') as PossiblyEvaluatedPropertyValue<unknown>).value.kind !== 'constant';
+            const sourceException = isVariableLineCap || (valueUseTheme && valueUseTheme.value.kind !== 'constant');
 
             if (expression.kind === 'constant' && !sourceException) {
                 this.binders[property] = isPattern ?
@@ -568,8 +568,7 @@ export default class ProgramConfiguration {
             } else if (expression.kind === 'source' || sourceException || isPattern) {
                 const StructArrayLayout = layoutType(property, type, 'source');
                 this.binders[property] = isPattern ?
-                // @ts-expect-error - TS2345 - Argument of type 'PossiblyEvaluatedValue<any>' is not assignable to parameter of type 'CompositeExpression'.
-                    new PatternCompositeBinder(expression, names, type, StructArrayLayout, layer.id) :
+                    new PatternCompositeBinder(expression as CompositeExpression, names, type, StructArrayLayout, layer.id) :
                     new SourceExpressionBinder(expression, names, type, StructArrayLayout);
 
                 keys.push(`/a_${property}`);
@@ -586,6 +585,20 @@ export default class ProgramConfiguration {
         }
 
         this.cacheKey = keys.sort().join('');
+    }
+
+    updateExpressions(layer: TypedStyleLayer) {
+        const baseLayer = layer as StyleLayer;
+        for (const property in this.binders) {
+            const binder = this.binders[property];
+            if (binder instanceof SourceExpressionBinder ||
+                binder instanceof CompositeExpressionBinder ||
+                binder instanceof PatternCompositeBinder) {
+                const value = baseLayer.paint.get(property) as PossiblyEvaluatedPropertyValue<unknown>;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (binder as {expression: any}).expression = value.value;
+            }
+        }
     }
 
     getMaxValue(property: string): number {
@@ -646,11 +659,10 @@ export default class ProgramConfiguration {
                  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
                  binder instanceof PatternCompositeBinder) && isExpressionNotConst && ((binder as any).expression.isStateDependent === true || (binder as any).expression.isLightConstant === false)) {
                 //AHM: Remove after https://github.com/mapbox/mapbox-gl-js/issues/6255
-                // @ts-expect-error - TS2349 - This expression is not callable.
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-                const value = layer.paint.get(property);
+                const baseLayer = layer as StyleLayer;
+                const value = baseLayer.paint.get(property) as PossiblyEvaluatedPropertyValue<unknown>;
 
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
                 (binder as any).expression = value.value;
                 for (const id of ids) {
                     const state = featureStates[id.toString()];
@@ -816,6 +828,23 @@ export class ProgramConfigurationSet<Layer extends TypedStyleLayer> {
             this.programConfigurations[layerId].destroy();
         }
     }
+
+    updateExpressions(layers: ReadonlyArray<TypedStyleLayer>) {
+        const known = new Set<string>();
+        for (const layer of layers) {
+            const pc = this.programConfigurations[layer.id];
+            if (pc) {
+                pc.updateExpressions(layer);
+                known.add(layer.id);
+            }
+        }
+        // Drop entries for layers that were removed from the style between
+        // the worker building this bucket and the main thread receiving it;
+        // those binders no longer have an expression to reattach.
+        for (const layerId in this.programConfigurations) {
+            if (!known.has(layerId)) delete this.programConfigurations[layerId];
+        }
+    }
 }
 
 const attributeNameExceptions: Record<string, string[]> = {
@@ -886,8 +915,9 @@ function layoutType(property: string, type: LayoutType, binderType: 'source' | '
 
 register(ConstantBinder, 'ConstantBinder');
 register(PatternConstantBinder, 'PatternConstantBinder');
-register(SourceExpressionBinder, 'SourceExpressionBinder');
-register(PatternCompositeBinder, 'PatternCompositeBinder');
-register(CompositeExpressionBinder, 'CompositeExpressionBinder');
+// `expression` is omitted from transfer; reattached post-deserialize via updateBucketExpressions
+register(SourceExpressionBinder, 'SourceExpressionBinder', {omit: ['expression']});
+register(PatternCompositeBinder, 'PatternCompositeBinder', {omit: ['expression']});
+register(CompositeExpressionBinder, 'CompositeExpressionBinder', {omit: ['expression']});
 register(ProgramConfiguration, 'ProgramConfiguration', {omit: ['_buffers']});
 register(ProgramConfigurationSet, 'ProgramConfigurationSet');

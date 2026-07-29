@@ -1346,6 +1346,7 @@ expectType<mapboxgl.Map>(
         // @ts-expect-error - incompatible originalEvent does not exist on 'sourcedata' event
         expectType<undefined>(ev.originalEvent);
         expectType<"source">(ev.dataType);
+        expectType<Headers | undefined>(ev.responseHeaders);
     }),
 );
 expectType<mapboxgl.Map>(
@@ -1902,7 +1903,6 @@ const skyPaint: NonNullable<mapboxgl.SkyPaint> = {
     "sky-atmosphere-sun": eitherType([0], expression),
     // @ts-expect-error - incompatible
     "sky-atmosphere-sun-intensity": eitherType(0, expression),
-    // @ts-expect-error - incompatible
     "sky-gradient": eitherType("#000", expression),
     // @ts-expect-error - incompatible
     "sky-gradient-center": eitherType([0], expression),

@@ -270,8 +270,9 @@ CompoundExpression.register(expressions, {
         BooleanType,
         varargs(StringType),
         (ctx, args) => {
-            const hasActiveFloors = ctx.globals.activeFloors && ctx.globals.activeFloors.size > 0;
+            const hasActiveFloors = ctx.globals && ctx.globals.activeFloors && ctx.globals.activeFloors.size > 0;
             if (!hasActiveFloors) { return false; }
+            if (args.length === 0) { return true; }
             const floorIds: Set<string> = ctx.globals.activeFloors;
             return args.some(arg => {
                 const value = arg.evaluate(ctx) as string;
@@ -616,21 +617,21 @@ CompoundExpression.register(expressions, {
     'filter-type-in': [
         BooleanType,
         [array(StringType)],
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        (ctx, [v]) => (v).value.indexOf(ctx.geometryType()) >= 0
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return
+        (ctx, [v]) => (v).value.includes(ctx.geometryType())
     ],
     'filter-id-in': [
         BooleanType,
         [array(ValueType)],
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        (ctx, [v]) => (v).value.indexOf(ctx.id()) >= 0
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return
+        (ctx, [v]) => (v).value.includes(ctx.id())
     ],
     'filter-in-small': [
         BooleanType,
         [StringType, array(ValueType)],
         // assumes v is an array literal
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        (ctx, [k, v]) => (v).value.indexOf(ctx.properties()[(k).value]) >= 0
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return
+        (ctx, [k, v]) => (v).value.includes(ctx.properties()[(k).value])
     ],
     'filter-in-large': [
         BooleanType,
@@ -735,7 +736,7 @@ CompoundExpression.register(expressions, {
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 return min;
             }
-            let seedVal;
+            let seedVal: number;
             if (typeof seed === 'string') {
                 seedVal = hashString(seed);
             } else if (typeof seed === 'number') {
@@ -743,7 +744,6 @@ CompoundExpression.register(expressions, {
             } else {
                 throw new RuntimeError(`Invalid seed input: ${seed}`);
             }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             const random = mulberry32(seedVal)();
             // eslint-disable-next-line @typescript-eslint/no-unsafe-return
             return min + random * (max - min);

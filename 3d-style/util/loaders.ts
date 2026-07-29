@@ -1,129 +1,71 @@
 /* eslint-disable new-cap */
 
-import config from '../../src/util/config';
-import browser from '../../src/util/browser';
-import Dispatcher from '../../src/util/dispatcher';
-import {getGlobalWorkerPool as getWorkerPool} from '../../src/util/worker_pool_factory';
-import {Evented} from '../../src/util/evented';
-import {isWorker, warnOnce} from '../../src/util/util';
-import {loadBuildingGen} from './building_gen';
-import assert from 'assert';
+import assert from '../../src/style-spec/util/assert';
+import {getDracoUrl, getMeshoptUrl} from '../../src/util/config';
+import {warnOnce} from '../../src/util/util';
 import {DracoDecoderModule} from './draco_decoder_gltf';
-import {MeshoptDecoder} from './meshopt_decoder';
+import {MeshoptDecoderModule} from './meshopt_decoder';
 import {PerformanceUtils} from '../../src/util/performance';
+import {getArrayBuffer} from '../../src/util/ajax';
 
 import type {vec3, mat4, quat} from 'gl-matrix';
-import type {BuildingGen} from './building_gen';
 import type {TextureImage} from '../../src/render/texture';
 import type {MaterialDescription, Sampler} from '../data/model';
 
-let dispatcher: Dispatcher | null = null;
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let dracoLoading: Promise<any> | undefined;
-let dracoUrl: string | null | undefined;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let draco: any;
-let meshoptUrl: string | null | undefined;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let meshopt: any;
-let buildingGenLoading: Promise<unknown> | null = null;
-let buildingGenError: Error = null;
-let buildingGen: BuildingGen | null = null;
-
-export function getDracoUrl(): string {
-    if (isWorker(self) && self.worker.dracoUrl) {
-        return self.worker.dracoUrl;
-    }
-
-    return dracoUrl ? dracoUrl : config.DRACO_URL;
+interface DracoDecoder {
+    DecodeArrayToMesh: (data: Uint8Array, length: number, mesh: DracoMesh) => boolean;
+    GetTrianglesUInt16Array: (mesh: DracoMesh, size: number, ptr: number) => void;
+    GetTrianglesUInt32Array: (mesh: DracoMesh, size: number, ptr: number) => void;
+    GetAttributeByUniqueId: (mesh: DracoMesh, id: number) => unknown;
+    GetAttributeDataArrayForAllPoints: (mesh: DracoMesh, attr: unknown, type: unknown, size: number, ptr: number) => void;
+    destroy: () => void;
 }
 
-export function setDracoUrl(url: string) {
-    dracoUrl = browser.resolveURL(url);
-
-    if (!dispatcher) {
-        dispatcher = new Dispatcher(getWorkerPool(), new Evented());
-    }
-
-    // Sets the Draco URL in all workers.
-    dispatcher.broadcast('setDracoUrl', dracoUrl);
+interface DracoMesh {
+    destroy: () => void;
 }
+
+interface DracoModule {
+    Decoder: new () => DracoDecoder;
+    Mesh: new () => DracoMesh;
+    memory: {buffer: ArrayBuffer};
+    _malloc: (size: number) => number;
+    _free: (ptr: number) => void;
+    [key: string]: unknown;
+}
+
+interface MeshoptModule {
+    decodeGltfBuffer: (target: Uint8Array, count: number, stride: number, source: Uint8Array, mode: string, filter: string) => void;
+}
+
+let draco: DracoModule | null = null;
+let dracoLoading: Promise<void> | null = null;
+let meshopt: MeshoptModule | null = null;
+let meshoptLoading: Promise<void> | null = null;
 
 function waitForDraco() {
     if (draco) return;
     if (dracoLoading != null) return dracoLoading;
     const startTime = PerformanceUtils.now();
-
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    dracoLoading = DracoDecoderModule(fetch(getDracoUrl()));
-
-    return dracoLoading.then((module) => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        draco = module;
-        dracoLoading = undefined;
+    dracoLoading = DracoDecoderModule(fetch(getDracoUrl())).then((module) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        draco = module as any as DracoModule;
+        dracoLoading = null;
         PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, "waitForDraco", "Models", startTime);
     });
-}
-
-export function getMeshoptUrl(): string {
-    if (isWorker(self) && self.worker.meshoptUrl) {
-        return self.worker.meshoptUrl;
-    }
-
-    if (meshoptUrl) return meshoptUrl;
-
-    const detector = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 3, 2, 0, 0, 5, 3, 1, 0, 1, 12, 1, 0, 10, 22, 2, 12, 0, 65, 0, 65, 0, 65, 0, 252, 10, 0, 0, 11, 7, 0, 65, 0, 253, 15, 26, 11]);
-
-    if (typeof WebAssembly !== 'object') {
-        throw new Error("WebAssembly not supported, cannot instantiate meshoptimizer");
-    }
-
-    meshoptUrl = WebAssembly.validate(detector) ? config.MESHOPT_SIMD_URL : config.MESHOPT_URL;
-
-    return meshoptUrl;
-}
-
-export function setMeshoptUrl(url: string) {
-    meshoptUrl = browser.resolveURL(url);
-    if (!dispatcher) {
-        dispatcher = new Dispatcher(getWorkerPool(), new Evented());
-    }
-    // Sets the Meshopt URL in all workers.
-    dispatcher.broadcast('setMeshoptUrl', meshoptUrl);
+    return dracoLoading;
 }
 
 function waitForMeshopt() {
     if (meshopt) return;
+    if (meshoptLoading != null) return meshoptLoading;
     const startTime = PerformanceUtils.now();
-    const decoder = MeshoptDecoder(fetch(getMeshoptUrl()));
-    return decoder.ready.then(() => {
+    meshoptLoading = MeshoptDecoderModule(fetch(getMeshoptUrl())).then((module) => {
+        meshopt = module;
+        meshoptLoading = null;
         PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, "waitForMeshopt", "Models", startTime);
-        meshopt = decoder;
     });
-}
-
-export function waitForBuildingGen(): Promise<unknown> {
-    if (buildingGen != null || buildingGenError != null) return null;
-    if (buildingGenLoading != null) return buildingGenLoading;
-    const m = PerformanceUtils.now();
-    const wasmData = fetch(config.BUILDING_GEN_URL);
-    buildingGenLoading = loadBuildingGen(wasmData).then((instance) => {
-        buildingGenLoading = null;
-        buildingGen = instance;
-        PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, "waitForBuildingGen", "BuildingBucket", m);
-        return buildingGen;
-    }).catch((error) => {
-        warnOnce('Could not load building-gen');
-        buildingGenLoading = null;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        buildingGenError = error;
-    });
-    return buildingGenLoading;
-}
-
-export function getBuildingGen(): BuildingGen {
-    return buildingGen;
+    return meshoptLoading;
 }
 
 export const GLTF_BYTE = 5120;
@@ -216,6 +158,7 @@ export type GLTFNode = {
     extras: Record<string, unknown>;
     children: number[];
     name?: string;
+    extensions?: Record<string, unknown>;
 };
 
 export type GLTF = {
@@ -257,13 +200,10 @@ function loadDracoMesh(primitive: GLTFPrimitive, gltf: GLTF) {
     const config = primitive.extensions && primitive.extensions[DRACO_EXT];
     if (!config) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const decoder = new draco.Decoder();
     const bytes = getGLTFBytes(gltf, config.bufferView);
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const mesh = new draco.Mesh();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const ok = decoder.DecodeArrayToMesh(bytes, bytes.byteLength, mesh);
     if (!ok) throw new Error('Failed to decode Draco mesh');
 
@@ -271,50 +211,35 @@ function loadDracoMesh(primitive: GLTFPrimitive, gltf: GLTF) {
     const IndexArrayType = GLTF_TO_ARRAY_TYPE[indexAccessor.componentType];
     const indicesSize = indexAccessor.count * IndexArrayType.BYTES_PER_ELEMENT;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const ptr = draco._malloc(indicesSize);
     if (IndexArrayType === Uint16Array) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         decoder.GetTrianglesUInt16Array(mesh, indicesSize, ptr);
     } else {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         decoder.GetTrianglesUInt32Array(mesh, indicesSize, ptr);
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const indicesBuffer = draco.memory.buffer.slice(ptr, ptr + indicesSize);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     setAccessorBuffer(indicesBuffer, indexAccessor, gltf);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     draco._free(ptr);
 
     for (const attributeId of Object.keys(config.attributes)) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         const attribute = decoder.GetAttributeByUniqueId(mesh, config.attributes[attributeId]);
         const accessor = gltf.json.accessors[primitive.attributes[attributeId]];
         const ArrayType = GLTF_TO_ARRAY_TYPE[accessor.componentType];
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const dracoTypeName = GLTF_TO_DRACO_TYPE[accessor.componentType];
+        const dracoTypeName = GLTF_TO_DRACO_TYPE[accessor.componentType] as string;
 
         const numComponents = GLTF_COMPONENTS[accessor.type];
 
         const numValues = accessor.count * numComponents;
         const dataSize = numValues * ArrayType.BYTES_PER_ELEMENT;
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         const ptr = draco._malloc(dataSize);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         decoder.GetAttributeDataArrayForAllPoints(mesh, attribute, draco[dracoTypeName], dataSize, ptr);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         const buffer = draco.memory.buffer.slice(ptr, ptr + dataSize);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         setAccessorBuffer(buffer, accessor, gltf);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         draco._free(ptr);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     decoder.destroy();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     mesh.destroy();
 
     delete primitive.extensions[DRACO_EXT];
@@ -334,7 +259,6 @@ function loadMeshoptBuffer(bufferView: GLTFBufferView, gltf: GLTF) {
     const source = new Uint8Array(buffer, byteOffset, byteLength);
 
     const target = new Uint8Array(config.count * config.byteStride);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     meshopt.decodeGltfBuffer(target, config.count, config.byteStride, source, config.mode, config.filter);
 
     bufferView.buffer = gltf.buffers.length;
@@ -356,13 +280,11 @@ function resolveUrl(url: string, baseUrl?: string) {
     return (new URL(url, baseUrl)).href;
 }
 
-function loadBuffer(buffer: {uri: string; byteLength: number}, gltf: GLTF, index: number, baseUrl?: string) {
-    return fetch(resolveUrl(buffer.uri, baseUrl))
-        .then(response => response.arrayBuffer())
-        .then(arrayBuffer => {
-            assert(arrayBuffer.byteLength >= buffer.byteLength);
-            gltf.buffers[index] = arrayBuffer;
-        });
+async function loadBuffer(buffer: {uri: string; byteLength: number}, gltf: GLTF, index: number, baseUrl?: string, signal?: AbortSignal): Promise<void> {
+    const response = await fetch(resolveUrl(buffer.uri, baseUrl), {signal});
+    const arrayBuffer = await response.arrayBuffer();
+    assert(arrayBuffer.byteLength >= buffer.byteLength);
+    gltf.buffers[index] = arrayBuffer;
 }
 
 function getGLTFBytes(gltf: GLTF, bufferViewIndex: number): Uint8Array<ArrayBuffer> {
@@ -371,26 +293,22 @@ function getGLTFBytes(gltf: GLTF, bufferViewIndex: number): Uint8Array<ArrayBuff
     return new Uint8Array<ArrayBuffer>(buffer, bufferView.byteOffset || 0, bufferView.byteLength);
 }
 
-function loadImage(img: {uri?: string; bufferView?: number; mimeType: string}, gltf: GLTF, index: number, baseUrl?: string) {
+async function loadImage(img: {uri?: string; bufferView?: number; mimeType: string}, gltf: GLTF, index: number, baseUrl?: string, signal?: AbortSignal): Promise<void> {
     if (img.uri) {
         const uri = resolveUrl(img.uri, baseUrl);
-        return fetch(uri)
-            .then(response => response.blob())
-            .then(blob => createImageBitmap(blob))
-            .then(imageBitmap => {
-                gltf.images[index] = imageBitmap;
-            });
+        const response = await fetch(uri, {signal});
+        const blob = await response.blob();
+        const imageBitmap = await createImageBitmap(blob);
+        gltf.images[index] = imageBitmap;
     } else if (img.bufferView !== undefined) {
         const bytes = getGLTFBytes(gltf, img.bufferView);
         const blob = new Blob([bytes], {type: img.mimeType});
-        return createImageBitmap(blob)
-            .then(imageBitmap => {
-                gltf.images[index] = imageBitmap;
-            });
+        const imageBitmap = await createImageBitmap(blob);
+        gltf.images[index] = imageBitmap;
     }
 }
 
-export function decodeGLTF(arrayBuffer: ArrayBuffer, byteOffset: number = 0, baseUrl?: string): Promise<GLTF | void> {
+export async function decodeGLTF(arrayBuffer: ArrayBuffer, byteOffset: number = 0, baseUrl?: string, signal?: AbortSignal): Promise<GLTF> {
     const startTime = PerformanceUtils.now();
 
     const gltf: GLTF = {json: null, images: [], buffers: []};
@@ -420,72 +338,69 @@ export function decodeGLTF(arrayBuffer: ArrayBuffer, byteOffset: number = 0, bas
     }
 
     const {buffers, images, meshes, extensionsUsed, bufferViews} = gltf.json;
-    let bufferLoadsPromise: Promise<unknown> = Promise.resolve();
+
     if (buffers) {
-        const bufferLoads = [];
+        const bufferLoads: Promise<void>[] = [];
         for (let i = 0; i < buffers.length; i++) {
             const buffer = buffers[i];
             if (buffer.uri) {
-                bufferLoads.push(loadBuffer(buffer, gltf, i, baseUrl));
+                bufferLoads.push(loadBuffer(buffer, gltf, i, baseUrl, signal));
             } else if (!gltf.buffers[i]) {
                 gltf.buffers[i] = null;
             }
         }
-        bufferLoadsPromise = Promise.all(bufferLoads);
+        await Promise.all(bufferLoads);
     }
 
-    return bufferLoadsPromise.then(() => {
-        const assetLoads = [];
+    if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
-        const dracoUsed = extensionsUsed && extensionsUsed.includes(DRACO_EXT);
-        const meshoptUsed = extensionsUsed && extensionsUsed.includes(MESHOPT_EXT);
-        if (dracoUsed) {
-            assetLoads.push(waitForDraco());
+    const assetLoads: Promise<unknown>[] = [];
+    const dracoUsed = extensionsUsed && extensionsUsed.includes(DRACO_EXT);
+    const meshoptUsed = extensionsUsed && extensionsUsed.includes(MESHOPT_EXT);
+
+    if (dracoUsed) {
+        assetLoads.push(waitForDraco());
+    }
+    if (meshoptUsed) {
+        assetLoads.push(waitForMeshopt());
+    }
+    if (images) {
+        for (let i = 0; i < images.length; i++) {
+            assetLoads.push(loadImage(images[i], gltf, i, baseUrl, signal));
         }
+    }
 
-        if (meshoptUsed) {
-            assetLoads.push(waitForMeshopt());
-        }
+    if (assetLoads.length) {
+        await Promise.all(assetLoads);
+    }
 
-        if (images) {
-            for (let i = 0; i < images.length; i++) {
-                assetLoads.push(loadImage(images[i], gltf, i, baseUrl));
+    if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    if (dracoUsed && meshes) {
+        for (const {primitives} of meshes) {
+            for (const primitive of primitives) {
+                loadDracoMesh(primitive, gltf);
             }
         }
+    }
 
-        const assetLoadsPromise = assetLoads.length ?
-            Promise.all(assetLoads) :
-            Promise.resolve();
+    if (meshoptUsed && meshes && bufferViews) {
+        for (const bufferView of bufferViews) {
+            loadMeshoptBuffer(bufferView, gltf);
+        }
+    }
 
-        return assetLoadsPromise.then(() => {
-            if (dracoUsed && meshes) {
-                for (const {primitives} of meshes) {
-                    for (const primitive of primitives) {
-                        loadDracoMesh(primitive, gltf);
-                    }
-                }
-            }
+    PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, "decodeGLTF", "Models", startTime);
 
-            if (meshoptUsed && meshes && bufferViews) {
-                for (const bufferView of bufferViews) {
-                    loadMeshoptBuffer(bufferView, gltf);
-                }
-            }
-
-            PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, "decodeGLTF", "Models", startTime);
-
-            return gltf;
-        });
-    });
+    return gltf;
 }
 
-export function loadGLTF(url: string): Promise<GLTF | void> {
-    return fetch(url)
-        .then(response => response.arrayBuffer())
-        .then(buffer => decodeGLTF(buffer, 0, url));
+export async function loadGLTF(url: string, signal?: AbortSignal): Promise<GLTF> {
+    const {data: buffer} = await getArrayBuffer({url}, signal);
+    return decodeGLTF(buffer, 0, url, signal);
 }
 
-export function load3DTile(data: ArrayBuffer): Promise<GLTF | void> {
+export function load3DTile(data: ArrayBuffer): Promise<GLTF> {
     const magic = new Uint32Array(data, 0, 1)[0];
     let gltfOffset = 0;
     if (magic !== MAGIC_GLTF) {

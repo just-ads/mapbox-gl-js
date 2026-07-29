@@ -1,6 +1,7 @@
 import {Uniform1f, Uniform1i, Uniform2f, Uniform3f, Uniform4f, UniformMatrix4f} from './uniform_binding';
 import {globeToMercatorTransition} from '../geo/projection/globe_util';
 
+import type {mat4} from 'gl-matrix';
 import type Context from '../gl/context';
 import type Fog from '../style/fog';
 import type {UniformValues} from './uniform_binding';
@@ -55,7 +56,7 @@ export const fogUniformValues = (
     globePosition: [number, number, number],
     globeRadius: number,
     viewport: [number, number],
-    fogMatrix?: Float32Array | null,
+    fogMatrix?: mat4 | null,
 ): UniformValues<FogUniformsType> => {
     const tr = painter.transform;
 
@@ -66,8 +67,8 @@ export const fogUniformValues = (
 
     const [verticalRangeMin, verticalRangeMax] = fog.properties.get('vertical-range');
     return {
-        'u_fog_matrix': (tileID ? tr.calculateFogTileMatrix(tileID) : fogMatrix ? fogMatrix : painter.identityMat) as Float32Array,
-        'u_fog_range': fog.getFovAdjustedRange(tr._fov),
+        'u_fog_matrix': (tileID ? tr.calculateFogTileMatrix(tileID) : fogMatrix ? fogMatrix : painter.identityMat),
+        'u_fog_range': fog.getRangeForProjection(),
         'u_fog_color': fogColor,
         'u_fog_horizon_blend': fog.properties.get('horizon-blend'),
         'u_fog_vertical_limit': [Math.min(verticalRangeMin, verticalRangeMax), verticalRangeMax],

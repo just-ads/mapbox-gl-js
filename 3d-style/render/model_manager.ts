@@ -37,17 +37,17 @@ class ModelManager extends Evented {
     constructor(requestManager: RequestManager) {
         super();
         this.requestManager = requestManager;
-        this.models = {'': {}};
-        this.modelUris = {'': {}};
-        this.modelByURL = {};
-        this.numModelsLoading = {};
+        this.models = Object.create(null) as ModelManager['models'];
+        this.models[''] = Object.create(null) as ModelManager['models'][string];
+        this.modelUris = Object.create(null) as ModelManager['modelUris'];
+        this.modelUris[''] = Object.create(null) as ModelManager['modelUris'][string];
+        this.modelByURL = Object.create(null) as ModelManager['modelByURL'];
+        this.numModelsLoading = Object.create(null) as ModelManager['numModelsLoading'];
     }
 
     loadModel(id: string, url: string): Promise<Model | null | undefined> {
         return loadGLTF(this.requestManager.transformRequest(url, ResourceType.Model).url)
             .then(gltf => {
-                if (!gltf) return;
-
                 const nodes = convertModel(gltf);
                 const model = new Model(id, url, undefined, undefined, nodes);
                 model.computeBoundsAndApplyParent();
@@ -67,7 +67,7 @@ class ModelManager extends Evented {
         [key: string]: string;
     }, scope: string,
     options: {forceReload: boolean} = {forceReload: false}) {
-        if (!this.models[scope]) this.models[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
 
         const modelIds = Object.keys(modelUris);
 
@@ -123,7 +123,7 @@ class ModelManager extends Evented {
     }
 
     getModel(id: string, scope: string): Model | null | undefined {
-        if (!this.models[scope]) this.models[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
         return this.models[scope][id] ? this.models[scope][id].model : undefined;
     }
 
@@ -141,12 +141,12 @@ class ModelManager extends Evented {
     }
 
     getModelURIs(scope: string): StyleModelMap {
-        return this.modelUris[scope] || {};
+        return this.modelUris[scope] || Object.create(null) as StyleModelMap;
     }
 
     addModel(id: string, url: string, scope: string) {
-        if (!this.models[scope]) this.models[scope] = {};
-        if (!this.modelUris[scope]) this.modelUris[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
+        if (!this.modelUris[scope]) this.modelUris[scope] = Object.create(null) as ModelManager['modelUris'][string];
 
         const normalizedModelURL = this.requestManager.normalizeModelURL(url);
 
@@ -163,12 +163,12 @@ class ModelManager extends Evented {
     }
 
     addModelURLs(modelsToAdd: ModelsSpecification, scope: string) {
-        if (!this.models[scope]) this.models[scope] = {};
-        if (!this.modelUris[scope]) this.modelUris[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
+        if (!this.modelUris[scope]) this.modelUris[scope] = Object.create(null) as ModelManager['modelUris'][string];
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const modelUris: Record<string, any> = this.modelUris[scope];
-        for (const modelId in modelsToAdd) {
+        for (const modelId of Object.keys(modelsToAdd)) {
             const modelUri = modelsToAdd[modelId];
             modelUris[modelId] = this.requestManager.normalizeModelURL(modelUri);
         }
@@ -179,11 +179,11 @@ class ModelManager extends Evented {
     }
 
     addModelsFromBucket(modelIds: Array<string>, scope: string) {
-        if (!this.models[scope]) this.models[scope] = {};
-        if (!this.modelUris[scope]) this.modelUris[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
+        if (!this.modelUris[scope]) this.modelUris[scope] = Object.create(null) as ModelManager['modelUris'][string];
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const modelsRequests: Record<string, any> = {};
+        const modelsRequests = Object.create(null) as Record<string, any>;
         for (const modelId of modelIds) {
             if (this.hasModel(modelId, scope, {exactIdMatch: true}) || this.hasURLBeenRequested(modelId)) {
                 this.models[scope][modelId].numReferences++;
@@ -225,19 +225,21 @@ class ModelManager extends Evented {
             }
         }
 
-        this.models = {'': {}};
-        this.modelUris = {'': {}};
-        this.modelByURL = {};
-        this.numModelsLoading = {};
+        this.models = Object.create(null) as ModelManager['models'];
+        this.models[''] = Object.create(null) as ModelManager['models'][string];
+        this.modelUris = Object.create(null) as ModelManager['modelUris'];
+        this.modelUris[''] = Object.create(null) as ModelManager['modelUris'][string];
+        this.modelByURL = Object.create(null) as ModelManager['modelByURL'];
+        this.numModelsLoading = Object.create(null) as ModelManager['numModelsLoading'];
     }
 
     listModels(scope: string): Array<string> {
-        if (!this.models[scope]) this.models[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
         return Object.keys(this.models[scope]);
     }
 
     upload(painter: Painter, scope: string) {
-        if (!this.models[scope]) this.models[scope] = {};
+        if (!this.models[scope]) this.models[scope] = Object.create(null) as ModelManager['models'][string];
         for (const modelId in this.models[scope]) {
             if (this.models[scope][modelId].model) {
                 this.models[scope][modelId].model.upload(painter.context);

@@ -30,6 +30,7 @@ import browser from '../../../src/util/browser';
 import * as DOM from '../../../src/util/dom';
 import {Map, AVERAGE_ELEVATION_SAMPLING_INTERVAL, AVERAGE_ELEVATION_EASE_TIME} from '../../../src/ui/map';
 import {createConstElevationDEM, setMockElevationTerrain} from '../../util/dem_mock';
+import RasterDEMTileSource from '../../../src/source/raster_dem_tile_source';
 import vectorStub from '../../util/fixtures/10/301/384.pbf?arraybuffer';
 
 function createStyle() {
@@ -144,7 +145,7 @@ describe('Elevation', () => {
         });
     });
 
-    test('style diff / remove dem source cache', () => {
+    describe('Throws error if style update tries to remove terrain DEM source', () => {
         let map: any;
 
         beforeAll(async () => {
@@ -154,13 +155,11 @@ describe('Elevation', () => {
             await waitFor(map, 'render');
         });
 
-        describe('Throws error if style update tries to remove terrain DEM source', () => {
-            test('remove source', () => {
-                const stub = vi.spyOn(console, 'error');
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-                map.removeSource('mapbox-dem');
-                expect(stub.calledOnce).toBeTruthy();
-            });
+        test('remove source', () => {
+            const stub = vi.spyOn(console, 'error').mockImplementation(() => {});
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            map.removeSource('mapbox-dem');
+            expect(stub).toHaveBeenCalledOnce();
         });
     });
 
@@ -290,7 +289,6 @@ describe('Elevation', () => {
         test('disable terrain', async () => {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(map.painter.terrain).toBeTruthy();
-            await waitFor(map, "idle");
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             map.setTerrain(null);
             await waitFor(map, "render");
@@ -653,16 +651,17 @@ describe('Elevation', () => {
         });
 
         test('Source other:trace is cleared from cache', () => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            expect(map.painter.terrain._tilesDirty.hasOwnProperty('other:trace')).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(Object.hasOwn(map.painter.terrain._tilesDirty as object, 'other:trace')).toBeTruthy();
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(map.painter.terrain._tilesDirty['other:trace']['0']).toBeTruthy();
         });
     });
 
     test('mapbox-gl-js-internal#349', async () => {
-        vi.spyOn(window, 'fetch').mockImplementation(async (req) => {
-            return new window.Response(await getPNGResponse());
+        vi.spyOn(RasterDEMTileSource.prototype, 'loadTile').mockImplementation((tile, callback) => {
+            tile.state = 'loaded';
+            callback(null);
         });
 
         const map = createMap({
@@ -2025,7 +2024,7 @@ test('terrain recursively loads parent tiles on 404', async () => {
     cache.used = cache._sourceLoaded = true;
     cache._loadTile = (tile, callback) => {
         if (tile.tileID.canonical.z > 10) {
-            setTimeout(() => callback({status: 404}), 0);
+            setTimeout(callback, 0, {status: 404});
         } else {
             tile.state = 'loaded';
             callback(null);

@@ -151,7 +151,7 @@ export class MapMouseEvent extends Event<MapEvents, MapMouseEventType> {
     constructor(type: MapMouseEventType, map: MapboxMap, originalEvent: MouseEvent, data: EventData = {}) {
         const point = DOM.mousePos(map.getCanvasContainer(), originalEvent);
         const lngLat = map.unproject(point);
-        super(type, Object.assign({point, lngLat, originalEvent}, data) as MapEvents[MapMouseEventType]);
+        super(type, ({point, lngLat, originalEvent, ...data}) as MapEvents[MapMouseEventType]);
         this._defaultPrevented = false;
         this.target = map;
     }
@@ -423,7 +423,7 @@ export type MapSourceDataEvent = {
     tile?: Tile;
     coord?: Tile['tileID'];
     resourceTiming?: PerformanceResourceTiming[],
-    responseHeaders?: Map<string, string>;
+    responseHeaders?: Headers;
 };
 
 export type MapSourceTileLoadFailEvent = {
@@ -1668,7 +1668,7 @@ export type MapEvents = {
 /**
  * Utility type that represents all possible Map event types.
  */
-// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+
 export type MapEventType = keyof MapEvents & string;
 
 /**

@@ -3,18 +3,19 @@ import EXTENT from '../style-spec/data/extent';
 import {ResourceType} from '../util/ajax';
 import browser from '../util/browser';
 import {makeFQID} from '../util/fqid';
+import {HD, prepareHD} from '../../modules/hd_main';
 
 import type {ISource, SourceEvents} from './source';
 import type {Map as MapboxMap} from '../ui/map';
 import type Dispatcher from '../util/dispatcher';
 import type Tile from './tile';
 import type Actor from '../util/actor';
+import type {WorkerInbox} from '../util/actor_messages';
 import type {Callback} from '../types/callback';
-import type {Cancelable} from '../types/cancelable';
 import type {RequestParameters} from '../util/ajax';
 import type {MapSourceDataEvent} from '../ui/events';
-import type {GeoJSONWorkerOptions, LoadGeoJSONResult} from './geojson_worker_source';
-import type {CustomTags, GeoJSONSourceSpecification, PromoteIdSpecification} from '../style-spec/types';
+import type {GeoJSONWorkerOptions} from './geojson_worker_source';
+import type {GeoJSONSourceSpecification, PromoteIdSpecification} from '../style-spec/types';
 import type {WorkerSourceVectorTileRequest, WorkerSourceVectorTileResult} from './worker_source';
 
 export type LoadGeoJSONRequest = GeoJSONWorkerOptions & {
@@ -88,8 +89,6 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
     rasterLayers?: never;
     rasterLayerIds?: never;
 
-    customTags?: CustomTags;
-
     roundZoom: boolean | undefined;
     isTileClipped: boolean | undefined;
     reparseOverscaled: boolean | undefined;
@@ -97,14 +96,13 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
     _options: GeoJSONSourceSpecification;
     workerOptions: GeoJSONWorkerOptions;
     map: MapboxMap;
-    actor: Actor;
+    actor: Actor<WorkerInbox>;
     _loaded: boolean;
     _coalesce: boolean | null | undefined;
     _metadataFired: boolean | null | undefined;
     _collectResourceTiming: boolean;
-    _pendingLoad: Cancelable | null | undefined;
+    _pendingLoad: AbortController | null | undefined;
     _partialReload: boolean;
-    _needSet: boolean;
 
     hasTile: undefined;
     prepare: undefined;
@@ -137,7 +135,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         this.setEventedParent(eventedParent);
 
         this._data = options.data;
-        this._options = Object.assign({}, options);
+        this._options = {...options};
 
         this._collectResourceTiming = options.collectResourceTiming;
 
@@ -146,7 +144,6 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         if (options.type) this.type = options.type;
         if (options.attribution) this.attribution = options.attribution;
         this.promoteId = options.promoteId;
-        this.customTags = options.customTags;
 
         const scale = EXTENT / this.tileSize;
 
@@ -154,7 +151,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         // so that it can load/parse/index the geojson data
         // extending with `options.workerOptions` helps to make it easy for
         // third-party sources to hack/reuse GeoJSONSource.
-        this.workerOptions = Object.assign({
+        this.workerOptions = {
             source: this.id,
             scope: this.scope,
             cluster: options.cluster || false,
@@ -176,8 +173,9 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
             },
             clusterProperties: options.clusterProperties,
             filter: options.filter,
-            dynamic: options.dynamic
-        }, options.workerOptions);
+            dynamic: options.dynamic,
+            ...options.workerOptions
+        } as GeoJSONWorkerOptions;
     }
 
     onAdd(map: MapboxMap) {
@@ -214,6 +212,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
      */
     setData(data: GeoJSON.GeoJSON | string): this {
         this._data = data;
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         this._updateWorkerData();
         return this;
     }
@@ -267,6 +266,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         } else {
             this._data = data;
         }
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         this._updateWorkerData(true);
         return this;
     }
@@ -303,7 +303,9 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
      * });
      */
     getClusterExpansionZoom(clusterId: number, callback: Callback<number>): this {
-        this.actor.send('geojson.getClusterExpansionZoom', {clusterId, source: this.id, scope: this.scope}, callback);
+        this.actor.send('geojson.getClusterExpansionZoom', {clusterId, source: this.id, scope: this.scope})
+            .then(data => callback(null, data))
+            .catch(err => callback(err as Error));
         return this;
     }
 
@@ -331,7 +333,9 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
      * });
      */
     getClusterChildren(clusterId: number, callback: Callback<Array<GeoJSON.Feature>>): this {
-        this.actor.send('geojson.getClusterChildren', {clusterId, source: this.id, scope: this.scope}, callback);
+        this.actor.send('geojson.getClusterChildren', {clusterId, source: this.id, scope: this.scope})
+            .then(data => callback(null, data))
+            .catch(err => callback(err as Error));
         return this;
     }
 
@@ -373,71 +377,78 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
             clusterId,
             limit,
             offset
-        }, callback);
+        })
+            .then(data => callback(null, data))
+            .catch(err => callback(err as Error));
         return this;
     }
 
     /*
      * Responsible for invoking WorkerSource's geojson.loadData target, which
-     * handles _loading the geojson data and preparing to serve it up as tiles,
+     * handles loading the geojson data and preparing to serve it up as tiles,
      * using geojson-vt or supercluster as appropriate.
      */
-    _updateWorkerData(append: boolean = false) {
+    async _updateWorkerData(append: boolean = false) {
         // if there's an earlier loadData to finish, wait until it finishes and then do another update
         if (this._pendingLoad) {
             this._coalesce = true;
-            if (!append) this._needSet = true;
             return;
         }
 
         this.fire(new Event('dataloading', {dataType: 'source'}));
 
         this._loaded = false;
-        const options: LoadGeoJSONRequest = Object.assign({append}, this.workerOptions);
+        const options: LoadGeoJSONRequest = {append, ...this.workerOptions};
 
         options.scope = this.scope;
         const data = this._data;
         if (typeof data === 'string') {
-            options.request = this.map._requestManager.transformRequest(browser.resolveURL(data), ResourceType.Source, this.customTags);
+            options.request = this.map._requestManager.transformRequest(browser.resolveURL(data), ResourceType.Source);
             options.request.collectResourceTiming = this._collectResourceTiming;
         } else {
             options.data = JSON.stringify(data);
-            // free memory
-            this._data = null;
         }
 
         // target {this.type}.loadData rather than literally geojson.loadData,
         // so that other geojson-like source types can easily reuse this
         // implementation
-        this._pendingLoad = this.actor.send(`${this.type}.loadData`, options, (err, result: LoadGeoJSONResult) => {
+        const controller = new AbortController();
+        this._pendingLoad = controller;
+
+        try {
+            // The runtime type is `${this.type}.loadData` so geojson-like source types can reuse
+            // this path, but every variant returns a LoadGeoJSONResult-shaped reply.
+            const result = await this.actor.send(`${this.type}.loadData` as 'geojson.loadData', options, {signal: controller.signal});
             this._loaded = true;
             this._pendingLoad = null;
-
-            if (err) {
-                this.fire(new ErrorEvent(err));
-
-            } else {
-                // although GeoJSON sources contain no metadata, we fire this event at first
-                // to let the SourceCache know its ok to start requesting tiles.
-                const data: MapSourceDataEvent = {
-                    dataType: 'source',
-                    sourceDataType: this._metadataFired ? 'content' : 'metadata'
-                };
-                if (this._collectResourceTiming && result && result.resourceTiming && result.resourceTiming[this.id]) {
-                    data.resourceTiming = result.resourceTiming[this.id];
-                }
-                if (append) this._partialReload = true;
-                this.fire(new Event('data', data));
-                this._partialReload = false;
-                this._metadataFired = true;
+            // although GeoJSON sources contain no metadata, we fire this event at first
+            // to let the SourceCache know its ok to start requesting tiles.
+            const data: MapSourceDataEvent = {dataType: 'source', sourceDataType: this._metadataFired ? 'content' : 'metadata'};
+            const geojsonResult = result;
+            if (this._collectResourceTiming && geojsonResult && geojsonResult.resourceTiming && geojsonResult.resourceTiming[this.id]) {
+                data.resourceTiming = geojsonResult.resourceTiming[this.id];
             }
-
-            if (this._coalesce) {
-                this._updateWorkerData(this._needSet ? false : append);
+            if (append) this._partialReload = true;
+            this.fire(new Event('data', data));
+            this._partialReload = false;
+            this._metadataFired = true;
+        } catch (err) {
+            if ((err as Error).name === 'AbortError') {
+                this._pendingLoad = null;
+                // the load was cancelled (e.g. source removed); drop any queued coalesced update
                 this._coalesce = false;
-                this._needSet = false;
+                return;
             }
-        });
+            this._loaded = true;
+            this._pendingLoad = null;
+            this.fire(new ErrorEvent(err as Error));
+        }
+
+        if (this._coalesce) {
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises
+            this._updateWorkerData(append);
+            this._coalesce = false;
+        }
     }
 
     loaded(): boolean {
@@ -447,6 +458,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
     reload() {
         const fqid = makeFQID(this.id, this.scope);
         this.map.style.clearSource(fqid);
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         this._updateWorkerData();
     }
 
@@ -456,7 +468,7 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
         const lutForScope = this.map.style ? this.map.style.getLut(this.scope) : null;
         const lut = lutForScope ? {image: lutForScope.image.clone()} : null;
         const partial = this._partialReload;
-        const requestTime = Date.now();
+
         const params: WorkerSourceVectorTileRequest = {
             type: this.type,
             uid: tile.uid,
@@ -470,22 +482,26 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
             scope: this.scope,
             pixelRatio: browser.devicePixelRatio,
             showCollisionBoxes: this.map.showCollisionBoxes,
+            showElevationIdDebug: this.map.painter ? this.map.painter._debugParams.showElevationIdDebug : false,
             promoteId: this.promoteId,
             brightness: this.map.style ? (this.map.style.getBrightness() || 0.0) : 0.0,
             extraShadowCaster: tile.isExtraShadowCaster,
             scaleFactor: this.map.getScaleFactor(),
             partial,
             worldview: this.map.getWorldview(),
-            indoor: this.map.indoor ? this.map.indoor.getIndoorTileOptions(this.id, this.scope) : null
+            indoor: this.map.getIndoorTileOptions(this.id, this.scope)
         };
-        tile.requestTime = requestTime;
-        tile.request = this.actor.send(message, params, (err, data: WorkerSourceVectorTileResult) => {
-            delete tile.request;
-            if ((tile.requestTime > requestTime)) {
+
+        const done = (err: Error | null | undefined, data?: WorkerSourceVectorTileResult) => {
+            if (partial && !data) {
+                // if we did a partial reload and the tile didn't change, do nothing and treat the tile as loaded
                 tile.state = 'loaded';
                 return callback(null);
             }
+
+            delete tile.request;
             tile.destroy(false);
+
             if (tile.aborted) {
                 return callback(null);
             }
@@ -493,36 +509,53 @@ class GeoJSONSource extends Evented<SourceEvents> implements ISource {
             if (err) {
                 return callback(err);
             }
-            tile.loadVectorData(data, this.map.painter, message === 'reloadTile');
 
-            return callback(null);
-        }, undefined, message === 'loadTile');
+            // Same HD gate as vector_tile_source.done(): await the HD module before
+            // deserializing a tile that carries extension classes (elevated roads etc.),
+            // otherwise `loadVectorData` would hit the unregistered-class throw.
+            if (data && data.containsHdExt && !HD.loaded) {
+                const finishLoad = () => {
+                    if (tile.aborted) return callback(null);
+                    if (!HD.loaded) return callback(new Error('HD module failed to load'));
+                    tile.loadVectorData(data, this.map.painter, message === 'reloadTile');
+                    callback(null);
+                };
+                prepareHD().then(finishLoad, finishLoad);
+                return;
+            }
+
+            tile.loadVectorData(data, this.map.painter, message === 'reloadTile');
+            callback(null);
+        };
+
+        tile.request = this.actor.sendCancelable(message, params, {}, done);
     }
 
     abortTile(tile: Tile) {
         if (tile.request) {
-            tile.request.cancel();
+            tile.request.abort();
             delete tile.request;
         }
         tile.aborted = true;
     }
 
     unloadTile(tile: Tile, _?: Callback<undefined> | null) {
-        this.actor.send('removeTile', {uid: tile.uid, type: this.type, source: this.id, scope: this.scope});
+        this.actor.send('removeTile', {uid: tile.uid, type: this.type, source: this.id, scope: this.scope}, {skipResult: true});
         tile.destroy();
     }
 
     onRemove(_: MapboxMap) {
         if (this._pendingLoad) {
-            this._pendingLoad.cancel();
+            this._pendingLoad.abort();
         }
     }
 
     serialize(): GeoJSONSourceSpecification {
-        return Object.assign({}, this._options, {
+        return {
+            ...this._options,
             type: this.type,
             data: this._data
-        });
+        };
     }
 
     hasTransition(): boolean {

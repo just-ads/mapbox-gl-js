@@ -2,11 +2,11 @@ import type Program from './program';
 import type VertexBuffer from '../gl/vertex_buffer';
 import type IndexBuffer from '../gl/index_buffer';
 import type Context from '../gl/context';
+import type {UniformBindings} from './uniform_binding';
 
 class VertexArrayObject {
     context: Context;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    boundProgram: Program<any> | null | undefined;
+    boundProgram: Program<UniformBindings> | null | undefined;
     boundLayoutVertexBuffer: VertexBuffer | null | undefined;
     boundPaintVertexBuffers: Array<VertexBuffer>;
     boundIndexBuffer: IndexBuffer | null | undefined;
@@ -24,15 +24,16 @@ class VertexArrayObject {
         this.vao = null;
     }
 
-    bind(context: Context,
-         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-         program: Program<any>,
-         layoutVertexBuffer: VertexBuffer,
-         paintVertexBuffers: Array<VertexBuffer>,
-         indexBuffer: IndexBuffer | null | undefined,
-         vertexOffset: number | null | undefined,
-         dynamicVertexBuffers: Array<VertexBuffer | null | undefined>,
-         vertexAttribDivisorValue?: number | null) {
+    bind(
+        context: Context,
+        program: Program<UniformBindings>,
+        layoutVertexBuffer: VertexBuffer,
+        paintVertexBuffers: Array<VertexBuffer>,
+        indexBuffer: IndexBuffer | null | undefined,
+        vertexOffset: number | null | undefined,
+        dynamicVertexBuffers: Array<VertexBuffer | null | undefined>,
+        vertexAttribDivisorValue?: number | null
+    ) {
 
         this.context = context;
 
@@ -67,7 +68,6 @@ class VertexArrayObject {
                 if (dynamicBuffer) {
                     dynamicBuffer.bind();
                     if (vertexAttribDivisorValue && dynamicBuffer.instanceCount) {
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                         dynamicBuffer.setVertexAttribDivisor(context.gl, program, vertexAttribDivisorValue);
                     }
                 }
@@ -78,15 +78,15 @@ class VertexArrayObject {
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    freshBind(program: Program<any>,
-              layoutVertexBuffer: VertexBuffer,
-              paintVertexBuffers: Array<VertexBuffer>,
-              indexBuffer: IndexBuffer | null | undefined,
-              vertexOffset: number | null | undefined,
-              dynamicVertexBuffers: Array<VertexBuffer | null | undefined>,
-              vertexAttribDivisorValue?: number | null) {
-
+    freshBind(
+        program: Program<UniformBindings>,
+        layoutVertexBuffer: VertexBuffer,
+        paintVertexBuffers: Array<VertexBuffer>,
+        indexBuffer: IndexBuffer | null | undefined,
+        vertexOffset: number | null | undefined,
+        dynamicVertexBuffers: Array<VertexBuffer | null | undefined>,
+        vertexAttribDivisorValue?: number | null
+    ) {
         const context = this.context;
         const gl = context.gl;
 
@@ -102,29 +102,22 @@ class VertexArrayObject {
         this.boundVertexOffset = vertexOffset;
         this.boundDynamicVertexBuffers = dynamicVertexBuffers;
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         layoutVertexBuffer.enableAttributes(gl, program);
         layoutVertexBuffer.bind();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         layoutVertexBuffer.setVertexAttribPointers(gl, program, vertexOffset);
 
         for (const vertexBuffer of paintVertexBuffers) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             vertexBuffer.enableAttributes(gl, program);
             vertexBuffer.bind();
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             vertexBuffer.setVertexAttribPointers(gl, program, vertexOffset);
         }
 
         for (const dynamicBuffer of dynamicVertexBuffers) {
             if (dynamicBuffer) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 dynamicBuffer.enableAttributes(gl, program);
                 dynamicBuffer.bind();
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 dynamicBuffer.setVertexAttribPointers(gl, program, vertexOffset);
                 if (vertexAttribDivisorValue && dynamicBuffer.instanceCount) {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     dynamicBuffer.setVertexAttribDivisor(gl, program, vertexAttribDivisorValue);
                 }
             }

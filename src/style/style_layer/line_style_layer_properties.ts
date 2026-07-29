@@ -27,6 +27,7 @@ export type LayoutProps = {
     "line-cross-slope": DataConstantProperty<number>;
     "visibility": DataConstantProperty<"visible" | "none">;
     "line-width-unit": DataConstantProperty<"pixels" | "meters">;
+    "line-elevation-ground-scale": DataDrivenProperty<number>;
 };
 let layout: Properties<LayoutProps>;
 export const getLayoutProperties = (): Properties<LayoutProps> => layout || (layout = new Properties({
@@ -40,6 +41,7 @@ export const getLayoutProperties = (): Properties<LayoutProps> => layout || (lay
     "line-cross-slope": new DataConstantProperty(styleSpec["layout_line"]["line-cross-slope"]),
     "visibility": new DataConstantProperty(styleSpec["layout_line"]["visibility"]),
     "line-width-unit": new DataConstantProperty(styleSpec["layout_line"]["line-width-unit"]),
+    "line-elevation-ground-scale": new DataDrivenProperty(styleSpec["layout_line"]["line-elevation-ground-scale"]),
 }));
 
 export type PaintProps = {
@@ -62,6 +64,8 @@ export type PaintProps = {
     "line-border-width": DataDrivenProperty<number>;
     "line-border-color": DataDrivenProperty<Color>;
     "line-occlusion-opacity": DataConstantProperty<number>;
+    "line-blend-mode": DataConstantProperty<"default" | "multiply" | "additive">;
+    "line-blend-additive-clamp": DataConstantProperty<number>;
     "line-color-use-theme": DataDrivenProperty<string>;
     "line-gradient-use-theme": DataDrivenProperty<string>;
     "line-trim-color-use-theme": DataDrivenProperty<string>;
@@ -89,6 +93,8 @@ export const getPaintProperties = (): Properties<PaintProps> => paint || (paint 
     "line-border-width": new DataDrivenProperty(styleSpec["paint_line"]["line-border-width"]),
     "line-border-color": new DataDrivenProperty(styleSpec["paint_line"]["line-border-color"]),
     "line-occlusion-opacity": new DataConstantProperty(styleSpec["paint_line"]["line-occlusion-opacity"]),
+    "line-blend-mode": new DataConstantProperty(styleSpec["paint_line"]["line-blend-mode"]),
+    "line-blend-additive-clamp": new DataConstantProperty(styleSpec["paint_line"]["line-blend-additive-clamp"]),
     "line-color-use-theme": new DataDrivenProperty({"type":"string","default":"default","property-type":"data-driven"}),
     "line-gradient-use-theme": new DataDrivenProperty({"type":"string","default":"default","property-type":"data-driven"}),
     "line-trim-color-use-theme": new DataDrivenProperty({"type":"string","default":"default","property-type":"data-driven"}),

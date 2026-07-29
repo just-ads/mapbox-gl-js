@@ -4,13 +4,12 @@ import {Layout, Transitionable, PossiblyEvaluated, PossiblyEvaluatedPropertyValu
 import {supportsPropertyExpression} from '../style-spec/util/properties';
 import featureFilter from '../style-spec/feature_filter/index';
 import {makeFQID} from '../util/fqid';
-import {createExpression, type FeatureState} from '../style-spec/expression/index';
+import {type FeatureState} from '../style-spec/expression/index';
 import {isStateConstant} from '../style-spec/expression/is_constant';
-import latest from '../style-spec/reference/latest';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import SymbolAppearance from './appearance';
 
-import type {Bucket} from '../data/bucket';
+import type {Bucket, BucketParameters} from '../data/bucket';
 import type Point from '@mapbox/point-geometry';
 import type {FeatureFilter, FilterExpression} from '../style-spec/feature_filter/index';
 import type {TransitionParameters, PropertyValue, ConfigOptions, Transitioning, Properties} from './properties';
@@ -35,10 +34,11 @@ import type Painter from '../render/painter';
 import type {LUT} from '../util/lut';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {ProgramName} from '../render/program';
-import type {AppearanceProps} from './appearance_properties';
 import type {QueryResult} from '../source/query_features';
 
 const TRANSITION_SUFFIX = '-transition';
+
+export type RuntimeModuleType = 'HD' | 'Standard';
 
 type LayerRenderingStats = {
     numRenderedVerticesInTransparentPass: number;
@@ -47,11 +47,6 @@ type LayerRenderingStats = {
 
 // Symbols are draped only on native and for certain cases only
 const drapedLayers = new Set(['fill', 'line', 'background', 'hillshade', 'raster']);
-
-type LayerExpressionDependencies = {
-    isIndoorDependent: boolean;
-    configDependencies: Set<string>;
-};
 
 class StyleLayer extends Evented {
     id: string;
@@ -67,9 +62,9 @@ class StyleLayer extends Evented {
     maxzoom: number | null | undefined;
     filter: FilterSpecification | undefined;
     visibility: 'visible' | 'none' | undefined;
-    expressionDependencies: LayerExpressionDependencies;
     iconImageUseTheme: string | null | undefined;
     appearances: Array<SymbolAppearance>;
+    appearancesVersion: number;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     _unevaluatedLayout: Layout<any>;
@@ -109,13 +104,10 @@ class StyleLayer extends Evented {
         this.options = options;
         this.iconImageUseTheme = iconImageUseTheme;
         this.appearances = new Array<SymbolAppearance>();
+        this.appearancesVersion = 0;
 
         this._featureFilter = {filter: () => true, needGeometry: false, needFeature: false};
         this._filterCompiled = false;
-        this.expressionDependencies = {
-            isIndoorDependent: false,
-            configDependencies: new Set()
-        };
 
         if (layer.type === 'custom') return;
 
@@ -127,16 +119,6 @@ class StyleLayer extends Evented {
             this.source = layer.source;
             this.sourceLayer = layer['source-layer'];
             this.filter = layer.filter;
-
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-            const filterSpec = latest[`filter_${layer.type}`];
-            assert(filterSpec);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            const compiledStaticFilter = createExpression(this.filter, filterSpec);
-            if (compiledStaticFilter.result !== 'error') {
-                this.expressionDependencies.configDependencies = new Set([...this.expressionDependencies.configDependencies, ...compiledStaticFilter.value.configDependencies]);
-                this.expressionDependencies.isIndoorDependent = this.expressionDependencies.isIndoorDependent || compiledStaticFilter.value.isIndoorDependent;
-            }
         }
 
         if (layer.slot) this.slot = layer.slot;
@@ -147,8 +129,6 @@ class StyleLayer extends Evented {
 
         if (properties.layout) {
             this._unevaluatedLayout = new Layout(properties.layout, this.scope, options, this.iconImageUseTheme);
-            this.expressionDependencies.configDependencies = new Set([...this.expressionDependencies.configDependencies, ...this._unevaluatedLayout.configDependencies]);
-            this.expressionDependencies.isIndoorDependent = this.expressionDependencies.isIndoorDependent || this._unevaluatedLayout.isIndoorDependent();
         }
 
         if (properties.paint) {
@@ -160,11 +140,8 @@ class StyleLayer extends Evented {
             }
             for (const property in layer.layout) {
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                this.setLayoutProperty(property as keyof LayoutSpecification, layer.layout[property]);
+                this.setLayoutProperty(property, layer.layout[property]);
             }
-            this.expressionDependencies.configDependencies = new Set([...this.expressionDependencies.configDependencies, ...this._transitionablePaint.configDependencies]);
-            this.expressionDependencies.isIndoorDependent = this.expressionDependencies.isIndoorDependent || this._transitionablePaint.isIndoorDependent();
-
             this._transitioningPaint = this._transitionablePaint.untransitioned();
             this.paint = new PossiblyEvaluated(properties.paint);
         }
@@ -182,17 +159,15 @@ class StyleLayer extends Evented {
 
     getLayoutProperty<T extends keyof LayoutSpecification>(name: T): LayoutSpecification[T] | undefined {
         if (name === 'visibility') {
-            // @ts-expect-error - TS2590 - Expression produces a union type that is too complex to represent.
-            return this.visibility;
+            return this.visibility as LayoutSpecification[T];
         }
 
-        return this._unevaluatedLayout.getValue(name);
+        return this._unevaluatedLayout.getValue(name) as LayoutSpecification[T] | undefined;
     }
 
     setLayoutProperty<T extends keyof LayoutSpecification>(name: string, value: LayoutSpecification[T]): void {
         if (this.type === 'custom' && name === 'visibility') {
-            // @ts-expect-error - TS2590 - Expression produces a union type that is too complex to represent.
-            this.visibility = value;
+            this.visibility = value as 'visible' | 'none' | undefined;
             return;
         }
 
@@ -203,8 +178,6 @@ class StyleLayer extends Evented {
         if (!specProps[name]) return; // skip unrecognized properties
 
         layout.setValue(name, value);
-        this.expressionDependencies.configDependencies = new Set([...this.expressionDependencies.configDependencies, ...layout.configDependencies]);
-        this.expressionDependencies.isIndoorDependent = this.expressionDependencies.isIndoorDependent || layout.isIndoorDependent();
         if (name === 'visibility') {
             this.possiblyEvaluateVisibility();
         }
@@ -213,17 +186,17 @@ class StyleLayer extends Evented {
     setAppearances(appearances: AppearanceSpecification[]) {
         this.appearances = [];
         appearances.forEach(a => {
-            this.appearances.push(new SymbolAppearance(a.condition, a.name, a.properties as AppearanceProps, this.scope, this.options, this.iconImageUseTheme));
+            this.appearances.push(new SymbolAppearance(a.condition, a.name, a.properties, this.scope, this.options, this.iconImageUseTheme));
         });
+        this.appearancesVersion++;
     }
 
     possiblyEvaluateVisibility() {
         if (!this._unevaluatedLayout._values.visibility) {
-            // Early return for layers which don't have a visibility property, like clip-layer
+            // Early return for layers which don't have a visibility property.
             return;
         }
-        // @ts-expect-error - TS2322 - Type 'unknown' is not assignable to type '"none" | "visible"'. | TS2345 - Argument of type '{ zoom: number; }' is not assignable to parameter of type 'EvaluationParameters'.
-        this.visibility = this._unevaluatedLayout._values.visibility.possiblyEvaluate({zoom: 0});
+        this.visibility = this._unevaluatedLayout._values.visibility.possiblyEvaluate({zoom: 0} as EvaluationParameters) as 'visible' | 'none' | undefined;
     }
 
     getPaintProperty<T extends keyof PaintSpecification>(name: T): PaintSpecification[T] | undefined {
@@ -266,8 +239,6 @@ class StyleLayer extends Evented {
         const oldValue = transitionable.value;
 
         paint.setValue(name, value as PropertyValueSpecification<unknown>);
-        this.expressionDependencies.configDependencies = new Set([...this.expressionDependencies.configDependencies, ...paint.configDependencies]);
-        this.expressionDependencies.isIndoorDependent = this.expressionDependencies.isIndoorDependent || paint.isIndoorDependent();
         this._handleSpecialPaintPropertyUpdate(name);
 
         const newValue = paint._values[name].value;
@@ -362,6 +333,25 @@ class StyleLayer extends Evented {
         return false;
     }
 
+    // Conservative predicate used to preload a lazy module on both threads before the
+    // first relevant tile parses/deserializes. Reads the *raw* layout declaration via
+    // `_unevaluatedLayout` because this runs on the worker before layers have been
+    // recalculated, and on the main thread during recalculate. Data-driven expression
+    // declarations return true conservatively — the worst case is an unnecessary preload.
+    // Subclasses override this to indicate which module(s) they require.
+    mayUse(_type: RuntimeModuleType): boolean {
+        return false;
+    }
+
+    // Worker-side module preload hook. Default no-op; subclasses return the relevant
+    // `prepare*()` promise (from `modules/hd_worker` or `modules/standard_worker`) when
+    // their layer type needs async module loading before bucket creation.
+    // Main-side preload stays at call sites to avoid pulling main-only chunks into the
+    // worker bundle.
+    prepare(): Promise<void> {
+        return Promise.resolve();
+    }
+
     isSky(): boolean {
         return false;
     }
@@ -369,6 +359,8 @@ class StyleLayer extends Evented {
     isTileClipped(): boolean {
         return false;
     }
+
+    createBucket?(parameters: BucketParameters<this>): Bucket;
 
     hasOffscreenPass(): boolean {
         return false;
@@ -446,6 +438,10 @@ class StyleLayer extends Evented {
         return this._featureFilter.needFeature;
     }
 
+    dynamicFilterNeedsGeometry(): boolean {
+        return this._featureFilter.needGeometry;
+    }
+
     getLayerRenderingStats(): LayerRenderingStats | null | undefined {
         return this._stats;
     }
@@ -470,8 +466,7 @@ class StyleLayer extends Evented {
         transform: Transform
     ) : QueryResult { return {}; }
 
-    // @ts-expect-error - TS2355 - A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
-    queryRadius(_bucket: Bucket): number {}
+    queryRadius(_bucket: Bucket): number | undefined { return undefined; }
 
     queryIntersectsFeature(
         _queryGeometry: TilespaceQueryGeometry,
@@ -483,8 +478,24 @@ class StyleLayer extends Evented {
         _pixelPosMatrix: Float32Array,
         _elevationHelper: DEMSampler | null | undefined,
         _layoutVertexArrayOffset: number,
-        // @ts-expect-error - TS2355 - A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
-    ): boolean | number {}
+        scope: string | undefined
+    ): boolean | number | undefined { return undefined; }
+}
+
+/**
+ * Reads a raw layout declaration and evaluates `predicate` against it. Returns `true`
+ * if the declaration is an expression (conservative — we can't evaluate without
+ * feature/zoom context), `false` if the declaration is missing, otherwise defers to
+ * `predicate`. Shared helper for `mayUse('HD')` implementations on subclasses.
+ *
+ * @private
+ */
+export function rawLayoutMayUseHD(layer: StyleLayer, propName: string, predicate: (v: string) => boolean): boolean {
+    if (!layer._unevaluatedLayout) return false;
+    const val = layer._unevaluatedLayout.getValue(propName);
+    if (val === undefined) return false;
+    if (typeof val !== 'string') return true;
+    return predicate(val);
 }
 
 export default StyleLayer;

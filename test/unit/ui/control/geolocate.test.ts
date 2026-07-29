@@ -1,35 +1,31 @@
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-nocheck
-import {test, beforeAll, beforeEach, expect, vi, createMap} from '../../../util/vitest';
+import {test, describe, beforeAll, beforeEach, afterEach, expect, vi, createMap} from '../../../util/vitest';
 import GeolocateControl from '../../../../src/ui/control/geolocate_control';
-import mockGeolocation from 'mock-geolocation';
+import {mockGeolocation} from '../../../util/mock_geolocation';
+
+import type {GeolocateControlOptions} from '../../../../src/ui/control/geolocate_control';
 
 beforeAll(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     mockGeolocation.use();
 });
 
 beforeEach(() => {
-    // eslint-disable-next-line @typescript-eslint/require-await
-    vi.spyOn(window.navigator.permissions, 'query').mockImplementation(async () => {
-        return {state: 'granted'};
+    mockGeolocation.reset();
+    vi.spyOn(window.navigator.permissions, 'query').mockImplementation(() => {
+        return Promise.resolve({state: 'granted'} as PermissionStatus);
     });
 });
 
 // convert the coordinates of a LngLat object to a fixed number of digits
-function lngLatAsFixed(lngLat, digits) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    return Object.keys(lngLat).reduce<Record<string, any>>((previous, current) => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        previous[current] = lngLat[current].toFixed(digits);
+function lngLatAsFixed(lngLat: {lat: number; lng: number}, digits: number): Record<string, string> {
+    return Object.keys(lngLat).reduce<Record<string, string>>((previous, current) => {
+        previous[current] = lngLat[current as keyof typeof lngLat].toFixed(digits);
         return previous;
     }, {});
 }
 
-function afterUIChanges(cb) {
+function afterUIChanges(cb: (resolve: () => void) => void): Promise<void> {
     return new Promise(resolve => {
         setTimeout(() => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             cb(resolve);
         }, 0);
     });
@@ -43,9 +39,25 @@ test('GeolocateControl with no options', async () => {
 
     await afterUIChanges((resolve) => {
         expect(geolocate._geolocateButton.disabled).toEqual(false);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         resolve();
     });
+});
+
+test('GeolocateControl fires ready event once setup completes', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl();
+
+    const readyPromise = new Promise<void>((resolve) => {
+        geolocate.once('ready', () => {
+            expect(geolocate._setup).toEqual(true);
+            // trigger() must not warn after ready fires
+            expect(geolocate.trigger()).toEqual(true);
+            resolve();
+        });
+    });
+
+    map.addControl(geolocate);
+    await readyPromise;
 });
 
 test('GeolocateControl error event', async () => {
@@ -59,12 +71,40 @@ test('GeolocateControl error event', async () => {
         geolocate.on('error', (error) => {
             expect(error.code).toEqual(2);
             expect(error.message).toEqual('error message');
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.sendError({code: 2, message: 'error message'});
+    });
+});
+
+test('GeolocateControl error event includes GeolocationPositionError constants', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl();
+    map.addControl(geolocate);
+
+    // Directly call _onError with a mock GeolocationPositionError to test
+    // that PERMISSION_DENIED, POSITION_UNAVAILABLE, and TIMEOUT are passed through.
+    // The mock-geolocation library doesn't support these constants.
+    const mockError = {
+        PERMISSION_DENIED: 1,
+        POSITION_UNAVAILABLE: 2,
+        TIMEOUT: 3,
+        code: 1,
+        message: 'User denied Geolocation',
+    } as const satisfies GeolocationPositionError;
+
+    await afterUIChanges((resolve) => {
+        geolocate.on('error', (error) => {
+            expect(error.code).toEqual(1);
+            expect(error.message).toEqual('User denied Geolocation');
+            expect(error.PERMISSION_DENIED).toEqual(1);
+            expect(error.POSITION_UNAVAILABLE).toEqual(2);
+            expect(error.TIMEOUT).toEqual(3);
+
+            resolve();
+        });
+        geolocate._onError(mockError);
     });
 });
 
@@ -84,11 +124,9 @@ test('GeolocateControl outofmaxbounds event in active lock state', async () => {
             expect(position.coords.longitude).toEqual(20);
             expect(position.coords.accuracy).toEqual(3);
             expect(position.timestamp).toEqual(4);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 3, timestamp: 4});
     });
 });
@@ -109,11 +147,9 @@ test('GeolocateControl outofmaxbounds event in background state', async () => {
             expect(position.coords.longitude).toEqual(20);
             expect(position.coords.accuracy).toEqual(3);
             expect(position.timestamp).toEqual(4);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 3, timestamp: 4});
     });
 });
@@ -133,11 +169,9 @@ test('GeolocateControl geolocate event', async () => {
             expect(position.coords.longitude).toEqual(20);
             expect(position.coords.accuracy).toEqual(30);
             expect(position.timestamp).toEqual(40);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
     });
 });
@@ -148,10 +182,8 @@ test('GeolocateControl trigger', async () => {
     map.addControl(geolocate);
 
     await afterUIChanges((resolve) => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-        geolocate.on('geolocate', resolve);
+        geolocate.on('geolocate', () => resolve());
         expect(geolocate.trigger()).toBeTruthy();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
     });
 });
@@ -181,11 +213,9 @@ test('GeolocateControl geolocate fitBoundsOptions', async () => {
 
         map.once('moveend', () => {
             expect(map.getZoom()).toEqual(10);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 1});
     });
 });
@@ -217,11 +247,9 @@ test('GeolocateControl non-zero bearing', async () => {
             expect(lngLatAsFixed(map.getCenter(), 4)).toEqual({lat: "10.0000", lng: "20.0000"});
             expect(map.getBearing()).toEqual(45);
             expect(map.getZoom()).toEqual(10);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 1});
     });
 });
@@ -261,11 +289,9 @@ test('GeolocateControl no watching map camera on geolocation', async () => {
                 (bufferedAccuracyBounds.getEast().toFixed(4) < mapBounds.getEast().toFixed(4)) &&
                 (bufferedAccuracyBounds.getWest().toFixed(4) > mapBounds.getWest().toFixed(4))
             ).toBeFalsy();
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 1000});
     });
 });
@@ -304,16 +330,12 @@ test('GeolocateControl watching map updates recenter on location with dot', asyn
                         geolocate._userLocationDotMarker._element.classList.contains('mapboxgl-user-location-dot-stale')
                     ).toBeTruthy();
                 });
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                 mockGeolocation.changeError({code: 2, message: 'position unavailable'});
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                 resolve();
             });
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             mockGeolocation.change({latitude: 40, longitude: 50, accuracy: 60});
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
     });
 });
@@ -339,8 +361,7 @@ test('GeolocateControl watching map background event', async () => {
             if (moveendCount > 0) return;
             moveendCount++;
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            geolocate.once('trackuserlocationend', resolve);
+            geolocate.once('trackuserlocationend', () => resolve());
 
             // manually pan the map away from the geolocation position which should trigger the 'trackuserlocationend' event above
             map.jumpTo({
@@ -350,7 +371,6 @@ test('GeolocateControl watching map background event', async () => {
         // click the button to activate it into the enabled watch state
         geolocate._geolocateButton.dispatchEvent(click);
         // send through a location update which should reposition the map and trigger the 'moveend' event above
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
     });
 });
@@ -378,11 +398,9 @@ test('GeolocateControl watching map background state', async () => {
             map.once('moveend', () => {
                 geolocate.once('geolocate', () => {
                     expect(map.getCenter()).toEqual({lng: 10, lat: 5}); // camera not changed after geolocation update in background state
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                     resolve();
                 });
                 //  update the geolocation position, since we are in background state when 'geolocate' is triggered above, the camera shouldn't have changed
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                 mockGeolocation.change({latitude: 0, longitude: 0, accuracy: 10});
             });
 
@@ -394,7 +412,6 @@ test('GeolocateControl watching map background state', async () => {
         // click the button to activate it into the enabled watch state
         geolocate._geolocateButton.dispatchEvent(click);
         // send through a location update which should reposition the map and trigger the 'moveend' event above
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
     });
 });
@@ -411,14 +428,12 @@ test('GeolocateControl trackuserlocationstart event', async () => {
     });
     map.addControl(geolocate);
 
-    // eslint-disable-next-line @typescript-eslint/require-await
-    await afterUIChanges(async (resolve) => {
+    await afterUIChanges((resolve) => {
         const click = new window.Event('click');
 
         geolocate.once('geolocate', () => {
             geolocate.once('trackuserlocationend', () => {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                geolocate.once('trackuserlocationstart', resolve);
+                geolocate.once('trackuserlocationstart', () => resolve());
                 // click the geolocate control button again which should transition back to active_lock state
                 geolocate._geolocateButton.dispatchEvent(click);
             });
@@ -430,7 +445,6 @@ test('GeolocateControl trackuserlocationstart event', async () => {
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
     });
 });
@@ -449,12 +463,10 @@ test('GeolocateControl does not switch to BACKGROUND and stays in ACTIVE_LOCK st
             expect(geolocate._watchState).toEqual('ACTIVE_LOCK');
             window.dispatchEvent(new window.Event('resize'));
             expect(geolocate._watchState).toEqual('ACTIVE_LOCK');
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
     });
 });
@@ -475,12 +487,10 @@ test('GeolocateControl switches to BACKGROUND state on map manipulation', async 
                 center: [0, 0]
             });
             expect(geolocate._watchState).toEqual('BACKGROUND');
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             resolve();
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
     });
 });
@@ -502,14 +512,12 @@ test('GeolocateControl accuracy circle radius is accurate with Globe projection'
             expect(geolocate._accuracy).toEqual(2000);
             map.once('zoomend', () => {
                 expect(geolocate._circleElement.style.width).toEqual('1px'); // 2000m = 1px at zoom 0
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                 resolve();
             });
             map.zoomTo(0, {duration: 0});
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 2000});
     });
 });
@@ -532,14 +540,12 @@ test('GeolocateControl accuracy circle not shown if showAccuracyCircle = false',
             });
             map.once('zoomend', () => {
                 expect(!geolocate._circleElement.style.width).toBeTruthy();
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                 resolve();
             });
             map.zoomTo(10, {duration: 0});
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 700});
     });
 });
@@ -565,7 +571,6 @@ test('GeolocateControl accuracy circle radius matches reported accuracy', async 
                 expect(geolocate._circleElement.style.width).toEqual('20px'); // 700m = 20px at zoom 10
                 map.once('zoomend', () => {
                     expect(geolocate._circleElement.style.width).toEqual('79px'); // 700m = 79px at zoom 12
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                     resolve();
                 });
                 map.zoomTo(12, {duration: 0});
@@ -574,7 +579,6 @@ test('GeolocateControl accuracy circle radius matches reported accuracy', async 
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 700});
     });
 });
@@ -599,7 +603,6 @@ test("GeolocateControl accuracy circle doesn't flicker in size", async () => {
                 map.once('zoomend', () => {
                     map.once('zoomend', () => {
                         expect(geolocate._circleElement.style.width).toEqual(circleWidth);
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                         resolve();
                     });
                     map.zoomTo(18, {duration: 0});
@@ -611,7 +614,6 @@ test("GeolocateControl accuracy circle doesn't flicker in size", async () => {
         });
 
         geolocate._geolocateButton.dispatchEvent(new window.Event('click'));
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({longitude: 20.123123, latitude: 10.123123, accuracy: 150});
     });
 });
@@ -634,14 +636,12 @@ test('GeolocateControl shown even if trackUserLocation = false', async () => {
             });
             map.once('zoomend', () => {
                 expect(geolocate._circleElement.style.width).toBeTruthy();
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                 resolve();
             });
             map.zoomTo(10, {duration: 0});
         });
 
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 700});
     });
 });
@@ -663,9 +663,8 @@ test('GeolocateControl watching device orientation event', async () => {
         const click = new window.Event('click');
 
         // since DeviceOrientationEvent is not supported: https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent
-        const deviceOrientationEventLike = (alpha) => {
-            const instance = new window.Event('deviceorientationabsolute');
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const deviceOrientationEventLike = (alpha: number) => {
+            const instance = new window.Event('deviceorientationabsolute') as Event & {alpha: number; absolute: boolean};
             instance.alpha = alpha;
             instance.absolute = true;
             return instance;
@@ -702,7 +701,6 @@ test('GeolocateControl watching device orientation event', async () => {
                     window.dispatchEvent(event);
                     setTimeout(() => {
                         expect(geolocate._userLocationDotMarker._rotation).toEqual(15);
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
                         resolve();
                     }, 20); // After throttle
                 }, 0);
@@ -713,7 +711,642 @@ test('GeolocateControl watching device orientation event', async () => {
             });
         });
         geolocate._geolocateButton.dispatchEvent(click);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl showButton option hides button container', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        showButton: false
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        expect(geolocate._container.style.display).toEqual('none');
+        expect(geolocate._geolocateButton).toBeTruthy();
+        resolve();
+    });
+});
+
+test('GeolocateControl showButton true by default', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl();
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        expect(geolocate._container.style.display).not.toEqual('none');
+        resolve();
+    });
+});
+
+test('GeolocateControl showButton false with trigger() starts tracking', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        showButton: false,
+        trackUserLocation: true,
+        showUserLocation: true
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.on('geolocate', (position) => {
+            expect(geolocate._container.style.display).toEqual('none');
+            expect(position.coords.latitude).toEqual(10);
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
+    });
+});
+
+test('GeolocateControl followUserLocation false does not update camera', async () => {
+    const map = createMap();
+    const initialCenter = map.getCenter();
+    const geolocate = new GeolocateControl({
+        followUserLocation: false,
+        showUserLocation: true
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.on('geolocate', (position) => {
+            expect(position.coords.latitude).toEqual(10);
+            expect(position.coords.longitude).toEqual(20);
+            // Camera should not have moved
+            expect(map.getCenter().lat).toEqual(initialCenter.lat);
+            expect(map.getCenter().lng).toEqual(initialCenter.lng);
+            // But marker should be on the map
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
+    });
+});
+
+test('GeolocateControl followUserLocation false with trackUserLocation true does not update camera', async () => {
+    const map = createMap();
+    const initialCenter = map.getCenter();
+    const geolocate = new GeolocateControl({
+        followUserLocation: false,
+        trackUserLocation: true,
+        showUserLocation: true
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.on('geolocate', (position) => {
+            expect(position.coords.latitude).toEqual(10);
+            // Camera should not have moved
+            expect(map.getCenter().lat).toEqual(initialCenter.lat);
+            expect(map.getCenter().lng).toEqual(initialCenter.lng);
+            // But marker should be on the map
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30, timestamp: 40});
+    });
+});
+
+test('GeolocateControl followUserLocation false does not update camera on subsequent positions', async () => {
+    const map = createMap();
+    const initialCenter = map.getCenter();
+    const geolocate = new GeolocateControl({
+        followUserLocation: false,
+        trackUserLocation: true,
+        showUserLocation: true
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        let updateCount = 0;
+
+        geolocate.on('geolocate', () => {
+            updateCount++;
+            // Camera should never move, even after multiple position updates
+            expect(map.getCenter().lat).toEqual(initialCenter.lat);
+            expect(map.getCenter().lng).toEqual(initialCenter.lng);
+            // But marker should be on the map
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+
+            if (updateCount < 3) {
+                // Send next position update
+                mockGeolocation.change({latitude: updateCount * 20, longitude: updateCount * 30, accuracy: 50});
+            } else if (updateCount === 3) {
+                resolve();
+            } else {
+                throw new Error(`Unexpected geolocate event count: ${updateCount}`);
+            }
+        });
+
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl followUserLocation true by default updates camera', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        showUserLocation: true,
+        fitBoundsOptions: {
+            linear: true,
+            duration: 0
+        }
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const click = new window.Event('click');
+
+        map.once('moveend', () => {
+            expect(lngLatAsFixed(map.getCenter(), 4)).toEqual({lat: "10.0000", lng: "20.0000"});
+            resolve();
+        });
+        geolocate._geolocateButton.dispatchEvent(click);
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setFollowUserLocation enables camera following', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true,
+        showUserLocation: true,
+        followUserLocation: false,
+        fitBoundsOptions: {
+            linear: true,
+            duration: 0
+        }
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.once('geolocate', () => {
+            // Camera should not have moved initially
+            expect(geolocate._watchState).toEqual('BACKGROUND');
+
+            // Enable camera following
+            map.once('moveend', () => {
+                expect(lngLatAsFixed(map.getCenter(), 4)).toEqual({lat: "10.0000", lng: "20.0000"});
+                expect(geolocate._watchState).toEqual('ACTIVE_LOCK');
+                resolve();
+            });
+            geolocate.setFollowUserLocation(true);
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setFollowUserLocation disables camera following', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true,
+        showUserLocation: true,
+        fitBoundsOptions: {
+            linear: true,
+            duration: 0
+        }
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.once('geolocate', () => {
+            expect(geolocate._watchState).toEqual('ACTIVE_LOCK');
+
+            // Disable camera following
+            geolocate.setFollowUserLocation(false);
+            expect(geolocate._watchState).toEqual('BACKGROUND');
+            expect(geolocate.options.followUserLocation).toEqual(false);
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setFollowUserLocation returns this for chaining', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const result = geolocate.setFollowUserLocation(false);
+        expect(result).toBe(geolocate);
+        resolve();
+    });
+});
+
+test('GeolocateControl setFollowUserLocation fires trackuserlocationend when disabling', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true,
+        showUserLocation: true,
+        fitBoundsOptions: {
+            linear: true,
+            duration: 0
+        }
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.once('geolocate', () => {
+            geolocate.once('trackuserlocationend', () => {
+                resolve();
+            });
+            geolocate.setFollowUserLocation(false);
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setFollowUserLocation fires trackuserlocationstart when enabling', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true,
+        showUserLocation: true,
+        followUserLocation: false
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.once('geolocate', () => {
+            geolocate.once('trackuserlocationstart', () => {
+                resolve();
+            });
+            geolocate.setFollowUserLocation(true);
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl button click centers camera even when followUserLocation is false', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true,
+        showUserLocation: true,
+        followUserLocation: false,
+        fitBoundsOptions: {
+            linear: true,
+            duration: 0
+        }
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const click = new window.Event('click');
+
+        geolocate.once('geolocate', () => {
+            // Initially in BACKGROUND state since followUserLocation is false
+            expect(geolocate._watchState).toEqual('BACKGROUND');
+
+            // Camera should not have moved
+            const initialCenter = map.getCenter();
+            expect(initialCenter.lat).not.toBeCloseTo(10, 1);
+
+            // Click button - explicit user action should center camera
+            map.once('moveend', () => {
+                expect(lngLatAsFixed(map.getCenter(), 4)).toEqual({lat: "10.0000", lng: "20.0000"});
+                expect(geolocate._watchState).toEqual('ACTIVE_LOCK');
+                resolve();
+            });
+            geolocate._geolocateButton.dispatchEvent(click);
+        });
+
+        geolocate._geolocateButton.dispatchEvent(click);
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setShowAccuracyCircle removes the accuracy circle at runtime', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({showUserLocation: true});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.once('geolocate', () => {
+            // Circle marker initially on the map
+            expect(geolocate._accuracyCircleMarker._map).toBeTruthy();
+
+            geolocate.setShowAccuracyCircle(false);
+            expect(geolocate.options.showAccuracyCircle).toEqual(false);
+            expect(geolocate._accuracyCircleMarker._map).toBeFalsy();
+
+            geolocate.setShowAccuracyCircle(true);
+            expect(geolocate.options.showAccuracyCircle).toEqual(true);
+            expect(geolocate._accuracyCircleMarker._map).toBeTruthy();
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setShowAccuracyCircle keeps subsequent positions hidden', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({trackUserLocation: true, showUserLocation: true});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        let geolocateCount = 0;
+        geolocate.on('geolocate', () => {
+            geolocateCount++;
+            if (geolocateCount === 1) {
+                geolocate.setShowAccuracyCircle(false);
+                expect(geolocate._accuracyCircleMarker._map).toBeFalsy();
+                mockGeolocation.change({latitude: 11, longitude: 21, accuracy: 40});
+            } else if (geolocateCount === 2) {
+                // Circle should still be hidden after a new position arrives
+                expect(geolocate._accuracyCircleMarker._map).toBeFalsy();
+                resolve();
+            }
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setShowAccuracyCircle is a no-op when showUserLocation is false', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({showUserLocation: false});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const result = geolocate.setShowAccuracyCircle(true);
+        expect(result).toBe(geolocate);
+        expect(geolocate.options.showAccuracyCircle).toEqual(true);
+        expect(geolocate._accuracyCircleMarker).toBeUndefined();
+        resolve();
+    });
+});
+
+test('GeolocateControl setShowUserHeading attaches and detaches the orientation listener', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({
+        trackUserLocation: true,
+        showUserLocation: true,
+        showUserHeading: false
+    });
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const addSpy = vi.spyOn(window, 'addEventListener');
+        const removeSpy = vi.spyOn(window, 'removeEventListener');
+
+        geolocate.once('geolocate', () => {
+            // Watch is active. Enabling heading should attach the listener.
+            geolocate.setShowUserHeading(true);
+            expect(geolocate.options.showUserHeading).toEqual(true);
+            const added = addSpy.mock.calls.some(c => c[0] === 'deviceorientation' || c[0] === 'deviceorientationabsolute');
+            expect(added).toBe(true);
+
+            // Pretend a heading was received (the actual event-driven path is
+            // covered by 'watching device orientation event').
+            geolocate._heading = 90;
+
+            // Disabling heading should remove the listeners and clear state.
+            geolocate.setShowUserHeading(false);
+            expect(geolocate.options.showUserHeading).toEqual(false);
+            expect(geolocate._heading).toBeUndefined();
+            const removed = removeSpy.mock.calls.some(c => c[0] === 'deviceorientation' || c[0] === 'deviceorientationabsolute');
+            expect(removed).toBe(true);
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setShowUserHeading does not attach the listener when no watch is active', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({trackUserLocation: true, showUserLocation: true});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const addSpy = vi.spyOn(window, 'addEventListener');
+        geolocate.setShowUserHeading(true);
+        const added = addSpy.mock.calls.some(c => c[0] === 'deviceorientation' || c[0] === 'deviceorientationabsolute');
+        expect(added).toBe(false);
+        expect(geolocate.options.showUserHeading).toEqual(true);
+        resolve();
+    });
+});
+
+test('GeolocateControl setFitBoundsOptions updates the options used by the next camera move', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({showUserLocation: true});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        const newOpts = {maxZoom: 17, linear: true, duration: 0};
+        const result = geolocate.setFitBoundsOptions(newOpts);
+        expect(result).toBe(geolocate);
+        expect(geolocate.options.fitBoundsOptions).toEqual(newOpts);
+
+        const fitBoundsSpy = vi.spyOn(map, 'fitBounds');
+        geolocate.once('geolocate', () => {
+            const passed = fitBoundsSpy.mock.calls[0][1] as {maxZoom?: number};
+            expect(passed.maxZoom).toEqual(17);
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setShowUserLocation removes and restores the puck at runtime', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({trackUserLocation: true, showUserLocation: true});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        geolocate.once('geolocate', () => {
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+
+            geolocate.setShowUserLocation(false);
+            expect(geolocate.options.showUserLocation).toEqual(false);
+            expect(geolocate._userLocationDotMarker._map).toBeFalsy();
+            expect(geolocate._accuracyCircleMarker._map).toBeFalsy();
+
+            geolocate.setShowUserLocation(true);
+            expect(geolocate.options.showUserLocation).toEqual(true);
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl setShowUserLocation lazily creates markers when constructed with showUserLocation: false', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({trackUserLocation: true, showUserLocation: false});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        expect(geolocate._userLocationDotMarker).toBeUndefined();
+        expect(geolocate._accuracyCircleMarker).toBeUndefined();
+
+        geolocate.setShowUserLocation(true);
+        expect(geolocate._userLocationDotMarker).toBeTruthy();
+        expect(geolocate._accuracyCircleMarker).toBeTruthy();
+
+        geolocate.once('geolocate', () => {
+            expect(geolocate._userLocationDotMarker._map).toBeTruthy();
+            resolve();
+        });
+        geolocate.trigger();
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+    });
+});
+
+test('GeolocateControl runtime setters return this for chaining', async () => {
+    const map = createMap();
+    const geolocate = new GeolocateControl({showUserLocation: true});
+    map.addControl(geolocate);
+
+    await afterUIChanges((resolve) => {
+        expect(geolocate.setShowAccuracyCircle(false)).toBe(geolocate);
+        expect(geolocate.setShowUserHeading(true)).toBe(geolocate);
+        expect(geolocate.setFitBoundsOptions({maxZoom: 18})).toBe(geolocate);
+        expect(geolocate.setShowUserLocation(false)).toBe(geolocate);
+        resolve();
+    });
+});
+
+describe('GeolocateControl geolocation timeout', () => {
+    const DEFAULT_TIMEOUT_MS = 6000;
+    const CUSTOM_TIMEOUT_MS = 3000;
+
+    async function setupGeolocationTimeoutTest(controlOptions: GeolocateControlOptions = {}) {
+        vi.useFakeTimers();
+        const map = createMap();
+        const geolocate = new GeolocateControl({
+            trackUserLocation: true,
+            ...controlOptions
+        });
+        map.addControl(geolocate);
+        // Flush pending microtasks from control setup
+        await vi.advanceTimersByTimeAsync(0);
+        const errorHandler = vi.fn();
+        geolocate.on('error', errorHandler);
+        return {map, geolocate, errorHandler};
+    }
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    test('triggers error when no response', {timeout: 15000}, async () => {
+        const {geolocate, errorHandler} = await setupGeolocationTimeoutTest();
+
+        geolocate.trigger();
+
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+
+        expect(errorHandler).toHaveBeenCalledTimes(1);
+        const error = errorHandler.mock.calls[0][0] as GeolocationPositionError;
+        expect(error.code).toEqual(3); // TIMEOUT
+        expect(error.message).toEqual('Geolocation request timed out');
+    });
+
+    test('respects custom positionOptions.timeout', async () => {
+        const {errorHandler, geolocate} = await setupGeolocationTimeoutTest({
+            positionOptions: {timeout: CUSTOM_TIMEOUT_MS}
+        });
+
+        geolocate.trigger();
+
+        // Advance less than custom timeout
+        await vi.advanceTimersByTimeAsync(CUSTOM_TIMEOUT_MS - 1000);
+        expect(errorHandler).not.toHaveBeenCalled();
+
+        // Advance past custom timeout
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(errorHandler).toHaveBeenCalledTimes(1);
+        const error = errorHandler.mock.calls[0][0] as GeolocationPositionError;
+        expect(error.code).toEqual(3);
+    });
+
+    test('cleared on success', async () => {
+        const {geolocate, errorHandler} = await setupGeolocationTimeoutTest();
+
+        geolocate.trigger();
+
+        // Send success before timeout
+        await vi.advanceTimersByTimeAsync(CUSTOM_TIMEOUT_MS);
+        mockGeolocation.send({latitude: 10, longitude: 20, accuracy: 30});
+
+        // Advance well past the timeout
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+
+        expect(errorHandler).not.toHaveBeenCalled();
+    });
+
+    test('cleared on error', async () => {
+        const {geolocate, errorHandler} = await setupGeolocationTimeoutTest();
+
+        geolocate.trigger();
+
+        // Send error before timeout
+        await vi.advanceTimersByTimeAsync(CUSTOM_TIMEOUT_MS);
+        mockGeolocation.changeError({code: 2, message: 'position unavailable'});
+
+        // Advance well past the timeout
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+
+        // Only one error (the explicit one, not the timeout)
+        expect(errorHandler).toHaveBeenCalledTimes(1);
+        const error = errorHandler.mock.calls[0][0] as GeolocationPositionError;
+        expect(error.code).toEqual(2);
+    });
+
+    test('cleared on remove', async () => {
+        const {map, geolocate, errorHandler} = await setupGeolocationTimeoutTest();
+
+        geolocate.trigger();
+
+        // Remove control before timeout
+        await vi.advanceTimersByTimeAsync(CUSTOM_TIMEOUT_MS);
+        map.removeControl(geolocate);
+
+        // Advance well past the timeout
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+
+        expect(errorHandler).not.toHaveBeenCalled();
+    });
+
+    test('no timeout when positionOptions.timeout is 0', async () => {
+        const {geolocate, errorHandler} = await setupGeolocationTimeoutTest({
+            positionOptions: {timeout: 0}
+        });
+
+        geolocate.trigger();
+
+        // Advance a very long time
+        await vi.advanceTimersByTimeAsync(60000);
+
+        expect(errorHandler).not.toHaveBeenCalled();
+    });
+
+    test('works in one-time mode', async () => {
+        const {geolocate, errorHandler} = await setupGeolocationTimeoutTest({
+            trackUserLocation: false
+        });
+
+        geolocate.trigger();
+
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+
+        expect(errorHandler).toHaveBeenCalledTimes(1);
+        const error = errorHandler.mock.calls[0][0] as GeolocationPositionError;
+        expect(error.code).toEqual(3); // TIMEOUT
     });
 });

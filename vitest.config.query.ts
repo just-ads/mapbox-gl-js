@@ -1,15 +1,6 @@
 import {mergeConfig, defineConfig} from 'vitest/config';
-import {existsSync} from 'fs';
-import {playwright} from '@vitest/browser-playwright';
-import baseConfig from './vitest.config.base';
-import {integrationTests, setupIntegrationTestsMiddlewares} from './vitest.config.common';
-
-const isCI = process.env.CI === 'true';
-
-const suiteDirs = ['test/integration/query-tests'];
-if (existsSync('internal/test/integration/query-tests')) {
-    suiteDirs.push('internal/test/integration/query-tests');
-}
+import baseConfig, {isCI, chromiumBrowser} from './vitest.config.base';
+import {integrationTests, setupIntegrationTestsMiddlewares, serveDistPlugin, suiteDirs} from './vitest.config.common';
 
 export default mergeConfig(baseConfig, defineConfig({
     define: {
@@ -19,22 +10,21 @@ export default mergeConfig(baseConfig, defineConfig({
     },
     test: {
         include: ['test/integration/query-tests/index.test.ts'],
-        reporters: isCI ? [['verbose', {summary: false}]] : [['default']],
-        browser: {
-            provider: playwright({launchOptions: {channel: isCI ? 'chromium' : 'chrome'}}),
-            instances: [
-                {browser: 'chromium'},
-            ],
+        browser: Object.assign(chromiumBrowser(), {
             headless: isCI,
             ui: false,
             viewport: {
                 width: 1280,
                 height: 720,
             },
-        }
+        })
     },
     plugins: [
-        setupIntegrationTestsMiddlewares({reportPath: 'test/integration/query-tests/query-tests.html'}),
-        integrationTests({suiteDirs}),
+        setupIntegrationTestsMiddlewares({
+            reportPath: 'test/integration/query-tests/query-tests.html',
+            suiteName: 'query-tests',
+        }),
+        integrationTests({suiteDirs: suiteDirs('query-tests')}),
+        serveDistPlugin(),
     ],
 }));

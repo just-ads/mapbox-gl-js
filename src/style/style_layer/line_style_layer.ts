@@ -1,5 +1,6 @@
 import Point from '@mapbox/point-geometry';
-import StyleLayer from '../style_layer';
+import StyleLayer, {rawLayoutMayUseHD} from '../style_layer';
+import {prepareHD} from '../../../modules/hd_worker';
 import LineBucket from '../../data/bucket/line_bucket';
 import {polygonIntersectsBufferedMultiLine} from '../../util/intersection_tests';
 import {getMaximumPaintValue, translateDistance, translate} from '../query_utils';
@@ -18,12 +19,15 @@ import type Transform from '../../geo/transform';
 import type {LayerSpecification} from '../../style-spec/types';
 import type {TilespaceQueryGeometry} from '../query_geometry';
 import type {VectorTileFeature} from '@mapbox/vector-tile';
+import type {RuntimeModuleType} from '../style_layer';
 import type {CreateProgramParams} from '../../render/painter';
+import type {Map as MapboxMap} from '../../ui/map';
 import type {DynamicDefinesType} from '../../render/program/program_uniforms';
 import type SourceCache from '../../source/source_cache';
 import type {LUT} from "../../util/lut";
 import type {ImageId} from '../../style-spec/expression/types/image_id';
 import type {ProgramName} from '../../render/program';
+import type {LineBlendDensityReadback, LineBlendFbos} from '../../render/draw_line';
 
 let properties: {
     layout: Properties<LayoutProps>;
@@ -65,7 +69,7 @@ class LineFloorwidthProperty extends DataDrivenProperty<number> {
         feature: Feature,
         featureState: FeatureState,
     ): number {
-        globals = Object.assign({}, globals, {zoom: Math.floor(globals.zoom)});
+        globals = {...globals, zoom: Math.floor(globals.zoom)} as EvaluationParameters;
         return super.evaluate(value, globals, feature, featureState);
     }
 }
@@ -100,6 +104,10 @@ class LineStyleLayer extends StyleLayer {
     override _transitioningPaint: Transitioning<PaintProps>;
     override paint: PossiblyEvaluated<PaintProps>;
 
+    lineBlendFbos: LineBlendFbos | null;
+    // Async GPU readback state for additive-mode density normalisation.
+    lineBlendDensityReadback: LineBlendDensityReadback | null;
+
     constructor(layer: LayerSpecification, scope: string, lut: LUT | null, options?: ConfigOptions | null) {
         const properties = getProperties();
         super(layer, properties, scope, lut, options);
@@ -109,6 +117,8 @@ class LineStyleLayer extends StyleLayer {
         this.gradientVersion = 0;
         this.hasElevatedBuckets = false;
         this.hasNonElevatedBuckets = false;
+        this.lineBlendFbos = null;
+        this.lineBlendDensityReadback = null;
     }
 
     override _handleSpecialPaintPropertyUpdate(name: string) {
@@ -116,6 +126,10 @@ class LineStyleLayer extends StyleLayer {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
             const expression: ZoomConstantExpression<'source'> = ((this._transitionablePaint._values['line-gradient'].value.expression) as any);
             this.stepInterpolant = expression._styleExpression && expression._styleExpression.expression instanceof Step;
+            this.gradientVersion = (this.gradientVersion + 1) % Number.MAX_SAFE_INTEGER;
+        } else if (name === 'line-gradient-use-theme') {
+            // The gradient texture bakes in LUT-transformed colors; toggling
+            // use-theme changes the effective LUT and requires regeneration.
             this.gradientVersion = (this.gradientVersion + 1) % Number.MAX_SAFE_INTEGER;
         }
     }
@@ -138,7 +152,7 @@ class LineStyleLayer extends StyleLayer {
         (this.paint._values as Record<string, unknown>)['line-floorwidth'] = getLineFloorwidthProperty().possiblyEvaluate(this._transitioningPaint._values['line-width'].value, parameters);
     }
 
-    createBucket(parameters: BucketParameters<LineStyleLayer>): LineBucket {
+    override createBucket(parameters: BucketParameters<this>): LineBucket {
         return new LineBucket(parameters);
     }
 
@@ -147,10 +161,20 @@ class LineStyleLayer extends StyleLayer {
 
         const image = patternProperty.constantOr(1);
         const programId = image ? 'linePattern' : 'line';
-        return [programId];
+        const ids: ProgramName[] = [programId];
+
+        const blendMode = this.paint.get('line-blend-mode');
+        if (blendMode !== 'default') {
+            ids.push('lineBlendComposite');
+        }
+
+        return ids;
     }
 
     override getDefaultProgramParams(name: string, zoom: number, lut: LUT | null): CreateProgramParams | null {
+        if (name === 'lineBlendComposite') {
+            return {};
+        }
         const definesValues = (lineDefinesValues(this) as DynamicDefinesType[]);
         return {
             config: new ProgramConfiguration(this, {zoom, lut}),
@@ -206,6 +230,47 @@ class LineStyleLayer extends StyleLayer {
 
     override hasElevation(): boolean {
         return this.layout && this.layout.get('line-elevation-reference') !== 'none';
+    }
+
+    override mayUse(type: RuntimeModuleType): boolean {
+        return type === 'HD' && rawLayoutMayUseHD(this, 'line-elevation-reference', v => v === 'hd-road-markup');
+    }
+
+    override prepare(): Promise<void> {
+        return this.mayUse('HD') ? prepareHD() : Promise.resolve();
+    }
+
+    override hasOffscreenPass(): boolean {
+        const blendMode = this.paint.get('line-blend-mode');
+        return blendMode !== 'default' &&
+            this.paint.get('line-opacity').constantOr(1) !== 0 &&
+            this.paint.get('line-width').constantOr(1) !== 0 &&
+            this.visibility !== 'none';
+    }
+
+    override resize() {
+        this._destroyLineBlendFbo();
+    }
+
+    override onRemove(map: MapboxMap) {
+        const gl = map.painter && map.painter.context && map.painter.context.gl;
+        this._destroyLineBlendFbo(gl || undefined);
+    }
+
+    override _clear() {
+        this._destroyLineBlendFbo();
+    }
+
+    _destroyLineBlendFbo(gl?: WebGL2RenderingContext) {
+        if (this.lineBlendFbos) {
+            this.lineBlendFbos.destroy();
+            this.lineBlendFbos = null;
+        }
+
+        if (gl && this.lineBlendDensityReadback) {
+            this.lineBlendDensityReadback.destroy(gl);
+        }
+        this.lineBlendDensityReadback = null;
     }
 }
 

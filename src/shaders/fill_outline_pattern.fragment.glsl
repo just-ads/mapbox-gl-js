@@ -10,6 +10,7 @@ uniform float u_pattern_transition;
 #endif
 
 uniform float u_emissive_strength;
+uniform lowp float u_opacity_multiplier;
 
 #ifdef APPLY_LUT_ON_GPU
 uniform highp sampler3D u_lutTexture;
@@ -27,20 +28,20 @@ in highp vec2 v_pos;
 in highp vec2 v_pos_world;
 
 #pragma mapbox: define lowp float opacity
-#pragma mapbox: define lowp vec4 pattern
+#pragma mapbox: define lowp uvec4 pattern
 #ifdef FILL_PATTERN_TRANSITION
-#pragma mapbox: define mediump vec4 pattern_b
+#pragma mapbox: define mediump uvec4 pattern_b
 #endif
 
 void main() {
     #pragma mapbox: initialize lowp float opacity
-    #pragma mapbox: initialize mediump vec4 pattern
+    #pragma mapbox: initialize mediump uvec4 pattern
     #ifdef FILL_PATTERN_TRANSITION
-    #pragma mapbox: initialize mediump vec4 pattern_b
+    #pragma mapbox: initialize mediump uvec4 pattern_b
     #endif
 
-    vec2 pattern_tl = pattern.xy;
-    vec2 pattern_br = pattern.zw;
+    vec2 pattern_tl = vec2(pattern.xy);
+    vec2 pattern_br = vec2(pattern.zw);
 
     highp vec2 imagecoord = mod(v_pos, 1.0);
     highp vec2 pos = mix(pattern_tl / u_texsize, pattern_br / u_texsize, imagecoord);
@@ -65,23 +66,29 @@ void main() {
     out_color = out_color * (1.0 - u_pattern_transition) + color_b * u_pattern_transition;
 #endif
 
+    vec2 cutout_factors = vec2(0.0);
+#ifdef FEATURE_CUTOUT
+    cutout_factors = get_cutout_factors(gl_FragCoord);
+#endif
+
 #ifdef LIGHTING_3D_MODE
     out_color = apply_lighting_with_emission_ground(out_color, u_emissive_strength);
 #ifdef RENDER_SHADOWS
     float light = shadowed_light_factor(v_pos_light_view_0, v_pos_light_view_1, v_depth);
+    light = mix(light, 1.0, cutout_factors.y);
     out_color.rgb *= mix(u_ground_shadow_factor, vec3(1.0), light);
 #endif // RENDER_SHADOWS
 #endif // LIGHTING_3D_MODE
 
 #ifdef FEATURE_CUTOUT
-    out_color = apply_feature_cutout(out_color, gl_FragCoord);
+    out_color = apply_feature_cutout(out_color, gl_FragCoord, cutout_factors.x);
 #endif
 
 #ifdef FOG
     out_color = fog_dither(fog_apply_premultiplied(out_color, v_fog_pos));
 #endif
 
-    glFragColor = out_color * (alpha * opacity);
+    glFragColor = out_color * (alpha * opacity * u_opacity_multiplier);
 #ifdef USE_MRT1
     out_Target1 = vec4(u_emissive_strength * glFragColor.a, 0.0, 0.0, glFragColor.a);
 #endif

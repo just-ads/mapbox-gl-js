@@ -4,7 +4,7 @@ import CullFaceMode from '../gl/cull_face_mode';
 import {circleUniformValues, circleDefinesValues} from './program/circle_program';
 import SegmentVector from '../data/segment';
 import {mercatorXfromLng, mercatorYfromLat} from '../geo/mercator_coordinate';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 
 import type {OverscaledTileID} from '../source/tile_id';
 import type Program from './program';
@@ -95,10 +95,10 @@ function drawCircles(painter: Painter, sourceCache: SourceCache, layer: CircleSt
             definesValues.push('DEPTH_OCCLUSION');
         }
 
-        if (bucket.hasElevation && !painter.terrain) {
+        if (bucket.hdExt && bucket.hdExt.hasElevation && !painter.terrain) {
             definesValues.push('ELEVATED_ROADS');
-            assert(bucket.elevatedLayoutVertexBuffer);
-            dynamicBuffers.push(bucket.elevatedLayoutVertexBuffer);
+            assert(bucket.hdExt.elevatedLayoutVertexBuffer);
+            dynamicBuffers.push(bucket.hdExt.elevatedLayoutVertexBuffer);
         }
 
         const program = painter.getOrCreateProgram('circle', {config: programConfiguration, defines: definesValues, overrideFog: affectedByFog});

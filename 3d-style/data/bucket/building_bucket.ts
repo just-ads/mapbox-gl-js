@@ -14,7 +14,7 @@ import {
     StructArrayLayout1ui2
 } from '../../../src/data/array_types';
 import {calculateLightsMesh} from '../../source/model_loader';
-import {clamp, warnOnce} from '../../../src/util/util';
+import {clamp, warnOnce, isWorker} from '../../../src/util/util';
 import EvaluationParameters from '../../../src/style/evaluation_parameters';
 import {
     buildingPositionAttributes,
@@ -38,11 +38,10 @@ import {GroundEffect} from '../../../src/data/bucket/fill_extrusion_bucket';
 import Point from '@mapbox/point-geometry';
 import {VectorTileFeature} from '@mapbox/vector-tile';
 const vectorTileFeatureTypes = VectorTileFeature.types;
-import {waitForBuildingGen, getBuildingGen} from '../../util/loaders';
-import {footprintTrianglesIntersect, regionsEquals, ReplacementOrderBuilding, type Region, type ReplacementSource} from '../../source/replacement_source';
+import {footprintTrianglesIntersect, regionsEquals, type Region, type ReplacementSource} from '../../source/replacement_source';
 import TriangleGridIndex from '../../../src/util/triangle_grid_index';
 import earcut from 'earcut';
-import assert from 'assert';
+import assert from '../../../src/style-spec/util/assert';
 import EXTENT from '../../../src/style-spec/data/extent';
 import classifyRings from '../../../src/util/classify_rings';
 import {PerformanceUtils} from '../../../src/util/performance';
@@ -57,8 +56,20 @@ import {
     BUILDING_PART_ROOF,
     BUILDING_PART_WALL,
     BUILDING_PART_FACADE_GLAZING,
-    BUILDING_PART_ENTRANCE
+    BUILDING_PART_ENTRANCE,
+    loadBuildingGen,
+    type BuildingGen,
+    type Style,
+    type Feature,
+    type Facade,
+    type RoofType,
+    type BuildingPart
 } from '../../util/building_gen';
+import {getBuildingGenUrl} from '../../../src/util/config';
+import {
+    BUILDING_VISIBLE,
+    BUILDING_HIDDEN_BY_REPLACEMENT
+} from './building_bucket_flags';
 
 import type {OverscaledTileID, UnwrappedTileID, CanonicalTileID} from '../../../src/source/tile_id';
 import type {BucketParameters, IndexedFeature, PopulateParameters} from '../../../src/data/bucket';
@@ -71,13 +82,6 @@ import type {GlobalProperties} from "../../../src/style-spec/expression";
 import type IndexBuffer from '../../../src/gl/index_buffer';
 import type {LUT} from '../../../src/util/lut';
 import type {SpritePositions} from '../../../src/util/image';
-import type {
-    Style,
-    Feature,
-    Facade,
-    RoofType,
-    BuildingPart
-} from '../../util/building_gen';
 import type {Footprint, TileFootprint} from '../../util/conflation';
 import type {TileTransform} from '../../../src/geo/projection/tile_transform';
 import type {TypedStyleLayer} from '../../../src/style/style_layer/typed_style_layer';
@@ -88,9 +92,6 @@ import type {BucketWithGroundEffect} from '../../../src/render/draw_fill_extrusi
 import type {AreaLight} from '../model';
 import type {NonPremultipliedRenderColor} from '../../../src/style-spec/util/color';
 
-export const BUILDING_VISIBLE: number = 0x0;
-export const BUILDING_HIDDEN_BY_REPLACEMENT: number = 0x1;
-export const BUILDING_HIDDEN_BY_TILE_BORDER_DEDUPLICATION: number = 0x2;
 const BUILDING_HIDDEN_WITH_INCOMPLETE_PARTS: number = 0x4;
 
 const MAX_INT_16 = 32767.0;
@@ -166,7 +167,30 @@ type BuildingFeatureOnBorder = {
     footprintIndex: number;
 };
 
-export class BuildingBloomGeometry {
+let buildingGenLoading: Promise<void> | null = null;
+let buildingGenError: Error = null;
+let buildingGen: BuildingGen | null = null;
+
+export function waitForBuildingGen(): Promise<void> {
+    if (!isWorker(self)) return null; // only load building WASM on the worker thread
+    if (buildingGen != null || buildingGenError != null) return null;
+    if (buildingGenLoading != null) return buildingGenLoading;
+    const m = PerformanceUtils.now();
+    const wasmData = fetch(getBuildingGenUrl());
+    buildingGenLoading = loadBuildingGen(wasmData).then((instance) => {
+        buildingGenLoading = null;
+        buildingGen = instance;
+        PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, "waitForBuildingGen", "BuildingBucket", m);
+    }).catch((error) => {
+        warnOnce('Could not load building-gen');
+        buildingGenLoading = null;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        buildingGenError = error;
+    });
+    return buildingGenLoading;
+}
+
+class BuildingBloomGeometry {
     layoutVertexArray = new BuildingPositionArray();
     layoutVertexBuffer: VertexBuffer;
 
@@ -271,6 +295,12 @@ export class BuildingGeometry {
 }
 
 export class BuildingBucket implements BucketWithGroundEffect {
+    // Signals to core's worker-side HD gate that any tile carrying this bucket class
+    // cannot be deserialized on main without the HD module loaded, because the class
+    // itself is defined and registered in the HD chunk. Checked via the class
+    // constructor so we don't need a statically-imported BuildingBucket reference.
+    requiresHDRuntime = true;
+
     index: number;
     zoom: number;
     brightness: number | null | undefined;
@@ -358,10 +388,10 @@ export class BuildingBucket implements BucketWithGroundEffect {
     }
 
     updateAppearances(_canonical?: CanonicalTileID, _featureState?: FeatureStates, _availableImages?: Array<ImageId>, _globalProperties?: GlobalProperties) {
-    }
-
-    prepare(): Promise<unknown> {
-        return waitForBuildingGen();
+        return {
+            hasLayoutChanges: false,
+            hasUboChanges: false
+        };
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
@@ -370,7 +400,6 @@ export class BuildingBucket implements BucketWithGroundEffect {
         let perfBuildingGenCount = 0;
         let perfMeshLoopAccuTime = 0;
 
-        const buildingGen = getBuildingGen();
         if (!buildingGen) {
             return;
         }
@@ -481,8 +510,8 @@ export class BuildingBucket implements BucketWithGroundEffect {
                 continue;
 
             let buildingId: number | null = null;
-            if (feature.properties && feature.properties.hasOwnProperty('building_id')) {
-                buildingId = feature.properties['building_id'] as number;
+            if (feature.properties && Object.hasOwn(feature.properties, 'building_id')) {
+                buildingId = Number(feature.properties['building_id']);
                 if (disabledBuildings.has(buildingId)) {
                     continue;
                 }
@@ -836,20 +865,27 @@ export class BuildingBucket implements BucketWithGroundEffect {
                     building.layoutColorArray.uint16[(partVertexOffset + v) * 2 + 1] = c2;
                 }
 
-                const cx = Math.floor(centroid.x);
-                const cy = Math.floor(centroid.y);
+                const cx = Math.min(8191, Math.max(0, Math.floor(centroid.x)));
+                const cy = Math.min(8191, Math.max(0, Math.floor(centroid.y)));
                 const ch = Math.floor(height);
+                // Encode span (2 bits per axis) into lower bits of cx/cy: encoded = cx * 4 + spanBits
+                // Each span bit represents ~20 meters; max 3 bits = ~60m
+                const spanBucketMeters = 20;
+                const spanX = Math.min(3, Math.round((bboxMax.x - bboxMin.x) * this.tileToMeter / spanBucketMeters));
+                const spanY = Math.min(3, Math.round((bboxMax.y - bboxMin.y) * this.tileToMeter / spanBucketMeters));
+                const cxEncoded = cx * 4 + spanX;
+                const cyEncoded = cy * 4 + spanY;
                 for (let v = 0; v < partVertexCount; ++v) {
                     const idx = (partVertexOffset + v) * 3;
-                    building.layoutCentroidArray.int16[idx] = cx;
-                    building.layoutCentroidArray.int16[idx + 1] = cy;
+                    building.layoutCentroidArray.int16[idx] = cxEncoded;
+                    building.layoutCentroidArray.int16[idx + 1] = cyEncoded;
                     building.layoutCentroidArray.int16[idx + 2] = ch;
                 }
 
                 if (mesh.buildingPart === BUILDING_PART_WALL) {
-                    building.layoutFloodLightDataArray.uint16.fill(floodLightWallRadiusNormalized, partVertexOffset, partVertexOffset + partVertexCount);
+                    building.layoutFloodLightDataArray.int16.fill(floodLightWallRadiusNormalized, partVertexOffset, partVertexOffset + partVertexCount);
                 } else {
-                    building.layoutFloodLightDataArray.uint16.fill(0, partVertexOffset, partVertexOffset + partVertexCount);
+                    building.layoutFloodLightDataArray.int16.fill(0, partVertexOffset, partVertexOffset + partVertexCount);
                 }
 
                 if (hasFauxFacade) {
@@ -1049,6 +1085,11 @@ export class BuildingBucket implements BucketWithGroundEffect {
         this.colorBufferUploaded = false;
 
         PerformanceUtils.measureWithDetails(PerformanceUtils.GROUP_COMMON, 'BuildingBucket.update', 'BuildingBucket', perfStartTime);
+    }
+
+    updateExpressions(layers: ReadonlyArray<TypedStyleLayer>) {
+        this.programConfigurations.updateExpressions(layers);
+        this.groundEffect.programConfigurations.updateExpressions(layers);
     }
 
     isEmpty(): boolean {
@@ -1365,7 +1406,7 @@ export class BuildingBucket implements BucketWithGroundEffect {
 
         // Hide all centroids that are overlapping with footprints from the replacement source
         for (const region of this.activeReplacements) {
-            if ((region.order <= ReplacementOrderBuilding)) continue; // fill-extrusions always get removed. This will be separated (similar to symbol and model) in future.
+            if ((region.order < layerIndex)) continue;
 
             // Apply slight padding to footprints. This reduces false positives where two adjacent lines
             // would be reported overlapping due to limited precision (16 bit) of tile units.
@@ -1438,7 +1479,7 @@ export class BuildingBucket implements BucketWithGroundEffect {
         // We use a lookup table to cache the results of the footprint search
         // to avoid searching through all footprints for every tile coordinate.
         const lookupKey = (x + EXTENT) * 4 * EXTENT + (y + EXTENT);
-        if (this.footprintLookup.hasOwnProperty(lookupKey)) {
+        if (Object.hasOwn(this.footprintLookup, lookupKey)) {
             const footprint = this.footprintLookup[lookupKey];
             return footprint ? {height: footprint.height, hidden: footprint.hiddenFlags !== BUILDING_VISIBLE} : undefined;
         }

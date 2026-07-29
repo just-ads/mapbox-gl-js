@@ -212,7 +212,7 @@ function transformPoints(line: number[], z2: number, tx: number, ty: number, out
 function transformAndClipLine(line: number[], z2: number, tx: number, ty: number, out: [number, number][][]) {
     const min = -PAD_PX;
     const max = EXTENT + PAD_PX;
-    let part;
+    let part: [[number, number]];
 
     for (let i = 0; i < line.length - 2; i += 2) {
         let x0 = Math.round(EXTENT * (line[i + 0] * z2 - tx));
@@ -262,14 +262,11 @@ function transformAndClipLine(line: number[], z2: number, tx: number, ty: number
             y1 = max;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        if (!part || x0 !== part[part.length - 1][0] || y0 !== part[part.length - 1][1]) {
+        if (!part || x0 !== part.at(-1)[0] || y0 !== part.at(-1)[1]) {
             part = [[x0, y0]];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             out.push(part);
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         part.push([x1, y1]);
     }
 }
@@ -297,7 +294,7 @@ function transformAndClipPolygon(input: number[], z2: number, tx: number, ty: nu
     // clip against each side of the clip rectangle
     for (let edge = 1; edge <= 8; edge *= 2) {
         let x0 = input[input.length - 2];
-        let y0 = input[input.length - 1];
+        let y0 = input.at(-1);
         let prevInside = !(bitCode(x0, y0) & edge);
 
         for (let i = 0; i < input.length; i += 2) {
@@ -331,7 +328,7 @@ function transformAndClipPolygon(input: number[], z2: number, tx: number, ty: nu
         Math.round(EXTENT * (clipped[i] * z2 - tx)),
         Math.round(EXTENT * (clipped[i + 1] * z2 - ty))
     ]);
-    out.push(ring);
+    if (ring.length) out.push(ring);
 }
 
 // rewind a polygon ring to a given winding order (clockwise or anti-clockwise)

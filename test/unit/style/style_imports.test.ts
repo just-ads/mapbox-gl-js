@@ -3,28 +3,27 @@
 import {describe, test, expect, waitFor, vi} from '../../util/vitest';
 import {mockFetch} from '../../util/network';
 import Tile from '../../../src/source/tile';
-import Style from '../../../src/style/style';
 import Transform from '../../../src/geo/transform';
 import StyleLayer from '../../../src/style/style_layer';
 import VectorTileSource from '../../../src/source/vector_tile_source';
-import GlyphManager from '../../../src/render/glyph_manager';
+import {GlyphLoader} from '../../../src/style/glyph_loader';
 import {Event} from '../../../src/util/evented';
 import {OverscaledTileID} from '../../../src/source/tile_id';
 import {makeFQID} from '../../../src/util/fqid';
 import {ImageId} from '../../../src/style-spec/expression/types/image_id';
-import {StubMap} from './utils';
+import {newStubStyle} from './utils';
+import browser from '../../../src/util/browser';
+import EvaluationParameters from '../../../src/style/evaluation_parameters';
 
 function createStyleJSON(properties) {
-    return Object.assign({
-        version: 8,
+    return {version: 8,
         sources: {},
-        layers: []
-    }, properties);
+        layers: [], ...properties};
 }
 
 describe('Style#loadURL', () => {
     test('wraps style with schema into import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -51,7 +50,7 @@ describe('Style#loadURL', () => {
     });
 
     test('wraps fragment into import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -76,7 +75,7 @@ describe('Style#loadURL', () => {
     });
 
     test('imports style from URL', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -122,7 +121,7 @@ describe('Style#loadURL', () => {
             '/style.json': () => new Response(JSON.stringify(initialStyle)),
         });
 
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -136,7 +135,7 @@ describe('Style#loadURL', () => {
     });
 
     test('imports style from JSON', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const fragment = createStyleJSON({
@@ -173,7 +172,7 @@ describe('Style#loadURL', () => {
     });
 
     test('imports nested styles with circular dependencies', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -275,8 +274,7 @@ describe('Style#loadURL', () => {
     });
 
     test('fires "style.import.load"', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -305,8 +303,7 @@ describe('Style#loadURL', () => {
     });
 
     test('fires "dataloading"', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -344,8 +341,7 @@ describe('Style#loadURL', () => {
     });
 
     test('fires "data"', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -364,7 +360,7 @@ describe('Style#loadURL', () => {
         style.loadURL('/style.json');
 
         await waitFor(style, "style.load");
-        expect(spy).toHaveBeenCalledTimes(2);
+        expect(spy).toHaveBeenCalledTimes(3);
 
         // initial root style 'data' event
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -382,11 +378,18 @@ describe('Style#loadURL', () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         expect(spy.mock.calls[1][0].style.scope).toEqual('streets');
 
+        // root style 'data' event after mergeAll() — fired by _loadImports() once the import settles
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(spy.mock.calls[2][0].target).toEqual(map);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(spy.mock.calls[2][0].dataType).toEqual('style');
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(spy.mock.calls[2][0].style.scope).toEqual('');
+
     });
 
     test('validates the style', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -410,7 +413,7 @@ describe('Style#loadURL', () => {
 
 describe('Style#loadJSON', () => {
     test('imports style from URL', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -445,7 +448,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('imports style from JSON', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
         const spy = vi.spyOn(window, 'fetch');
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -474,7 +477,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('limits nesting', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
         const stub = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         const MAX_IMPORT_DEPTH = 5;
@@ -505,9 +508,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('fires "style.import.load"', async () => {
-        const map = new StubMap();
-
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -533,9 +534,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('fires "dataloading"', async () => {
-        const map = new StubMap();
-
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -569,8 +568,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('fires "data"', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -586,7 +584,7 @@ describe('Style#loadJSON', () => {
         style.loadJSON(initialStyle);
 
         await waitFor(style, "style.load");
-        expect(spy).toHaveBeenCalledTimes(2);
+        expect(spy).toHaveBeenCalledTimes(3);
 
         // initial root style 'data' event
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -604,11 +602,18 @@ describe('Style#loadJSON', () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         expect(spy.mock.calls[1][0].style.scope).toEqual('streets');
 
+        // root style 'data' event after mergeAll() — fired by _loadImports() once the import settles
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(spy.mock.calls[2][0].target).toEqual(map);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(spy.mock.calls[2][0].dataType).toEqual('style');
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(spy.mock.calls[2][0].style.scope).toEqual('');
+
     });
 
     test('validates the style', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -628,7 +633,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('creates sources', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -647,7 +652,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('creates layers', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -672,7 +677,7 @@ describe('Style#loadJSON', () => {
     });
 
     test('own entities', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -703,7 +708,7 @@ describe('Style#loadJSON', () => {
 
 describe('Style#addImport', () => {
     test('to the end', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -732,7 +737,7 @@ describe('Style#addImport', () => {
     });
 
     test('before another import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -778,7 +783,7 @@ describe('Style#addImport', () => {
 
 describe('Style#updateImport', () => {
     test('updates import with provided json', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -820,8 +825,7 @@ describe('Style#updateImport', () => {
 
     test('fetch style with URL after clean of data', async () => {
         const spy = vi.fn();
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
 
         mockFetch({
             '/style.json': (request) => {
@@ -865,8 +869,7 @@ describe('Style#updateImport', () => {
 
     test('update URL and fetch style from new one', async () => {
         const spy = vi.fn();
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
 
         mockFetch({
             '/style.json': (request) => {
@@ -903,7 +906,7 @@ describe('Style#updateImport', () => {
     });
 
     test('update import with no config should use values in schema', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -948,7 +951,7 @@ describe('Style#updateImport', () => {
 
 describe('Style#getImportGlobalIds', () => {
     test('should return all imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         mockFetch({
             '/standard.json': () => new Response(JSON.stringify(createStyleJSON())),
@@ -1027,7 +1030,7 @@ describe('Style#getImportGlobalIds', () => {
 
 describe('Style#addSource', () => {
     test('same id in different scopes', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1048,8 +1051,7 @@ describe('Style#addSource', () => {
     });
 
     test('sets up source event forwarding', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1094,7 +1096,7 @@ describe('Style#addSource', () => {
 
 describe('Style#removeSource', () => {
     test('same id in different scope is intact', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1118,8 +1120,7 @@ describe('Style#removeSource', () => {
 
 describe('Style#addLayer', () => {
     test('sets up layer event forwarding', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1152,7 +1153,7 @@ describe('Style#addLayer', () => {
     });
 
     test('adds before the given layer', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1190,7 +1191,7 @@ describe('Style#addLayer', () => {
     });
 
     test('Checks scope exist after adding layer', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON());
@@ -1201,8 +1202,7 @@ describe('Style#addLayer', () => {
     });
 
     test('fire error on referencing before from different scope', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1235,7 +1235,7 @@ describe('Style#addLayer', () => {
 
 describe('Style#removeLayer', () => {
     test('same id in different scope is intact', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1257,8 +1257,7 @@ describe('Style#removeLayer', () => {
     });
 
     test('fire error on removing layer from different scope', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1290,7 +1289,7 @@ describe('Style#removeLayer', () => {
 
 describe('Style#moveLayer', () => {
     test('reorders layers', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1330,7 +1329,7 @@ describe('Style#moveLayer', () => {
     });
 
     test('fires an error on moving layer from different scope', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1360,7 +1359,7 @@ describe('Style#moveLayer', () => {
 
 describe('Style#_mergeLayers', () => {
     test('supports slots', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1402,7 +1401,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports nested slots', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1441,7 +1440,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports dynamic adding slots', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1466,7 +1465,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports adding layer into a slot with before', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1500,7 +1499,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports adding layers into multiple slots with before', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
         const stub = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1548,7 +1547,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports moving layer inside a slot', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1587,7 +1586,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports moving layers inside multiple slots', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
         const stub = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1642,7 +1641,7 @@ describe('Style#_mergeLayers', () => {
     });
 
     test('supports nested slots', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -1713,7 +1712,7 @@ describe('Style#_mergeLayers', () => {
 });
 
 test('Style#getSlots', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const initialStyle = createStyleJSON({
@@ -1755,7 +1754,7 @@ test('Style#getSlots', async () => {
 
 describe('Style#getLights', () => {
     test('root style resolves lights from import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -1778,7 +1777,7 @@ describe('Style#getLights', () => {
     });
 
     test('root style overrides lights in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -1807,7 +1806,7 @@ describe('Style#getLights', () => {
     test(
         'empty lights in import does not override lights in root style',
         async () => {
-            const style = new Style(new StubMap());
+            const {style} = newStubStyle();
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             style.loadJSON(createStyleJSON({
@@ -1834,7 +1833,7 @@ describe('Style#getLights', () => {
 
 describe('Terrain', () => {
     test('root style resolves terrain from import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -1861,7 +1860,7 @@ describe('Terrain', () => {
     });
 
     test('root style overrides terrain in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -1904,7 +1903,7 @@ describe('Terrain', () => {
     });
 
     test('root style disables terrain in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -1926,7 +1925,7 @@ describe('Terrain', () => {
     });
 
     test('empty root style terrain overrides terrain in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -1963,8 +1962,7 @@ describe('Terrain', () => {
     });
 
     test('setState correctly overrides terrain in the root style', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         const importWithTerrain = {
@@ -2027,7 +2025,7 @@ describe('Terrain', () => {
     test(
         'empty terrain in import does not override terrain in root style',
         async () => {
-            const style = new Style(new StubMap());
+            const {style} = newStubStyle();
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             style.loadJSON(createStyleJSON({
@@ -2056,8 +2054,7 @@ describe('Terrain', () => {
     test(
         'multiple imports should not reset the style changed state when terrain and 3d layers are present',
         async () => {
-            const map = new StubMap();
-            const style = new Style(map);
+            const {map, style} = newStubStyle();
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             const initialStyle = createStyleJSON({
@@ -2120,7 +2117,7 @@ describe('Terrain', () => {
     );
 
     test('supports config', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -2159,7 +2156,7 @@ describe('Terrain', () => {
     });
 
     test('setTerrain updates imported terrain properties', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2194,11 +2191,40 @@ describe('Terrain', () => {
 
         expect(style.getTerrain().exaggeration).toEqual(2);
     });
+
+    test('propagates disableElevatedTerrain from import to root style', async () => {
+        vi.spyOn(browser, 'hasCanvasFingerprintNoise').mockReturnValue(true);
+
+        const {style} = newStubStyle();
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(createStyleJSON({
+            imports: [{
+                id: 'streets',
+                url: '/styles/streets-v12.json',
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    terrain: {source: 'mapbox-dem', exaggeration: 1.5},
+                    sources: {
+                        'mapbox-dem': {
+                            type: 'raster-dem',
+                            tiles: ['http://example.com/{z}/{x}/{y}.png'],
+                            tileSize: 256,
+                            maxzoom: 14
+                        }
+                    },
+                })
+            }],
+        }));
+
+        await waitFor(style, "style.load");
+        expect(style.disableElevatedTerrain).toBe(true);
+    });
 });
 
 describe('Style#getFog', () => {
     test('resolves fog from import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2219,7 +2245,7 @@ describe('Style#getFog', () => {
     });
 
     test('root style overrides fog in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2248,7 +2274,7 @@ describe('Style#getFog', () => {
     });
 
     test('empty fog in import does not override fog in root style', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2272,8 +2298,7 @@ describe('Style#getFog', () => {
 
 describe('Camera', () => {
     test('resolves camera from import', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2292,8 +2317,7 @@ describe('Camera', () => {
     test(
         'sequential imports dont override orthographic camera with perspective',
         async () => {
-            const map = new StubMap();
-            const style = new Style(map);
+            const {map, style} = newStubStyle();
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             style.loadJSON(createStyleJSON({
@@ -2317,12 +2341,12 @@ describe('Camera', () => {
 
             await waitFor(style, "style.load");
             expect(style.camera).toEqual({'camera-projection': 'orthographic'});
-            expect(spy.mock.calls[spy.mock.calls.length - 1][0]).toEqual({'camera-projection': 'orthographic'});
+            expect(spy.mock.calls.at(-1)[0]).toEqual({'camera-projection': 'orthographic'});
         }
     );
 
     test('root style overrides camera in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2347,7 +2371,7 @@ describe('Camera', () => {
     });
 
     test('camera set by user overrides camera in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2368,7 +2392,7 @@ describe('Camera', () => {
     test(
         'empty camera in import does not override camera in root style',
         async () => {
-            const style = new Style(new StubMap());
+            const {style} = newStubStyle();
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             style.loadJSON(createStyleJSON({
@@ -2389,8 +2413,7 @@ describe('Camera', () => {
 
 describe('Projection', () => {
     test('resolves projection from import', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2406,12 +2429,11 @@ describe('Projection', () => {
 
         await waitFor(style, "style.load");
         expect(style.projection).toEqual({name: 'globe'});
-        expect(spy.mock.calls[spy.mock.calls.length - 1][1]).toEqual({name: 'globe'});
+        expect(spy.mock.calls.at(-1)[1]).toEqual({name: 'globe'});
     });
 
     test('root style overrides projection in imports', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2428,14 +2450,13 @@ describe('Projection', () => {
 
         await waitFor(style, "style.load");
         expect(style.projection).toEqual({name: 'globe'});
-        expect(spy.mock.calls[spy.mock.calls.length - 1][1]).toEqual({name: 'globe'});
+        expect(spy.mock.calls.at(-1)[1]).toEqual({name: 'globe'});
     });
 
     test(
         'empty projection in import does not override projection in root style',
         async () => {
-            const map = new StubMap();
-            const style = new Style(map);
+            const {map, style} = newStubStyle();
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             style.loadJSON(createStyleJSON({
@@ -2452,14 +2473,14 @@ describe('Projection', () => {
 
             await waitFor(style, "style.load");
             expect(style.projection).toEqual({name: 'albers'});
-            expect(spy.mock.calls[spy.mock.calls.length - 1][1]).toEqual({name: 'albers'});
+            expect(spy.mock.calls.at(-1)[1]).toEqual({name: 'albers'});
         }
     );
 });
 
 describe('Transition', () => {
     test('resolves transition from import', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2477,7 +2498,7 @@ describe('Transition', () => {
     });
 
     test('root style overrides transition in imports', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2495,7 +2516,7 @@ describe('Transition', () => {
 
 describe('Glyphs', () => {
     test('fallbacks to the default glyphs URL', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2503,7 +2524,7 @@ describe('Glyphs', () => {
         }));
 
         await waitFor(style, "style.load");
-        vi.spyOn(GlyphManager, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
+        vi.spyOn(GlyphLoader.prototype, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
             expect(urlTemplate).toEqual('mapbox://fonts/mapbox/{fontstack}/{range}.pbf');
             expect(style.serialize().glyphs).toEqual(undefined);
         });
@@ -2512,7 +2533,7 @@ describe('Glyphs', () => {
     });
 
     test('uses root style glyph url even if fragment provides its own', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2527,7 +2548,7 @@ describe('Glyphs', () => {
         }));
 
         await waitFor(style, "style.load");
-        vi.spyOn(GlyphManager, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
+        vi.spyOn(GlyphLoader.prototype, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
             expect(urlTemplate).toEqual('mapbox://fonts/foo/{fontstack}/{range}.pbf');
         });
 
@@ -2535,7 +2556,7 @@ describe('Glyphs', () => {
     });
 
     test('uses glyph url from import if there is one and no glyph url in root style', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(createStyleJSON({
@@ -2549,7 +2570,7 @@ describe('Glyphs', () => {
         }));
 
         await waitFor(style, "style.load");
-        vi.spyOn(GlyphManager, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
+        vi.spyOn(GlyphLoader.prototype, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
             expect(urlTemplate).toEqual('mapbox://fonts/bar/{fontstack}/{range}.pbf');
         });
 
@@ -2592,7 +2613,7 @@ describe('Style#queryRenderedFeatures', () => {
     });
 
     test.skip('returns features only from the root style', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(initialStyle);
 
@@ -2607,7 +2628,7 @@ describe('Style#queryRenderedFeatures', () => {
     });
 
     test.skip('returns features only from the root style when including layers', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         style.loadJSON(initialStyle);
@@ -2624,7 +2645,7 @@ describe('Style#queryRenderedFeatures', () => {
 });
 
 test('Style#setFeatureState', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2656,7 +2677,7 @@ test('Style#setFeatureState', async () => {
 });
 
 test('Style#getFeatureState', () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2685,7 +2706,7 @@ test('Style#getFeatureState', () => {
 });
 
 test('Style#removeFeatureState', () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2714,7 +2735,7 @@ test('Style#removeFeatureState', () => {
 });
 
 test('Style#setLayoutProperty', () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2751,7 +2772,7 @@ test('Style#setLayoutProperty', () => {
 });
 
 test('Style#setPaintProperty', () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2788,7 +2809,7 @@ test('Style#setPaintProperty', () => {
 });
 
 test('Style#setLayerZoomRange', () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2819,7 +2840,7 @@ test('Style#setLayerZoomRange', () => {
 });
 
 test('Style#setFilter', () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2853,7 +2874,7 @@ test('Style#setFilter', () => {
 });
 
 test('Style#setGeoJSONSourceData', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({
@@ -2875,7 +2896,7 @@ test('Style#setGeoJSONSourceData', async () => {
 
 describe('Style#setConfigProperty', () => {
     test('Updates layers in scope', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -2908,7 +2929,9 @@ describe('Style#setConfigProperty', () => {
 
         style.dispatcher.broadcast = function (key, value) {
             expect(key).toEqual('updateLayers');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(value.scope).toEqual('standard');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(value.removedIds).toEqual([]);
             const fqid = makeFQID('showBackground', 'standard');
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
@@ -2923,7 +2946,7 @@ describe('Style#setConfigProperty', () => {
     });
 
     test('Reevaluates layer visibility', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -2953,12 +2976,285 @@ describe('Style#setConfigProperty', () => {
         style.setConfigProperty('standard', 'showBackground', true);
         expect(layer.getLayoutProperty('visibility')).toEqual('visible');
     });
+
+    test('Tracks config dependencies introduced by a runtime filter change', async () => {
+        const {style} = newStubStyle();
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const initialStyle = createStyleJSON({
+            imports: [{
+                id: 'standard',
+                url: '/standard.json',
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    sources: {
+                        geo: {type: 'geojson', data: {type: 'FeatureCollection', features: []}}
+                    },
+                    layers: [{
+                        id: 'circle',
+                        type: 'circle',
+                        source: 'geo',
+                        filter: ['==', ['get', 'kind'], 'a']
+                    }],
+                    schema: {kind: {default: 'a'}}
+                })
+            }]
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(initialStyle);
+
+        await waitFor(style, "style.load");
+
+        const layerFqid = makeFQID('circle', 'standard');
+        expect(style._layerExpressionDependencies.get(layerFqid).isConfigDependent).toBe(false);
+
+        const fragmentStyle = style.getFragmentStyle('standard');
+        fragmentStyle.setFilter('circle', ['==', ['get', 'kind'], ['config', 'kind']]);
+
+        // The dependency map holds live references shared across fragments, so the
+        // root style observes the dependency introduced by the filter change.
+        expect(style._layerExpressionDependencies.get(layerFqid).hasConfigDependency('kind')).toBe(true);
+
+        fragmentStyle.setFilter('circle', null);
+        expect(style._layerExpressionDependencies.get(layerFqid).isConfigDependent).toBe(false);
+    });
+});
+
+describe('Style initial config load', () => {
+    test('Does not queue redundant source-cache reloads for config-dependent layers on initial load', async () => {
+        const {style} = newStubStyle();
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const initialStyle = createStyleJSON({
+            imports: [{
+                id: 'standard',
+                url: '/standard.json',
+                config: {circleColor: 'red'},
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    sources: {
+                        geo: {type: 'geojson', data: {type: 'FeatureCollection', features: []}}
+                    },
+                    layers: [{
+                        id: 'circle',
+                        type: 'circle',
+                        source: 'geo',
+                        paint: {'circle-color': ['config', 'circleColor']}
+                    }],
+                    schema: {
+                        circleColor: {default: 'blue'}
+                    }
+                })
+            }]
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(initialStyle);
+
+        await waitFor(style, "style.load");
+
+        // The layer is config-dependent, so it should be tracked as such.
+        const layerFqid = makeFQID('circle', 'standard');
+        const fragmentStyle = style.getFragmentStyle('standard');
+        expect(fragmentStyle._layerExpressionDependencies.get(layerFqid).isConfigDependent).toBe(true);
+
+        // But because the layer was constructed with a live reference to the
+        // shared options Map, no source-cache reload should have been queued
+        // for the layer's source on initial load — the very first `setLayers`
+        // broadcast already ships the config-aware layer to workers.
+        const sourceFqid = makeFQID('geo', 'standard');
+        expect(fragmentStyle._changes.getUpdatedSourceCaches()[sourceFqid]).toBeUndefined();
+
+        // And the layer should not have been queued in the dirty-layer set
+        // either.
+        const updates = fragmentStyle._changes.getLayerUpdatesByScope();
+        const standardUpdates = updates['standard'];
+        if (standardUpdates && standardUpdates.updatedIds) {
+            expect(standardUpdates.updatedIds).not.toContain('circle');
+        }
+    });
+
+    test('Initial load broadcasts setLayers but not updateLayers', async () => {
+        const {style} = newStubStyle();
+
+        const broadcastedKeys: string[] = [];
+        const originalBroadcast = style.dispatcher.broadcast.bind(style.dispatcher);
+        style.dispatcher.broadcast = function (key, value, callback) {
+            broadcastedKeys.push(key);
+            return originalBroadcast(key, value, callback);
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const initialStyle = createStyleJSON({
+            imports: [{
+                id: 'standard',
+                url: '/standard.json',
+                config: {showBackground: true},
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    layers: [{
+                        id: 'background',
+                        type: 'background',
+                        layout: {visibility: ['case', ['config', 'showBackground'], 'visible', 'none']}
+                    }],
+                    schema: {showBackground: {default: false}}
+                })
+            }]
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(initialStyle);
+        await waitFor(style, "style.load");
+
+        // Must broadcast setLayers (initial layer transfer to workers).
+        expect(broadcastedKeys).toContain('setLayers');
+        // Must NOT broadcast updateLayers (no runtime diffs on initial load).
+        expect(broadcastedKeys).not.toContain('updateLayers');
+    });
+
+    test('Config values are baked into config-dependent expressions at initial load', async () => {
+        const {style} = newStubStyle();
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const initialStyle = createStyleJSON({
+            imports: [{
+                id: 'standard',
+                url: '/standard.json',
+                config: {showBackground: true},
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    layers: [{
+                        id: 'background',
+                        type: 'background',
+                        layout: {visibility: ['case', ['config', 'showBackground'], 'visible', 'none']}
+                    }],
+                    schema: {showBackground: {default: false}}
+                })
+            }]
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(initialStyle);
+        await waitFor(style, "style.load");
+
+        // Visibility was set via the import's `config: {showBackground: true}`,
+        // overriding the schema default of `false`. The layer must reflect the
+        // import-supplied config value immediately after style.load — without
+        // any further `updateConfigDependencies` round-trip.
+        const layer = style.getLayer(makeFQID('background', 'standard'));
+        expect(layer.getLayoutProperty('visibility')).toEqual('visible');
+    });
+
+    test('Config-dependent fog property is evaluated against the live config map', async () => {
+        const {style} = newStubStyle();
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const initialStyle = createStyleJSON({
+            imports: [{
+                id: 'standard',
+                url: '/standard.json',
+                config: {fogStart: 1, fogEnd: 5},
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    fog: {
+                        range: [['config', 'fogStart'], ['config', 'fogEnd']],
+                        color: 'white',
+                        'horizon-blend': 0
+                    },
+                    schema: {
+                        fogStart: {default: 0},
+                        fogEnd: {default: 10}
+                    }
+                })
+            }]
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(initialStyle);
+        await waitFor(style, "style.load");
+
+        // Recalculate so fog `properties` reflect the current config snapshot,
+        // then read evaluated `range` via the `state` getter (which is what the
+        // renderer uses).
+        style.update(new EvaluationParameters(0));
+        expect(style.fog.properties.get('range')).toEqual([1, 5]);
+
+        // Mutating config at runtime must flow through to fog without us
+        // having to rebuild the Fog instance — verifies the live-reference
+        // wiring matches what `StyleLayer` does.
+        style.setConfigProperty('standard', 'fogStart', 2);
+        style.setConfigProperty('standard', 'fogEnd', 8);
+        style.update(new EvaluationParameters(0));
+        expect(style.fog.properties.get('range')).toEqual([2, 8]);
+    });
+
+    test('Cross-fragment config references resolve in every setLayers broadcast', async () => {
+        // Two sibling imports share a config-options Map populated incrementally
+        // as each fragment's _load runs. fragmentA's `hasB` override references
+        // fragmentB's `bEnabled` config — so any setLayers broadcast issued before
+        // fragmentB has called updateConfig would ship an incomplete options
+        // snapshot, leaving cross-fragment ['config', _, _] lookups unresolved on
+        // the worker side. Each scope's setLayers must carry both fragments'
+        // entries.
+        const {style} = newStubStyle();
+
+        const setLayersCalls: Array<{scope: string; optionKeys: string[]}> = [];
+        const originalBroadcast = style.dispatcher.broadcast.bind(style.dispatcher);
+        style.dispatcher.broadcast = function (key, value, callback) {
+            if (key === 'setLayers' && value && (value as {options?: Map<string, unknown>}).options) {
+                const setLayersValue = value as {scope: string; options: Map<string, unknown>};
+                setLayersCalls.push({
+                    scope: setLayersValue.scope,
+                    optionKeys: Array.from(setLayersValue.options.keys())
+                });
+            }
+            return originalBroadcast(key, value, callback);
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const initialStyle = createStyleJSON({
+            imports: [{
+                id: 'fragmentA',
+                url: '/fragmentA.json',
+                config: {hasB: ['case', ['config', 'bEnabled', 'fragmentB'], true, false]},
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    layers: [{
+                        id: 'a-background',
+                        type: 'background',
+                        layout: {visibility: ['case', ['config', 'hasB'], 'visible', 'none']}
+                    }],
+                    schema: {hasB: {default: false}}
+                })
+            }, {
+                id: 'fragmentB',
+                url: '/fragmentB.json',
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                data: createStyleJSON({
+                    schema: {bEnabled: {default: true}}
+                })
+            }]
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        style.loadJSON(initialStyle);
+        await waitFor(style, 'style.load');
+
+        // Every scope's setLayers must ship both fragment configs.
+        expect(setLayersCalls.length).toBeGreaterThan(0);
+        const hasBKey = makeFQID('hasB', 'fragmentA');
+        const bEnabledKey = makeFQID('bEnabled', 'fragmentB');
+        for (const call of setLayersCalls) {
+            expect(call.optionKeys).toContain(hasBKey);
+            expect(call.optionKeys).toContain(bEnabledKey);
+        }
+    });
 });
 
 describe('Style#setState', () => {
     test('Adds fragment', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -2984,8 +3280,7 @@ describe('Style#setState', () => {
     });
 
     test('Adds fragment to the existing fragments', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -3014,8 +3309,7 @@ describe('Style#setState', () => {
     });
 
     test('Adds fragment before another', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -3044,7 +3338,7 @@ describe('Style#setState', () => {
     });
 
     test('Removes fragment', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -3069,7 +3363,7 @@ describe('Style#setState', () => {
     });
 
     test('Removes 3D light independently', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({imports: [{id: 'basemap', url: '', data: createStyleJSON({
@@ -3103,7 +3397,7 @@ describe('Style#setState', () => {
     });
 
     test('Removes all fragments', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const fragmentStyle = createStyleJSON({
@@ -3145,8 +3439,7 @@ describe('Style#setState', () => {
     });
 
     test('Moves fragment', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -3178,8 +3471,7 @@ describe('Style#setState', () => {
      * For some reason in browser we not set loaded after style.load event
      */
     test.skip('Updates fragment URL', async () => {
-        const map = new StubMap();
-        const style = new Style(map);
+        const {map, style} = newStubStyle();
         style.setEventedParent(map, {style});
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -3232,7 +3524,7 @@ describe('Style#setState', () => {
     });
 
     test('Updates fragment data', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -3257,7 +3549,7 @@ describe('Style#setState', () => {
     });
 
     test('Updates layer slot', async () => {
-        const style = new Style(new StubMap());
+        const {style} = newStubStyle();
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const initialStyle = createStyleJSON({
@@ -3326,7 +3618,7 @@ describe('Style#setState', () => {
 });
 
 test('Style#serialize', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragmentStyle = createStyleJSON({
@@ -3339,7 +3631,8 @@ test('Style#serialize', async () => {
         sources: {'mapbox-dem': {type: 'raster-dem', tiles: ['http://example.com/{z}/{x}/{y}.png']}},
         terrain: {source: 'mapbox-dem', exaggeration: 1.5},
         projection: {name: 'globe'},
-        transition: {duration: 900, delay: 200}
+        transition: {duration: 900, delay: 200},
+        featuresets: {'test-featureset': {selectors: [{layer: 'background'}]}}
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -3359,6 +3652,7 @@ test('Style#serialize', async () => {
             expect(serialized.terrain).toBeFalsy();
             expect(serialized.projection).toBeFalsy();
             expect(serialized.transition).toBeFalsy();
+            expect(serialized.featuresets).toBeFalsy();
             expect(serialized.sources).toEqual({});
 
             resolve();
@@ -3370,7 +3664,7 @@ test('Style#serialize', async () => {
 });
 
 test('Style#areTilesLoaded', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     const source = {type: 'geojson', data: {type: 'FeatureCollection', features: []}};
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -3408,7 +3702,7 @@ test('Style#areTilesLoaded', async () => {
 });
 
 test('Style#_updateTilesForChangedImages', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const fragment = createStyleJSON({sources: {geojson: {type: 'geojson', data: {type: 'FeatureCollection', features: []}}}});
@@ -3432,21 +3726,16 @@ test('Style#_updateTilesForChangedImages', async () => {
     sourceCache._tiles[tileID.key] = tile;
     vi.spyOn(tile, 'setDependencies');
 
-    await new Promise((resolve) => {
-        expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(false);
+    expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(false);
 
-        style.getImages(0, {images: [imageId], source: 'geojson', scope: 'basemap', tileID, type: 'icons'}, (err, result) => {
-            expect(err).toBeFalsy();
-            expect(result.size).toEqual(0);
-            resolve();
-        });
-    });
+    const result = await style.getImages(0, {icons: [imageId], patterns: [], source: 'geojson', scope: 'basemap', tileID});
+    expect(result.images.size).toEqual(0);
 
     expect(style._updateTilesForChangedImages).toHaveBeenCalledTimes(1);
-    expect(sourceCache.setDependencies).toHaveBeenCalledTimes(1);
+    expect(sourceCache.setDependencies).toHaveBeenCalledTimes(2);
     expect(sourceCache.setDependencies).toHaveBeenCalledWith(tileID.key, 'icons', [imageIdStr]);
 
-    expect(tile.setDependencies).toHaveBeenCalledTimes(1);
+    expect(tile.setDependencies).toHaveBeenCalledTimes(2);
     expect(tile.setDependencies).toHaveBeenCalledWith('icons', [imageIdStr]);
     expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(true);
 
@@ -3459,7 +3748,7 @@ test('Style#_updateTilesForChangedImages', async () => {
 });
 
 test('Style#getFeaturesetDescriptors', async () => {
-    const style = new Style(new StubMap());
+    const {style} = newStubStyle();
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const initialStyle = createStyleJSON({
         imports: [{
@@ -3484,8 +3773,7 @@ test('Style#getFeaturesetDescriptors', async () => {
 });
 
 test('Style#getFragmentStyle', async () => {
-    const map = new StubMap();
-    const style = new Style(map);
+    const {style} = newStubStyle();
 
     // Load a style with imports
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment

@@ -1,6 +1,7 @@
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import Point from '@mapbox/point-geometry';
 import Tile from './tile';
+import {RenderSourceType} from './render_source_type';
 import RasterArrayTile from './raster_array_tile';
 import {Event, ErrorEvent, Evented} from '../util/evented';
 import TileCache from './tile_cache';
@@ -8,12 +9,12 @@ import {asyncAll, keysDifference, clamp} from '../util/util';
 import browser from '../util/browser';
 import {OverscaledTileID} from './tile_id';
 import SourceFeatureState from './source_state';
-import {mercatorXfromLng} from '../geo/mercator_coordinate';
+import MercatorCoordinate, {mercatorXfromLng} from '../geo/mercator_coordinate';
+import {isHttpNotFound} from '../util/ajax';
 
 import type {CanonicalTileID} from './tile_id';
 import type Context from '../gl/context';
 import type {vec3} from 'gl-matrix';
-import type {AJAXError} from '../util/ajax';
 import type {ISource, Source} from './source';
 import type {SourceSpecification} from '../style-spec/types';
 import type {Map as MapboxMap} from '../ui/map';
@@ -52,6 +53,8 @@ class SourceCache extends Evented {
     _maxTileCacheSize?: number;
     _paused: boolean;
     _isRaster: boolean;
+    _supportsFading: boolean;
+    _isRasterElevatedOverTerrain: boolean;
     _shouldReloadOnResume: boolean;
     _coveredTiles: Partial<Record<number | string, boolean>>;
     transform: Transform;
@@ -61,7 +64,8 @@ class SourceCache extends Evented {
     tileCoverLift: number;
     _state: SourceFeatureState;
     _loadedParentTiles: Partial<Record<number | string, Tile | null | undefined>>;
-    _onlySymbols: boolean | null | undefined;
+    _renderSourceType: RenderSourceType | null | undefined;
+    _maxzoomOverride: number | null;
     _shadowCasterTiles: {
         [_: number]: boolean;
     };
@@ -69,10 +73,11 @@ class SourceCache extends Evented {
     static maxUnderzooming: number;
     static maxOverzooming: number;
 
-    constructor(id: string, source: Source, onlySymbols?: boolean) {
+    constructor(id: string, source: Source, renderSourceType?: RenderSourceType | null) {
         super();
         this.id = id;
-        this._onlySymbols = onlySymbols;
+        this._renderSourceType = renderSourceType;
+        this._maxzoomOverride = null;
 
         source.on('data', (e: {dataType?: string; sourceDataType?: string}) => {
             // this._sourceLoaded signifies that the TileJSON is loaded if applicable.
@@ -109,11 +114,23 @@ class SourceCache extends Evented {
         this._coveredTiles = {};
         this._shadowCasterTiles = {};
         this._state = new SourceFeatureState();
+
+        // Sources that use tiled raster data
         this._isRaster =
             this._source.type === 'raster' ||
-            this._source.type === 'raster-dem' || this._source.type === 'raster-array' ||
-            // @ts-expect-error - TS2339 - Property '_dataType' does not exist on type 'VideoSource | ImageSource | CanvasSource | CustomSource<ImageBitmap | HTMLCanvasElement | HTMLImageElement | ImageData>'.
-            (this._source.type === 'custom' && this._source._dataType === 'raster');
+            this._source.type === 'raster-dem' ||
+            this._source.type === 'raster-array' ||
+            (this._source.type === 'custom' && '_dataType' in this._source && this._source._dataType === 'raster');
+
+        // Sources that use fade transitions between zoom levels
+        this._supportsFading =
+            this._source.type === 'raster' ||
+            this._source.type === 'raster-array' ||
+            this._source.type === 'image' ||
+            this._source.type === 'video' ||
+            this._source.type === 'custom';
+
+        this._isRasterElevatedOverTerrain = false;
     }
 
     onAdd(map: MapboxMap) {
@@ -155,8 +172,12 @@ class SourceCache extends Evented {
         if (this.transform) this.update(this.transform);
     }
 
+    setMaxzoomOverride(maxzoom: number | null) {
+        this._maxzoomOverride = maxzoom;
+    }
+
     _loadTile(tile: Tile, callback: Callback<undefined>): void {
-        tile.isSymbolTile = this._onlySymbols;
+        tile.renderSourceType = this._renderSourceType;
         tile.isExtraShadowCaster = this._shadowCasterTiles[tile.tileID.key];
         return this._source.loadTile(tile, callback);
     }
@@ -260,18 +281,10 @@ class SourceCache extends Evented {
         this._loadTile(tile, this._tileLoaded.bind(this, tile, id, state));
     }
 
-    _tileLoaded(tile: Tile, id: number, previousState: TileState, err?: AJAXError | null, data?: LoadVectorTileResult | null) {
+    _tileLoaded(tile: Tile, id: number, previousState: TileState, err?: Error | null, data?: LoadVectorTileResult | null) {
         if (err) {
             tile.state = 'errored';
-            if (err.status !== 404) {
-                this._source.fire(new ErrorEvent(err, {tile}));
-                this._source.fire(new Event('tileloadfail', {
-                    error: err,
-                    sourceId: this._source.id,
-                    tile,
-                    reloadTile: () => this._reloadTile(id, 'expired')
-                }));
-            } else {
+            if (isHttpNotFound(err)) {
                 // If the requested tile is missing, try to load the parent tile
                 // to use it as an overscaled tile instead of the missing one.
                 // Fire a `data` event with an `error` source data type to trigger map render
@@ -290,6 +303,14 @@ class SourceCache extends Evented {
                 } else {
                     this.update(this.transform);
                 }
+            } else {
+                this._source.fire(new ErrorEvent(err, {tile}));
+                this._source.fire(new Event('tileloadfail', {
+                    error: err,
+                    sourceId: this._source.id,
+                    tile,
+                    reloadTile: () => this._reloadTile(id, 'expired')
+                }));
             }
         } else {
             tile.timeAdded = browser.now();
@@ -297,8 +318,9 @@ class SourceCache extends Evented {
             this._setTileReloadTimer(id, tile);
             if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
             this._state.initializeTileState(tile, this.map ? this.map.painter : null);
-        let responseHeaders: Map<string, string> = new Map();
-        if (data && data.responseHeaders) responseHeaders = data.responseHeaders;
+
+        let responseHeaders: Headers = new Headers();
+        if (data && data.headers) responseHeaders = data.headers;
 
             this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id, responseHeaders}));
         }
@@ -320,6 +342,14 @@ class SourceCache extends Evented {
             }
             this._source.fire(new Event('progress', {totals, loaded, fails}));
         }
+    }
+
+    _hasTunnelGeometry(): boolean {
+        for (const key in this._tiles) {
+            const tile = this._tiles[key];
+            if (tile && tile.hasTunnelGeometry) return true;
+        }
+        return false;
     }
 
     /**
@@ -560,6 +590,10 @@ class SourceCache extends Evented {
         let idealTileIDs: OverscaledTileID[];
 
         let maxZoom = this._source.maxzoom;
+        // Apply max-source-zoom override (prevents loading tiles above this zoom)
+        if (this._maxzoomOverride !== null) {
+            maxZoom = Math.min(maxZoom, this._maxzoomOverride);
+        }
         const terrain = this.map && this.map.painter ? this.map.painter._terrain : null;
         const sourceUsedForTerrain = terrain && terrain.sourceCache === this;
         if (sourceUsedForTerrain && terrain.attenuationRange()) {
@@ -569,6 +603,9 @@ class SourceCache extends Evented {
                 maxZoom = demMaxZoom;
             }
         }
+
+        // When maxzoom override is set, prevent overscaling (don't create overscaledZ > canonical.z tiles)
+        const reparseOverscaled = this._maxzoomOverride !== null ? false : this._source.reparseOverscaled;
 
         if (!this.used && !this.usedForTerrain) {
             idealTileIDs = [];
@@ -584,7 +621,7 @@ class SourceCache extends Evented {
                 minzoom: this._source.minzoom,
                 maxzoom: maxZoom,
                 roundZoom: this._source.roundZoom && !updateForTerrain,
-                reparseOverscaled: this._source.reparseOverscaled,
+                reparseOverscaled,
                 isTerrainDEM: this.usedForTerrain,
                 calculateQuadrantVisibility: isBatchedModelType
             });
@@ -602,7 +639,7 @@ class SourceCache extends Evented {
                 minzoom: this._source.minzoom,
                 maxzoom: maxZoom,
                 roundZoom: this._source.roundZoom && !updateForTerrain,
-                reparseOverscaled: this._source.reparseOverscaled,
+                reparseOverscaled,
                 isTerrainDEM: this.usedForTerrain,
                 calculateQuadrantVisibility: isBatchedModelType
             });
@@ -616,13 +653,13 @@ class SourceCache extends Evented {
         }
 
         if (idealTileIDs.length > 0 && this.transform.projection.name !== 'globe' &&
-            !this.usedForTerrain && !isRasterType(this._source.type)) {
+            !this.usedForTerrain && !this._supportsFading) {
             // compute desired max zoom level
             const coveringZoom = transform.coveringZoomLevel({
                 tileSize: tileSize || this._source.tileSize,
                 roundZoom: this._source.roundZoom && !updateForTerrain
             });
-            const idealZoom = Math.min(coveringZoom, this._source.maxzoom);
+            const idealZoom = Math.min(coveringZoom, maxZoom);
 
             if (isBatchedModelType) {
                 const batchedModelTileIDs = transform.extendTileCover(idealTileIDs, idealZoom);
@@ -630,9 +667,21 @@ class SourceCache extends Evented {
                     idealTileIDs.push(id);
                 }
             } else if (elevatedLayers) {
-                const elevatedTileIDs = transform.extendTileCoverToNearPlane(idealTileIDs, this.transform.getFrustum(idealZoom), idealZoom);
+                const frustum = this.transform.getFrustum(idealZoom);
+
+                const elevatedTileIDs = transform.extendTileCoverToNearPlane(idealTileIDs, frustum, idealZoom);
                 for (const id of elevatedTileIDs) {
                     idealTileIDs.push(id);
+                }
+
+                // Extend tile cover beyond the ground-level horizon for underground tunnel geometry.
+                // Only extend if zoom >= 18 and any already-loaded tile contains tunnel features.
+                if (idealZoom >= 18 && this._hasTunnelGeometry()) {
+                    const TUNNEL_TILE_COVER_DEPTH = 20.0; // meters
+                    const tunnelTileIDs = transform.extendTileCoverForTunnels(idealTileIDs, frustum, idealZoom, TUNNEL_TILE_COVER_DEPTH);
+                    for (const id of tunnelTileIDs) {
+                        idealTileIDs.push(id);
+                    }
                 }
             } else if (this.castsShadows && directionalLight) {
                 // find shadowCasterTiles
@@ -653,16 +702,17 @@ class SourceCache extends Evented {
         // parent or child tiles that are *already* loaded.
         const retain = this._updateRetainedTiles(idealTileIDs);
 
-        if (isRasterType(this._source.type) && idealTileIDs.length !== 0) {
+        if (this._supportsFading && idealTileIDs.length !== 0) {
             const parentsForFading: Partial<Record<string | number, OverscaledTileID>> = {};
             const fadingTiles: Record<string, OverscaledTileID> = {};
+            const now = browser.now();
             const ids = Object.keys(retain);
             for (const id of ids) {
                 const tileID = retain[id];
                 assert(tileID.key === +id);
 
                 const tile = this._tiles[id];
-                if (!tile || (tile.fadeEndTime && tile.fadeEndTime <= browser.now())) continue;
+                if (!tile || (tile.fadeEndTime !== undefined && tile.fadeEndTime <= now)) continue;
 
                 // if the tile is loaded but still fading in, find parents to cross-fade with it
                 const parentTile = this.findLoadedParent(tileID, Math.max(tileID.overscaledZ - SourceCache.maxOverzooming, this._source.minzoom));
@@ -676,7 +726,7 @@ class SourceCache extends Evented {
 
             // for children tiles with parent tiles still fading in,
             // retain the children so the parent can fade on top
-            const minZoom = idealTileIDs[idealTileIDs.length - 1].overscaledZ;
+            const minZoom = idealTileIDs.at(-1).overscaledZ;
             for (const id in this._tiles) {
                 const childTile = this._tiles[id];
                 if (retain[id] || !childTile.hasData()) {
@@ -724,7 +774,7 @@ class SourceCache extends Evented {
         // Construct a cache of loaded parents
         this._updateLoadedParentTileCache();
 
-        if (this._onlySymbols && this._source.afterUpdate) {
+        if (this._renderSourceType === RenderSourceType.Symbol && this._source.afterUpdate) {
             this._source.afterUpdate();
         }
     }
@@ -924,7 +974,7 @@ class SourceCache extends Evented {
 
         const expiryTimeout = tile.getExpiryTimeout();
         if (expiryTimeout) {
-            // @ts-expect-error - TS2322 - Type 'Timeout' is not assignable to type 'number'.
+            // Browser setTimeout returns number; cast needed because TS sees Node's Timeout type
             this._timers[id] = setTimeout(() => {
                 this._reloadTile(id, 'expired');
                 delete this._timers[id];
@@ -952,8 +1002,7 @@ class SourceCache extends Evented {
             return;
 
         if ((tile.hasData() && tile.state !== 'reloading') || tile.state === 'empty') {
-            // @ts-expect-error - TS2345 - Argument of type 'number | void' is not assignable to parameter of type 'number'.
-            this._cache.add(tile.tileID, tile, tile.getExpiryTimeout());
+            this._cache.add(tile.tileID, tile, tile.getExpiryTimeout() as number | undefined);
         } else {
             tile.aborted = true;
             this._abortTile(tile);
@@ -1015,6 +1064,8 @@ class SourceCache extends Evented {
 
         const isGlobe = transform.projection.name === 'globe';
         const centerX = mercatorXfromLng(transform.center.lng);
+        // Camera position is constant across the query; compute it once rather than per tile.
+        const cameraMercator = transform.getFreeCameraOptions().position || new MercatorCoordinate(0, 0, 0);
 
         for (const tileID in this._tiles) {
             const tile = this._tiles[tileID];
@@ -1028,7 +1079,7 @@ class SourceCache extends Evented {
 
             // An array of wrap values for the tile [-1, 0, 1]. The default value is 0 but -1 or 1 wrapping
             // might be required in globe view due to globe's surface being continuous.
-            let tilesToCheck;
+            let tilesToCheck: number[];
 
             if (isGlobe) {
                 // Compare distances to copies of the tile to see if a wrapped one should be used.
@@ -1057,8 +1108,7 @@ class SourceCache extends Evented {
             }
 
             for (const wrap of tilesToCheck) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                const tileResult = queryGeometry.containsTile(tile, transform, use3DQuery, wrap);
+                const tileResult = queryGeometry.containsTile(tile, transform, use3DQuery, wrap, cameraMercator);
                 if (tileResult) {
                     tileResults.push(tileResult);
                 }
@@ -1076,6 +1126,7 @@ class SourceCache extends Evented {
     }
 
     _getRenderableCoordinates(symbolLayer?: boolean, includeShadowCasters?: boolean): Array<OverscaledTileID> {
+        if (!this.transform) return []; // HdRoadCoverage caches are created before the first update() sets transform
         const coords = this.getRenderableIds(symbolLayer, includeShadowCasters).map((id) => this._tiles[id].tileID);
         const isGlobe = this.transform.projection.name === 'globe';
         for (const coord of coords) {
@@ -1117,10 +1168,11 @@ class SourceCache extends Evented {
             return true;
         }
 
-        if (isRasterType(this._source.type)) {
+        if (this._supportsFading) {
+            const now = browser.now();
             for (const id in this._tiles) {
                 const tile = this._tiles[id];
-                if (tile.fadeEndTime !== undefined && tile.fadeEndTime >= browser.now()) {
+                if (tile.fadeEndTime !== undefined && tile.fadeEndTime >= now) {
                     return true;
                 }
             }
@@ -1247,10 +1299,6 @@ function compareTileId(a: OverscaledTileID, b: OverscaledTileID): number {
     const aWrap = Math.abs(a.wrap * 2) - +(a.wrap < 0);
     const bWrap = Math.abs(b.wrap * 2) - +(b.wrap < 0);
     return a.overscaledZ - b.overscaledZ || bWrap - aWrap || b.canonical.y - a.canonical.y || b.canonical.x - a.canonical.x;
-}
-
-function isRasterType(type: string): boolean {
-    return type === 'raster' || type === 'image' || type === 'video' || type === 'custom';
 }
 
 function tileBoundsX(id: CanonicalTileID, wrap: number): [number, number] {

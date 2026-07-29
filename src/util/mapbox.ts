@@ -11,7 +11,7 @@
  * and the Mapbox Terms of Service are available at https://www.mapbox.com/tos/
  ******************************************************************************/
 
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import config from './config';
 import webpSupported from './webp_supported';
 import {isMapboxHTTPURL, isMapboxURL} from './mapbox_url';
@@ -23,13 +23,18 @@ import {getLivePerformanceMetrics} from '../util/live_performance';
 
 import type {ResourceType as ResourceTypeEnum, RequestParameters} from './ajax';
 import type {LivePerformanceData} from '../util/live_performance';
-import type {Cancelable} from '../types/cancelable';
 import type {TileJSON} from '../types/tilejson';
 import type {Map as MapboxMap} from "../ui/map";
 import type {CanonicalTileID} from "../source/tile_id";
 import type {CustomTags} from "../style-spec/types";
 
 import '../types/import-meta.d';
+
+const IMAGE_EXTENSION_RE = /(\.(png|jpg)\d*)(?=$)/;
+const TILE_V4_PREFIX_RE = /^.+\/v4\//;
+const EXTENSION_RE = /\.[\w]+$/;
+const TILE_PATH_RE = /^(\/v4\/|\/(raster|rasterarrays)\/v1\/)/;
+const ACCESS_TOKEN_PARAM_RE = /^access_token=(.*)$/;
 
 export type ResourceType = keyof typeof ResourceTypeEnum;
 export type RequestTransformFunction = (url: string, resourceTypeEnum?: ResourceType) => RequestParameters;
@@ -165,14 +170,13 @@ export class RequestManager {
         if (tileURL && !isMapboxURL(tileURL)) return tileURL;
 
         const urlObject = parseUrl(tileURL);
-        const imageExtensionRe = /(\.(png|jpg)\d*)(?=$)/;
         const extension = webpSupported.supported ? '.webp' : '$1';
 
         // The v4 mapbox tile API supports 512x512 image tiles but they must be requested as '@2x' tiles.
         const use2xAs512 = rasterTileSize && urlObject.authority !== 'raster' && rasterTileSize === 512;
 
         const suffix = use2x || use2xAs512 ? '@2x' : '';
-        urlObject.path = urlObject.path.replace(imageExtensionRe, `${suffix}${extension}`);
+        urlObject.path = urlObject.path.replace(IMAGE_EXTENSION_RE, `${suffix}${extension}`);
 
         if (urlObject.authority === 'raster') {
             urlObject.path = `/${config.RASTER_URL_PREFIX}${urlObject.path}`;
@@ -181,8 +185,7 @@ export class RequestManager {
         } else if (urlObject.authority === '3dtiles') {
             urlObject.path = `/${config.TILES3D_URL_PREFIX}${urlObject.path}`;
         } else {
-            const tileURLAPIPrefixRe = /^.+\/v4\//;
-            urlObject.path = urlObject.path.replace(tileURLAPIPrefixRe, '/');
+            urlObject.path = urlObject.path.replace(TILE_V4_PREFIX_RE, '/');
             urlObject.path = `/${config.TILE_URL_VERSION}${urlObject.path}`;
         }
 
@@ -195,23 +198,20 @@ export class RequestManager {
     }
 
     canonicalizeTileURL(url: string, removeAccessToken: boolean): string {
-        // matches any file extension specified by a dot and one or more alphanumeric characters
-        const extensionRe = /\.[\w]+$/;
-
         const urlObject = parseUrl(url);
         // Make sure that we are dealing with a valid Mapbox tile URL.
         // Has to begin with /v4/, /raster/v1 or /rasterarrays/v1 with a valid filename + extension
-        if (!urlObject.path.match(/^(\/v4\/|\/(raster|rasterarrays)\/v1\/)/) || !urlObject.path.match(extensionRe)) {
+        if (!TILE_PATH_RE.test(urlObject.path) || !EXTENSION_RE.test(urlObject.path)) {
             // Not a proper Mapbox tile URL.
             return url;
         }
         // Reassemble the canonical URL from the parts we've parsed before.
         let result = "mapbox://";
-        if (urlObject.path.match(/^\/raster\/v1\//)) {
+        if (urlObject.path.startsWith('/raster/v1/')) {
             // If the tile url has /raster/v1/, make the final URL mapbox://raster/....
             const rasterPrefix = `/${config.RASTER_URL_PREFIX}/`;
             result += `raster/${urlObject.path.replace(rasterPrefix, '')}`;
-        } else if (urlObject.path.match(/^\/rasterarrays\/v1\//)) {
+        } else if (urlObject.path.startsWith('/rasterarrays/v1/')) {
             // If the tile url has /rasterarrays/v1/, make the final URL mapbox://rasterarrays/....
             const rasterPrefix = `/${config.RASTERARRAYS_URL_PREFIX}/`;
             result += `rasterarrays/${urlObject.path.replace(rasterPrefix, '')}`;
@@ -223,7 +223,7 @@ export class RequestManager {
         // Append the query string, minus the access token parameter.
         let params = urlObject.params;
         if (removeAccessToken) {
-            params = params.filter(p => !p.match(/^access_token=/));
+            params = params.filter(p => !p.match(ACCESS_TOKEN_PARAM_RE));
         }
         if (params.length) result += `?${params.join('&')}`;
         return result;
@@ -267,7 +267,7 @@ export class RequestManager {
                 throw new Error(`Use a public access token (pk.*) with Mapbox GL, not a secret access token (sk.*). ${help}`);
         }
 
-        urlObject.params = urlObject.params.filter((d) => d.indexOf('access_token') === -1);
+        urlObject.params = urlObject.params.filter((d) => !d.includes('access_token'));
         urlObject.params.push(`access_token=${accessToken || ''}`);
         return formatUrl(urlObject);
     }
@@ -275,7 +275,7 @@ export class RequestManager {
 
 function getAccessToken(params: Array<string>): string | null {
     for (const param of params) {
-        const match = param.match(/^access_token=(.*)$/);
+        const match = param.match(ACCESS_TOKEN_PARAM_RE);
         if (match) {
             return match[1];
         }
@@ -305,7 +305,7 @@ function formatUrl(obj: UrlObject): string {
 
 const telemEventKey = 'mapbox.eventData';
 
-function parseAccessToken(accessToken?: string | null): { u?: string } | null {
+export function parseAccessToken(accessToken?: string | null): { u?: string ; atlas?: number} | null {
     if (!accessToken) {
         return null;
     }
@@ -316,12 +316,27 @@ function parseAccessToken(accessToken?: string | null): { u?: string } | null {
     }
 
     try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const jsonData: { u?: string } = JSON.parse(b64DecodeUnicode(parts[1]));
+        const jsonData = JSON.parse(b64DecodeUnicode(parts[1])) as {u?: string; atlas?: number};
         return jsonData;
     } catch (e) {
         return null;
     }
+}
+
+/**
+ * Telemetry is disabled when no events endpoint is configured (the events
+ * endpoint is only available for standard Mapbox API hosts, so self-hosted
+ * deployments that set a custom base API URL will have no endpoint) or when
+ * no access token is available.
+ * @private
+ */
+function isTelemetryEnabled(customAccessToken?: string | null): boolean {
+    if (!config.EVENTS_URL) return false;
+
+    const token = customAccessToken || config.ACCESS_TOKEN;
+    if (!token) return false;
+
+    return true;
 }
 
 type TelemetryEventType = 'appUserTurnstile' | 'map.load' | 'map.auth' | 'gljs.performance' | 'style.load' | 'metrics';
@@ -334,7 +349,7 @@ export class TelemetryEvent {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queue: Array<any>;
     type: TelemetryEventType;
-    pendingRequest: Cancelable | null | undefined;
+    pendingRequest: boolean;
     _customAccessToken: string | null | undefined;
 
     constructor(type: TelemetryEventType) {
@@ -343,7 +358,7 @@ export class TelemetryEvent {
         this.anonIdTimestamp = null;
         this.eventData = {};
         this.queue = [];
-        this.pendingRequest = null;
+        this.pendingRequest = false;
     }
 
     getStorageKey(domain?: string | null): string {
@@ -452,12 +467,20 @@ export class TelemetryEvent {
             body: JSON.stringify([finalPayload])
         };
 
-        this.pendingRequest = postData(request, (error) => {
-            this.pendingRequest = null;
-            callback(error);
-            this.saveEventData();
-            this.processRequests(customAccessToken);
-        });
+        this.pendingRequest = true;
+        postData(request)
+            .then(() => {
+                this.pendingRequest = false;
+                callback(null);
+                this.saveEventData();
+                this.processRequests(customAccessToken);
+            })
+            .catch((err: Error) => {
+                this.pendingRequest = false;
+                callback(err);
+                this.saveEventData();
+                this.processRequests(customAccessToken);
+            });
     }
 
     queueRequest(event: unknown, customAccessToken?: string | null) {
@@ -472,11 +495,8 @@ export class PerformanceEvent extends TelemetryEvent {
     }
 
     postPerformanceEvent(customAccessToken: string | null | undefined, performanceData: LivePerformanceData) {
-        if (config.EVENTS_URL) {
-            if (customAccessToken || config.ACCESS_TOKEN) {
-                this.queueRequest({timestamp: Date.now(), performanceData}, customAccessToken);
-            }
-        }
+        if (!isTelemetryEnabled(customAccessToken)) return;
+        this.queueRequest({timestamp: Date.now(), performanceData}, customAccessToken);
     }
 
     override processRequests(customAccessToken?: string | null) {
@@ -622,9 +642,7 @@ export class StyleLoadEvent extends TelemetryEvent {
             importedStyles,
         } = input;
 
-        if (!config.EVENTS_URL || !(customAccessToken || config.ACCESS_TOKEN)) {
-            return;
-        }
+        if (!isTelemetryEnabled(customAccessToken)) return;
 
         const mapInstanceId = this.getMapInstanceId(map);
         const payload: StyleLoadEventPayload = {
@@ -678,10 +696,7 @@ class MetricsEvent extends TelemetryEvent {
     }
 
     postMetricsEvent(customAccessToken: string | null | undefined) {
-
-        if (!config.EVENTS_URL || !(customAccessToken || config.ACCESS_TOKEN)) {
-            return;
-        }
+        if (!isTelemetryEnabled(customAccessToken)) return;
 
         if (!this.anonId) {
             this.fetchEventData();
@@ -691,7 +706,7 @@ class MetricsEvent extends TelemetryEvent {
             this.refreshUUID();
         }
 
-        const payload: MetricsEventPayload = Object.assign({}, this.data, {sessionId: this.anonId});
+        const payload = {...this.data, sessionId: this.anonId} as MetricsEventPayload;
 
         this.queueRequest({
             timestamp: Date.now(),
@@ -740,19 +755,27 @@ export class MapSessionAPI extends TelemetryEvent {
             }
         };
 
-        this.pendingRequest = getData(request, (error) => {
-            this.pendingRequest = null;
-            callback(error);
-            this.saveEventData();
-            this.processRequests(customAccessToken);
-        });
+        this.pendingRequest = true;
+        getData(request)
+            .then(() => {
+                this.pendingRequest = false;
+                callback(null);
+                this.saveEventData();
+                this.processRequests(customAccessToken);
+            })
+            .catch((err: Error) => {
+                this.pendingRequest = false;
+                callback(err);
+                this.saveEventData();
+                this.processRequests(customAccessToken);
+            });
     }
 
     getSessionAPI(mapId: number, skuToken: string, customAccessToken: string | null | undefined, callback: EventCallback) {
         this.skuToken = skuToken;
         this.errorCb = callback;
 
-        if (config.SESSION_PATH && config.API_URL) {
+        if (config.EVENTS_URL && config.SESSION_PATH && config.API_URL) {
             if (customAccessToken || config.ACCESS_TOKEN) {
                 this.queueRequest({id: mapId, timestamp: Date.now()}, customAccessToken);
             } else {
@@ -793,11 +816,10 @@ export class TurnstileEvent extends TelemetryEvent {
     }
 
     postTurnstileEvent(tileUrls: Array<string>, customAccessToken?: string | null) {
+        if (!isTelemetryEnabled(customAccessToken)) return;
         //Enabled only when Mapbox Access Token is set and a source uses
         // mapbox tiles.
-        if (config.EVENTS_URL &&
-            config.ACCESS_TOKEN &&
-            Array.isArray(tileUrls) &&
+        if (Array.isArray(tileUrls) &&
             tileUrls.some(url => isMapboxURL(url) || isMapboxHTTPURL(url))) {
             this.queueRequest(Date.now(), customAccessToken);
         }

@@ -21,6 +21,7 @@ import type VertexBuffer from '../../src/gl/vertex_buffer';
 import type {TextureImage, TextureWrap, TextureFilter} from '../../src/render/texture';
 import type Transform from '../../src/geo/transform';
 import type {Footprint} from '../util/conflation';
+import type {ModelBVH} from '../source/model_bvh';
 
 export type Sampler = {
     minFilter: TextureFilter;
@@ -74,14 +75,16 @@ export type Material = {
 };
 
 export type MaterialOverride = {
-        color: Color;
-        colorMix: number;
-        emissionStrength: number;
-        opacity: number;
+    color: Color;
+    colorMix: number;
+    emissionStrength: number;
+    opacity: number;
 };
 
 export type NodeOverride = {
-    orientation: vec3; // euler ZXY
+    orientation?: vec3; // euler ZXY
+    minZoom?: number;
+    maxZoom?: number;
 };
 
 export const HEIGHTMAP_DIM = 64;
@@ -125,6 +128,8 @@ export type ModelNode = {
     globalMatrix: mat4;
     localMatrix: mat4;
     meshes: Array<Mesh>;
+    lodMeshes?: Array<Mesh>;
+    meshBVH?: ModelBVH;
     children: Array<ModelNode>;
     footprint: Footprint | null | undefined;
     lights: Array<AreaLight>;
@@ -133,6 +138,14 @@ export type ModelNode = {
     anchor: vec2;
     hidden: boolean;
     isGeometryBloom: boolean;
+    minZoom?: number;
+    maxZoom?: number;
+    footprintDebugMesh?: {
+        vertexBuffer: VertexBuffer;
+        indexBuffer: IndexBuffer;
+        segments: SegmentVector;
+        color: Color;
+    };
 };
 
 export const ModelTraits = {
@@ -194,8 +207,8 @@ export function calculateModelMatrix(matrix: mat4, model: Readonly<Model>, state
     const modelMetersPerPixel = getMetersPerPixelAtLatitude(position.lat, zoom);
     const modelPixelsPerMeter = 1.0 / modelMetersPerPixel;
     mat4.identity(matrix);
-    const offset = [projectedPoint.x + translation[0] * modelPixelsPerMeter, projectedPoint.y + translation[1] * modelPixelsPerMeter, translation[2]];
-    mat4.translate(matrix, matrix, offset as [number, number, number]);
+    const offset: [number, number, number] = [projectedPoint.x + translation[0] * modelPixelsPerMeter, projectedPoint.y + translation[1] * modelPixelsPerMeter, translation[2]];
+    mat4.translate(matrix, matrix, offset);
     let scaleXY = 1.0;
     let scaleZ = 1.0;
     const worldSize = state.worldSize;
@@ -213,8 +226,8 @@ export function calculateModelMatrix(matrix: mat4, model: Readonly<Model>, state
         } else if (state.projection.name === 'globe') {
             const globeMatrix = convertModelMatrixForGlobe(matrix, state);
             const worldViewProjection = mat4.multiply([], state.projMatrix, globeMatrix);
-            const globeProjPos =  [0, 0, 0, 1];
-            vec4.transformMat4(globeProjPos as [number, number, number, number], globeProjPos as [number, number, number, number], worldViewProjection);
+            const globeProjPos: [number, number, number, number] = [0, 0, 0, 1];
+            vec4.transformMat4(globeProjPos, globeProjPos, worldViewProjection);
             const globeProjectionScale = globeProjPos[3] / state.cameraToCenterDistance;
             const transition = globeToMercatorTransition(zoom);
             const modelPixelConv = state.projection.pixelsPerMeter(position.lat, worldSize) * getMetersPerPixelAtLatitude(position.lat, zoom);
@@ -318,9 +331,17 @@ export default class Model {
         const nodeOverride = this.nodeOverrides.get(node.name);
         if (nodeOverride !== undefined) {
             // Apply orientation override
-            const m = [] as unknown as mat4;
-            rotationYZX(m, nodeOverride.orientation);
-            mat4.multiply(node.globalMatrix, node.globalMatrix, m);
+            if (nodeOverride.orientation) {
+                const m = [] as unknown as mat4;
+                rotationYZX(m, nodeOverride.orientation);
+                mat4.multiply(node.globalMatrix, node.globalMatrix, m);
+            }
+            if (nodeOverride.minZoom) {
+                node.minZoom = nodeOverride.minZoom;
+            }
+            if (nodeOverride.maxZoom) {
+                node.maxZoom = nodeOverride.maxZoom;
+            }
         }
 
         // apply local transform to bounding volume
@@ -338,7 +359,7 @@ export default class Model {
     }
 
     computeBoundsAndApplyParent() {
-        const localMatrix = mat4.identity([] as unknown as mat4);
+        const localMatrix = mat4.identity([]);
         this.aabb = new Aabb([Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]);
         for (const node of this.nodes) {
             this._applyTransformations(node, localMatrix);
@@ -426,6 +447,11 @@ export function uploadNode(node: ModelNode, context: Context, useSingleChannelOc
             uploadMesh(mesh, context, useSingleChannelOcclusionTexture);
         }
     }
+    if (node.lodMeshes) {
+        for (const mesh of node.lodMeshes) {
+            uploadMesh(mesh, context, useSingleChannelOcclusionTexture);
+        }
+    }
     if (node.children) {
         for (const child of node.children) {
             uploadNode(child, context, useSingleChannelOcclusionTexture);
@@ -433,17 +459,26 @@ export function uploadNode(node: ModelNode, context: Context, useSingleChannelOc
     }
 }
 
+function destroyMeshArrays(mesh: Mesh) {
+    mesh.indexArray.destroy();
+    mesh.vertexArray.destroy();
+    if (mesh.colorArray) mesh.colorArray.destroy();
+    if (mesh.normalArray) mesh.normalArray.destroy();
+    if (mesh.texcoordArray) mesh.texcoordArray.destroy();
+    if (mesh.featureArray) {
+        mesh.featureArray.destroy();
+    }
+}
+
 export function destroyNodeArrays(node: ModelNode) {
     if (node.meshes) {
         for (const mesh of node.meshes) {
-            mesh.indexArray.destroy();
-            mesh.vertexArray.destroy();
-            if (mesh.colorArray) mesh.colorArray.destroy();
-            if (mesh.normalArray) mesh.normalArray.destroy();
-            if (mesh.texcoordArray) mesh.texcoordArray.destroy();
-            if (mesh.featureArray) {
-                mesh.featureArray.destroy();
-            }
+            destroyMeshArrays(mesh);
+        }
+    }
+    if (node.lodMeshes) {
+        for (const mesh of node.lodMeshes) {
+            destroyMeshArrays(mesh);
         }
     }
     if (node.children) {
@@ -471,30 +506,43 @@ export function destroyTextures(material: Material) {
     }
 }
 
+function destroyMeshBuffers(mesh: Mesh) {
+    if (!mesh.vertexBuffer) return;
+    mesh.vertexBuffer.destroy();
+    mesh.indexBuffer.destroy();
+    if (mesh.normalBuffer) {
+        mesh.normalBuffer.destroy();
+    }
+    if (mesh.texcoordBuffer) {
+        mesh.texcoordBuffer.destroy();
+    }
+    if (mesh.colorBuffer) {
+        mesh.colorBuffer.destroy();
+    }
+    if (mesh.pbrBuffer) {
+        mesh.pbrBuffer.destroy();
+    }
+    mesh.segments.destroy();
+    if (mesh.material) {
+        destroyTextures(mesh.material);
+    }
+}
+
 export function destroyBuffers(node: ModelNode) {
     if (node.meshes) {
         for (const mesh of node.meshes) {
-            if (!mesh.vertexBuffer) continue;
-            mesh.vertexBuffer.destroy();
-            mesh.indexBuffer.destroy();
-            if (mesh.normalBuffer) {
-                mesh.normalBuffer.destroy();
-            }
-            if (mesh.texcoordBuffer) {
-                mesh.texcoordBuffer.destroy();
-            }
-            if (mesh.colorBuffer) {
-                mesh.colorBuffer.destroy();
-            }
-            if (mesh.pbrBuffer) {
-                mesh.pbrBuffer.destroy();
-            }
-
-            mesh.segments.destroy();
-            if (mesh.material) {
-                destroyTextures(mesh.material);
-            }
+            destroyMeshBuffers(mesh);
         }
+    }
+    if (node.lodMeshes) {
+        for (const mesh of node.lodMeshes) {
+            destroyMeshBuffers(mesh);
+        }
+    }
+    if (node.footprintDebugMesh) {
+        node.footprintDebugMesh.vertexBuffer.destroy();
+        node.footprintDebugMesh.indexBuffer.destroy();
+        node.footprintDebugMesh.segments.destroy();
     }
     if (node.children) {
         for (const child of node.children) {

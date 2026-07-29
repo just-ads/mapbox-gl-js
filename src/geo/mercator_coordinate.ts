@@ -1,6 +1,14 @@
 import LngLat, {earthCircumference} from '../geo/lng_lat';
 import {clamp, degToRad} from '../util/util';
 import EXTENT from '../style-spec/data/extent';
+import {
+    mercatorXfromLng,
+    mercatorYfromLat,
+    lngFromMercatorX,
+    latFromMercatorY,
+} from '../style-spec/util/mercator';
+
+export {mercatorXfromLng, mercatorYfromLat, lngFromMercatorX, latFromMercatorY};
 
 import type {LngLatLike} from '../geo/lng_lat';
 import type {CanonicalTileID} from '../source/tile_id';
@@ -18,37 +26,8 @@ export function circumferenceAtLatitude(latitude: number): number {
 /**
  * @private
  */
-export function mercatorXfromLng(lng: number): number {
-    return (180 + lng) / 360;
-}
-
-/**
- * @private
- */
-export function mercatorYfromLat(lat: number): number {
-    return (180 - (180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)))) / 360;
-}
-
-/**
- * @private
- */
 export function mercatorZfromAltitude(altitude: number, lat: number): number {
     return altitude / circumferenceAtLatitude(lat);
-}
-
-/**
- * @private
- */
-export function lngFromMercatorX(x: number): number {
-    return x * 360 - 180;
-}
-
-/**
- * @private
- */
-export function latFromMercatorY(y: number): number {
-    const y2 = 180 - y * 360;
-    return 360 / Math.PI * Math.atan(Math.exp(y2 * Math.PI / 180)) - 90;
 }
 
 /**

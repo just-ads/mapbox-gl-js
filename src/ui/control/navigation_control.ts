@@ -49,7 +49,7 @@ class NavigationControl implements IControl {
     _handler?: MouseRotateWrapper;
 
     constructor(options: NavigationControlOptions = {}) {
-        this.options = Object.assign({}, defaultOptions, options);
+        this.options = {...defaultOptions, ...options};
 
         this._container = DOM.create('div', 'mapboxgl-ctrl mapboxgl-ctrl-group');
         this._container.addEventListener('contextmenu', (e: MouseEvent) => e.preventDefault());
@@ -223,7 +223,7 @@ class MouseRotateWrapper {
     }
 
     mousedown(e: MouseEvent) {
-        this.down(Object.assign({}, e, {ctrlKey: true, preventDefault: () => e.preventDefault()}), DOM.mousePos(this.element, e));
+        this.down({...e, button: e.button, type: e.type, ctrlKey: true, preventDefault: () => e.preventDefault()}, DOM.mousePos(this.element, e));
         window.addEventListener('mousemove', this.mousemove);
         window.addEventListener('mouseup', this.mouseup);
     }
@@ -252,7 +252,7 @@ class MouseRotateWrapper {
             this.reset();
         } else {
             this._lastPos = DOM.touchPos(this.element, e.targetTouches)[0];
-            this.move(({preventDefault: () => e.preventDefault()} as MouseEvent), this._lastPos);
+            this.move(({buttons: 1, preventDefault: () => e.preventDefault()} as MouseEvent), this._lastPos);
         }
     }
 

@@ -1,8 +1,8 @@
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 
 import type Point from '@mapbox/point-geometry';
 import type SourceCache from './source_cache';
-import type CollisionIndex from '../symbol/collision_index';
+import type {CollisionDetector} from '../symbol/placement_algorithm';
 import type Transform from '../geo/transform';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {default as Feature, TargetDescriptor, FeatureVariant} from '../util/vectortile_to_geojson';
@@ -96,6 +96,7 @@ export function queryRenderedFeatures(
     availableImages: ImageId[],
     transform: Transform,
     visualizeQueryGeometry: boolean = false,
+    scope: string | undefined = undefined
 ): QueryResult {
     const sourceCacheTransform = query.sourceCache.transform;
     const tileResults = query.sourceCache.tilesIn(queryGeometry, query.has3DLayers, visualizeQueryGeometry);
@@ -110,6 +111,7 @@ export function queryRenderedFeatures(
             transform,
             sourceCacheTransform,
             visualizeQueryGeometry,
+            scope
         );
 
         if (Object.keys(queryResults).length) {
@@ -141,7 +143,7 @@ export function queryRenderedSymbols(
     queryGeometry: Array<Point>,
     query: QrfQuery,
     availableImages: ImageId[],
-    collisionIndex: CollisionIndex,
+    collisionIndex: CollisionDetector,
     retainedQueryData: Record<number, RetainedQueryData>,
     worldview: string | undefined
 ): QueryResult {

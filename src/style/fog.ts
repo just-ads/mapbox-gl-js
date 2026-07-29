@@ -3,7 +3,7 @@ import {smoothstep} from '../util/util';
 import {Evented} from '../util/evented';
 import {validateStyle, validateFog, emitValidationErrors} from './validate_style';
 import {Properties, Transitionable, PossiblyEvaluated, DataConstantProperty} from './properties';
-import {FOG_PITCH_START, FOG_PITCH_END, FOG_OPACITY_THRESHOLD, getFogOpacityAtLngLat, getFogOpacityAtMercCoord, getFovAdjustedFogRange, getFogOpacityForBounds} from './fog_helpers';
+import {FOG_PITCH_START, FOG_PITCH_END, FOG_OPACITY_THRESHOLD, getFogOpacityAtLngLat, getFogOpacityAtMercCoord, getFogOpacityForBounds} from './fog_helpers';
 import {number as interpolate, array as vecInterpolate} from '../style-spec/util/interpolate';
 import {globeToMercatorTransition} from '../geo/projection/globe_util';
 import EXTENT from '../style-spec/data/extent';
@@ -64,7 +64,12 @@ class Fog extends Evented {
             "vertical-range": new DataConstantProperty(fogReference["vertical-range"]),
         });
 
-        this._transitionable = new Transitionable(fogProperties, scope, new Map(configOptions));
+        // Hold a live reference to the shared `configOptions` Map (matching the
+        // pattern used by `StyleLayer`'s `Layout`/`Transitionable`). Property
+        // expressions read config values via `EvaluationContext.options.get(fqid)`,
+        // so as long as the Map identity is stable, runtime mutations to config
+        // are picked up automatically without an explicit refresh step.
+        this._transitionable = new Transitionable(fogProperties, scope, configOptions);
         this.set(fogOptions, configOptions);
         this._transitioning = this._transitionable.untransitioned();
         this._transform = transform;
@@ -77,13 +82,15 @@ class Fog extends Evented {
         const isGlobe = tr.projection.name === 'globe';
         const transitionT = globeToMercatorTransition(tr.zoom);
         const range = this.properties.get('range');
-        const globeFixedFogRange = [0.5, 3];
+        const globeFixedFogRange = [2, 4.5];
+        const shift = 0.5 / Math.tan(tr._fov * 0.5);
+        const fovAdjustedRange: [number, number] = [range[0] + shift, range[1] + shift];
         return {
 
             range: isGlobe ? [
-                interpolate(globeFixedFogRange[0], range[0], transitionT),
-                interpolate(globeFixedFogRange[1], range[1], transitionT)
-            ] : range,
+                interpolate(globeFixedFogRange[0], fovAdjustedRange[0], transitionT),
+                interpolate(globeFixedFogRange[1], fovAdjustedRange[1], transitionT)
+            ] : fovAdjustedRange,
 
             horizonBlend: this.properties.get('horizon-blend'),
 
@@ -92,7 +99,7 @@ class Fog extends Evented {
     }
 
     get(): FogSpecification {
-        return this._transitionable.serialize() as FogSpecification;
+        return this._transitionable.serialize();
     }
 
     set(fog?: FogSpecification, configOptions?: ConfigOptions | null, options: StyleSetterOptions = {}) {
@@ -100,7 +107,7 @@ class Fog extends Evented {
             return;
         }
 
-        const properties = Object.assign({}, fog);
+        const properties = {...fog};
         for (const name of Object.keys(fogReference)) {
             if (properties[name] === undefined) {
                 properties[name] = fogReference[name].default;
@@ -117,8 +124,7 @@ class Fog extends Evented {
         const fogColor = (this.properties && this.properties.get('color')) || 1.0;
         const isGlobe = this._transform.projection.name === 'globe';
         const pitchFactor = isGlobe ? 1.0 : smoothstep(FOG_PITCH_START, FOG_PITCH_END, pitch);
-        // @ts-expect-error - TS2339 - Property 'a' does not exist on type 'unknown'.
-        return pitchFactor * fogColor.a;
+        return pitchFactor * (fogColor as Color).a;
     }
 
     getOpacityAtLatLng(lngLat: LngLat, transform: Transform): number {
@@ -140,11 +146,11 @@ class Fog extends Evented {
         return getFogOpacityForBounds(this.state, matrix, x0, y0, x1, y1, this._transform);
     }
 
-    getFovAdjustedRange(fov: number): [number, number] {
+    getRangeForProjection(): [number, number] {
         // We can return any arbitrary range because we expect opacity=0 to clean it up
         if (!this._transform.projection.supportsFog) return [0, 1];
 
-        return getFovAdjustedFogRange(this.state, fov);
+        return this.state.range;
     }
 
     isVisibleOnFrustum(frustum: Frustum): boolean {
@@ -163,7 +169,7 @@ class Fog extends Evented {
                 flatPoint = farPoint;
             } else {
                 const nearPoint = frustum.points[pointIdx - 4];
-                flatPoint = vecInterpolate(nearPoint as number[], farPoint as number[], nearPoint[2] / (nearPoint[2] - farPoint[2])) as vec3;
+                flatPoint = vecInterpolate(nearPoint as number[], farPoint as number[], nearPoint[2] / (nearPoint[2] - farPoint[2]));
             }
 
             if (getFogOpacityAtMercCoord(this.state, flatPoint[0], flatPoint[1], 0, this._transform) >= FOG_OPACITY_THRESHOLD) {
@@ -175,7 +181,7 @@ class Fog extends Evented {
     }
 
     updateConfig(configOptions?: ConfigOptions | null) {
-        this._transitionable.setTransitionOrValue(this._options, new Map(configOptions));
+        this._transitionable.setTransitionOrValue(this._options, configOptions);
     }
 
     updateTransitions(parameters: TransitionParameters) {
@@ -201,11 +207,11 @@ class Fog extends Evented {
             return false;
         }
 
-        return emitValidationErrors(this, validate.call(validateStyle, Object.assign({
+        return emitValidationErrors(this, validate.call(validateStyle, {
             value,
             style: {glyphs: true, sprite: true},
             styleSpec
-        })));
+        }));
     }
 }
 

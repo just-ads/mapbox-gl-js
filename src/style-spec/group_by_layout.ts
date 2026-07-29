@@ -69,7 +69,7 @@ export default function groupByLayout(
         [id: string]: string;
     },
 ): Array<Array<LayerSpecification>> {
-    const groups: Record<string, LayerSpecification[]> = {};
+    const groups = Object.create(null) as Record<string, LayerSpecification[]>;
 
     for (let i = 0; i < layers.length; i++) {
         const layer = layers[i];
@@ -81,12 +81,18 @@ export default function groupByLayout(
                 k = layer.id;
             } else {
                 k =  getKey(layer);
-                // The usage of "line-progress" inside "line-width" makes the property act like a layout property.
-                // We need to split it from the group to avoid conflicts in the bucket creation.
+                // The usage of "line-progress" inside "line-width" or "line-emissive-strength"
+                // makes the property act like a layout property: the bucket needs to evaluate it
+                // per-vertex against the first layer's paint, so layers that disagree on whether
+                // line-progress is used can't share a bucket.
                 if (layer.type === 'line' && layer["paint"]) {
                     const lineWidth = layer["paint"]['line-width'];
                     if (containsKey(lineWidth, 'line-progress')) {
                         k += `/${stringify(layer["paint"]['line-width'])}`;
+                    }
+                    const lineEmissiveStrength = layer["paint"]['line-emissive-strength'];
+                    if (containsKey(lineEmissiveStrength, 'line-progress')) {
+                        k += `/${stringify(layer["paint"]['line-emissive-strength'])}`;
                     }
                 }
             }

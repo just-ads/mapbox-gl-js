@@ -25,17 +25,15 @@
 <div id="stats"></div>
 </div>
 
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
-
-mapboxgl.accessToken = getAccessToken();
-<script>
 
 const style = document.getElementById('style');
 let curStyle = style.value;
 
 var map = window.map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     zoom: 12,

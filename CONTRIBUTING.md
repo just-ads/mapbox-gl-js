@@ -75,7 +75,7 @@ npm install
 Start the debug server
 
 ```bash
-MAPBOX_ACCESS_TOKEN={YOUR_MAPBOX_ACCESS_TOKEN} npm run start-debug
+MAPBOX_ACCESS_TOKEN={YOUR_MAPBOX_ACCESS_TOKEN} npm start
 ```
 
 Open the debug page at [http://localhost:9966/debug/](http://localhost:9966/debug/)
@@ -86,7 +86,7 @@ A standalone build allows you to turn the contents of this repository into `mapb
 
 To create a standalone build, run
 ```bash
-npm run build-prod-min
+npm run build-prod
 npm run build-css
 ```
 
@@ -139,7 +139,8 @@ Here is a recommended way to get setup:
 * We use [Copybara](https://github.com/google/copybara) to sync changes between this public GitHub repository and the Mapbox internal codebase
 * After your PR is approved and reviewed, the GL JS team manually merges it into the Mapbox internal codebase
 * Once merged internally, Copybara automatically syncs the changes back to this public repository
-* **Note:** Your PR will appear as "Closed" rather than "Merged" on GitHub after it has been merged internally. This is expected - the changes are included via the Copybara sync process
+* **Note:** Your PR will appear as "Closed" rather than "Merged" on GitHub after it has been merged internally. This is expected - the changes are included via our internal sync process
+* **PR Policy Check:** A required status check prevents direct merges to this repository. This is intentional - your PR will be reviewed here first, then imported and reviewed internally if approved. Changes are synced back to this repository after internal merge.
 
 ```mermaid
 flowchart TB

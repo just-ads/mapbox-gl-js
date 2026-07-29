@@ -1,18 +1,18 @@
 import {vec2, vec3} from "gl-matrix";
 import {register} from '../../src/util/web_worker_transfer';
-import assert from 'assert';
+import assert from '../../src/style-spec/util/assert';
 import {ElevationFeatureParser} from "./elevation_feature_parser";
 import {tileToMeter} from "../../src/geo/mercator_coordinate";
 import {Ray2D} from "../../src/util/primitives";
 import {clamp, smoothstep} from "../../src/util/util";
-import {MARKUP_ELEVATION_BIAS, PROPERTY_ELEVATION_ID} from "./elevation_constants";
+import {MARKUP_ELEVATION_BIAS} from "./elevation_constants";
 import EXTENT from "../../src/style-spec/data/extent";
 import Point from "@mapbox/point-geometry";
 import {number as interpolate} from '../../src/style-spec/util/interpolate';
+import {mulberry32} from '../../src/style-spec/util/random';
 
 import type {VectorTileLayer} from "@mapbox/vector-tile";
 import type {CanonicalTileID} from "../../src/source/tile_id";
-import type {BucketFeature} from "../../src/data/bucket";
 import type {Bounds} from "../../src/style-spec/util/geometry_util";
 
 export interface Vertex {
@@ -436,14 +436,6 @@ export abstract class ElevationFeatures {
         return elevationFeatures;
     }
 
-    static getElevationFeature(feature: BucketFeature, elevationFeatures?: ElevationFeature[]): ElevationFeature | undefined {
-        if (!elevationFeatures) return undefined;
-
-        const value = +feature.properties[PROPERTY_ELEVATION_ID];
-        if (Number.isNaN(value)) return undefined;
-
-        return elevationFeatures.find(f => f.id === value);
-    }
 }
 
 export class ElevationFeatureSampler {
@@ -490,3 +482,9 @@ export class ElevationFeatureSampler {
 }
 
 register(ElevationFeature, 'ElevationFeature');
+
+export function elevationIdDebugColor(id: number): [number, number, number] {
+    if (id === 0) return [0, 0, 0];
+    const rng = mulberry32(id);
+    return [rng(), rng(), rng()];
+}

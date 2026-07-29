@@ -1,8 +1,5 @@
-import assert from 'assert';
-import * as martinez from 'martinez-polygon-clipping';
+import assert from '../style-spec/util/assert';
 import Point from '@mapbox/point-geometry';
-
-import type {EdgeIterator} from '../../3d-style/elevation/elevation_feature';
 
 export type ClippedPolygon = {
     polygon: Array<Array<Point>>;
@@ -19,16 +16,16 @@ function clipPolygon(polygons: PolygonArray, clipAxis1: number, clipAxis2: numbe
         ring.push(new Point(ax + (bx - ax) * ((y - ay) / (by - ay)), y));
     };
 
-    const polygonsClipped = [];
+    const polygonsClipped: PolygonArray = [];
     const intersect = axis === 0 ? intersectX : intersectY;
     for (const polygon of polygons) {
-        const polygonClipped = [];
+        const polygonClipped: Array<Array<Point>> = [];
         for (const ring of polygon) {
             if (ring.length <= 2) {
                 continue;
             }
 
-            const clipped = [];
+            const clipped: Array<Point> = [];
             for (let i = 0; i < ring.length - 1; i++) {
                 const ax = ring[i].x;
                 const ay = ring[i].y;
@@ -38,36 +35,30 @@ function clipPolygon(polygons: PolygonArray, clipAxis1: number, clipAxis2: numbe
                 const b = axis === 0 ? bx : by;
                 if (a < clipAxis1) {
                     if (b > clipAxis1) {
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                         intersect(clipped, ax, ay, bx, by, clipAxis1);
                     }
                 } else if (a > clipAxis2) {
                     if (b < clipAxis2) {
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                         intersect(clipped, ax, ay, bx, by, clipAxis2);
                     }
                 } else {
                     clipped.push(ring[i]);
                 }
                 if (b < clipAxis1 && a >= clipAxis1) {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     intersect(clipped, ax, ay, bx, by, clipAxis1);
                 }
                 if (b > clipAxis2 && a <= clipAxis2) {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                     intersect(clipped, ax, ay, bx, by, clipAxis2);
                 }
             }
 
-            let last = ring[ring.length - 1];
+            let last = ring.at(-1);
             const a = axis === 0 ? last.x : last.y;
             if (a >= clipAxis1 && a <= clipAxis2) {
                 clipped.push(last);
             }
             if (clipped.length) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-                last = clipped[clipped.length - 1];
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                last = clipped.at(-1);
                 if (clipped[0].x !== last.x || clipped[0].y !== last.y) {
                     clipped.push(clipped[0]);
                 }
@@ -79,7 +70,6 @@ function clipPolygon(polygons: PolygonArray, clipAxis1: number, clipAxis2: numbe
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return polygonsClipped;
 }
 
@@ -91,10 +81,9 @@ export function gridSubdivision(
     padding: number | null | undefined = 0.0,
     splitFn: ((axis: number, min: number, max: number) => number) | null,
 ): Array<ClippedPolygon> {
-    const outPolygons = [];
+    const outPolygons: Array<ClippedPolygon> = [];
 
     if (!polygons.length || !gridSizeX || !gridSizeY) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return outPolygons;
     }
 
@@ -109,7 +98,7 @@ export function gridSubdivision(
 
     const initialSplits = hSplits - vSplits;
 
-    const splits = [];
+    const splits: Array<number> = [];
     for (let i = 0; i < Math.abs(initialSplits); i++) {
         splits.push(initialSplits > 0 ? 0 : 1);
     }
@@ -125,11 +114,10 @@ export function gridSubdivision(
     split = clipPolygon(split, bounds[0].x - padding, bounds[1].x + padding, 0);
 
     if (!split.length) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return outPolygons;
     }
 
-    const stack = [];
+    const stack: Array<{polygons: PolygonArray; bounds: [Point, Point]; depth: number}> = [];
     if (splits.length) {
         stack.push({polygons: split, bounds, depth: 0});
     } else {
@@ -137,49 +125,33 @@ export function gridSubdivision(
     }
 
     while (stack.length) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const frame = stack.pop();
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         assert(frame.polygons.length > 0);
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const depth = frame.depth;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const axis = splits[depth];
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const bboxMin = frame.bounds[0];
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const bboxMax = frame.bounds[1];
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const splitMin = axis === 0 ? bboxMin.x : bboxMin.y;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         const splitMax = axis === 0 ? bboxMax.x : bboxMax.y;
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         const splitMid = splitFn ? splitFn(axis, splitMin, splitMax) : 0.5 * (splitMin + splitMax);
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
         const lclip = clipPolygon(frame.polygons, splitMin - padding, splitMid + padding, axis);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
         const rclip = clipPolygon(frame.polygons, splitMid - padding, splitMax + padding, axis);
 
         if (lclip.length) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
             const bbMaxX = axis === 0 ? splitMid : bboxMax.x;
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
             const bbMaxY = axis === 1 ? splitMid : bboxMax.y;
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             const bbMax = new Point(bbMaxX, bbMaxY);
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
             const lclipBounds: [Point, Point] = [bboxMin, bbMax];
 
             if (splits.length > depth + 1) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 stack.push({polygons: lclip, bounds: lclipBounds, depth: depth + 1});
             } else {
                 addResult(lclip, lclipBounds);
@@ -187,95 +159,21 @@ export function gridSubdivision(
         }
 
         if (rclip.length) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
             const bbMinX = axis === 0 ? splitMid : bboxMin.x;
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
             const bbMinY = axis === 1 ? splitMid : bboxMin.y;
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             const bbMin = new Point(bbMinX, bbMinY);
 
-            const rclipBounds = [bbMin, bboxMax];
+            const rclipBounds: [Point, Point] = [bbMin, bboxMax];
 
             if (splits.length > depth + 1) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 stack.push({polygons: rclip, bounds: rclipBounds, depth: depth + 1});
             } else {
-                // @ts-expect-error - TS2345 - Argument of type 'any[]' is not assignable to parameter of type '[Point, Point]'.
                 addResult(rclip, rclipBounds);
             }
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return outPolygons;
 }
 
-export function clip(subjectPolygon: Point[][], clipRing: Point[]): Point[][][] {
-    const geom = toMultiPolygon(subjectPolygon);
-    const clipGeom = toMultiPolygon([clipRing]);
-
-    const polygons = martinez.intersection(geom, clipGeom) as martinez.MultiPolygon;
-    if (polygons == null) return [];
-
-    return fromMultiPolygon(polygons);
-}
-
-export function polygonSubdivision(subjectPolygon: Point[][], subdivisionEdges: EdgeIterator): Point[][][] {
-    // Perform clipping temporarily in a 32bit space where few unit wide polygons are just
-    // lines when scaled back to 16bit.
-    const scale = 1 << 16;
-    let polygons = toMultiPolygon(subjectPolygon, scale);
-
-    const clipGeometry: martinez.Polygon[] = [];
-
-    // Split the polygon using edges from the iterator
-    for (; subdivisionEdges.valid(); subdivisionEdges.next()) {
-        const [a, b] = subdivisionEdges.get();
-
-        const ax = a.x * scale;
-        const ay = a.y * scale;
-        const bx = b.x * scale;
-        const by = b.y * scale;
-
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (len === 0) continue;
-
-        // Expand the polygon towards the perpendicular vector by few units
-        const shiftX = Math.trunc(dy / len * 3.0);
-        const shiftY = -Math.trunc(dx / len * 3.0);
-
-        clipGeometry.push([
-            [
-                [ax, ay],
-                [bx, by],
-                [bx + shiftX, by + shiftY],
-                [ax + shiftX, ay + shiftY],
-                [ax, ay]
-            ]
-        ]);
-    }
-
-    if (clipGeometry.length > 0) {
-        polygons = martinez.diff(polygons, clipGeometry) as martinez.MultiPolygon;
-    }
-
-    return fromMultiPolygon(polygons, 1 / scale);
-}
-
-function toMultiPolygon(polygon: Point[][], scale: number = 1.0): martinez.MultiPolygon {
-    return [polygon.map(ring => ring.map(p => [p.x * scale, p.y * scale]))];
-}
-
-function fromMultiPolygon(geometry: martinez.MultiPolygon, scale: number = 1.0): Point[][][] {
-    return geometry.map(poly => poly.map((ring, index) => {
-        const r = ring.map(p => new Point(p[0] * scale, p[1] * scale).round());
-        if (index > 0) {
-            // Reverse holes
-            r.reverse();
-        }
-        return r;
-    }));
-}

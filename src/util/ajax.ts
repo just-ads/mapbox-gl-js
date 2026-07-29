@@ -1,13 +1,9 @@
-import {warnOnce, isWorker} from './util';
-import {isMapboxHTTPURL, hasCacheDefeatingSku} from './mapbox_url';
 import config from './config';
-import assert from 'assert';
-import {cacheGet, cachePut} from './tile_request_cache';
+import assert from '../style-spec/util/assert';
 import webpSupported from './webp_supported';
-import {getQueryParameter, getQueryParameters, removeQueryParameters} from "./url";
-
-import type {Callback} from '../types/callback';
-import type {Cancelable} from '../types/cancelable';
+import {warnOnce, isWorker} from './util';
+import {cacheGet, cachePut} from './tile_request_cache';
+import {isMapboxHTTPURL, hasCacheDefeatingSku} from './mapbox_url';
 
 /**
  * The type of a resource.
@@ -30,9 +26,7 @@ const ResourceType = {
 
 export {ResourceType};
 
-if (typeof Object.freeze == 'function') {
-    Object.freeze(ResourceType);
-}
+Object.freeze(ResourceType);
 
 /**
  * A `RequestParameters` object to be returned from Map.options.transformRequest callbacks.
@@ -79,21 +73,33 @@ export type ResponseCallback<T> = (
     headers?: Headers
 ) => void;
 
+type RequestResponse<T> = {data: T; headers: Headers};
+
 export class AJAXError extends Error {
-    status: number;
     url: string;
-    constructor(message: string, status: number, url: string) {
-        if (status === 401 && isMapboxHTTPURL(url)) {
-            message += ': you may have provided an invalid Mapbox access token. See https://docs.mapbox.com/api/overview/#access-tokens-and-token-scopes';
-        }
-        super(message);
-        this.status = status;
+    status: number;
+    statusText: string;
+
+    constructor(statusText: string, status: number, url: string) {
+        super();
         this.url = url;
+        this.statusText = statusText;
+        this.status = status;
+    }
+
+    override get message(): string {
+        return this.status === 401 && isMapboxHTTPURL(this.url) ?
+            `${this.statusText}: you may have provided an invalid Mapbox access token. See https://docs.mapbox.com/api/guides/#access-tokens-and-token-scopes` :
+            this.statusText;
     }
 
     override toString(): string {
         return `${this.name}: ${this.message} (${this.status}): ${this.url}`;
     }
+}
+
+export function isHttpNotFound(err: Error | AJAXError): boolean {
+    return typeof err === 'object' && err !== null && 'status' in err && err.status === 404;
 }
 
 // Ensure that we're sending the correct referrer from blob URL worker bundles.
@@ -104,28 +110,28 @@ export const getReferrer: () => string = isWorker() ?
     () => (self as typeof self & {worker: {referrer: string}}).worker.referrer :
     () => (location.protocol === 'blob:' ? parent : self).location.href;
 
+const PROTOCOL_RE = /^\w+:/;
+const NEWLINE_RE = /[\r\n]+/;
+
 // Determines whether a URL is a file:// URL. This is obviously the case if it begins
 // with file://. Relative URLs are also file:// URLs iff the original document was loaded
 // via a file:// URL.
-const isFileURL = (url: string) => /^file:/.test(url) || (/^file:/.test(getReferrer()) && !/^\w+:/.test(url));
-const CACHE_KEY = 'xzcacheurl';
-const SECOND_CACHE_KEY = 'xzsecondcacheurl';
-const PERS_CACHE_KEY = 'xzpersistence';
-const CACHE_GROUP = 'tilecachegroup';
+const isFileURL = (url: string) => url.startsWith('file:') || (getReferrer().startsWith('file:') && !PROTOCOL_RE.test(url));
 
-function makeFetchRequest(requestParameters: RequestParameters, callback: ResponseCallback<unknown>): Cancelable {
-    const controller = new AbortController();
+async function readResponse<T>(requestParameters: RequestParameters, response: Response): Promise<RequestResponse<T>> {
+    let data: T;
+    if (requestParameters.type === 'arrayBuffer') {
+        data = await response.arrayBuffer() as unknown as T;
+    } else if (requestParameters.type === 'json') {
+        data = await response.json() as T;
+    } else {
+        data = await response.text() as unknown as T;
+    }
 
-    const queryParameters = getQueryParameters(requestParameters.url, [CACHE_KEY, SECOND_CACHE_KEY, PERS_CACHE_KEY, CACHE_GROUP]);
-    const {
-        xzcacheurl: cacheUrl,
-        xzsecondcacheurl: secondCacheUrl,
-        xzpersistence: persistence,
-        tilecachegroup: cacheGroup
-    } = queryParameters || {};
+    return {data, headers: response.headers};
+}
 
-    requestParameters.url = removeQueryParameters(requestParameters.url, [CACHE_KEY, SECOND_CACHE_KEY, PERS_CACHE_KEY, CACHE_GROUP]);
-
+async function makeFetchRequest<T>(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<T>> {
     const request = new Request(requestParameters.url, {
         method: requestParameters.method || 'GET',
         body: requestParameters.body,
@@ -133,195 +139,146 @@ function makeFetchRequest(requestParameters: RequestParameters, callback: Respon
         headers: requestParameters.headers,
         referrer: getReferrer(),
         referrerPolicy: requestParameters.referrerPolicy,
-        signal: controller.signal
+        signal
     });
-    let complete = false;
-    let aborted = false;
 
-    const cacheSearch = (queryParameters && (queryParameters[CACHE_KEY] || queryParameters[SECOND_CACHE_KEY])) || hasCacheDefeatingSku(request.url);
-    const cacheIgnoringSave = request.url.indexOf('ignoring=save') > 0;
+    const cacheIgnoringSearch = hasCacheDefeatingSku(request.url);
 
     if (requestParameters.type === 'json') {
         request.headers.set('Accept', 'application/json');
     }
 
-    const validateOrFetch = (err?: Error | null, cachedResponse?: Response | null, responseIsFresh?: boolean | null) => {
-        if (aborted) return;
-
-        if (err) {
-            // Do fetch in case of cache error.
+    if (cacheIgnoringSearch) {
+        let cached: {response: Response; fresh: boolean} | null = null;
+        try {
+            cached = await cacheGet(request);
+        } catch (err) {
             // HTTP pages in Edge trigger a security error that can be ignored.
-            if (err.message !== 'SecurityError') {
-                warnOnce(err.toString());
-            }
+            if ((err as Error).message !== 'SecurityError') warnOnce((err as Error).toString());
         }
-
-        if (cachedResponse && responseIsFresh) {
-            return finishRequest(cachedResponse);
+        if (cached && cached.fresh) {
+            if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+            return readResponse<T>(requestParameters, cached.response);
         }
-
-        const requestTime = Date.now();
-
-        fetch(request).then(response => {
-            const extraStatus = +response.headers.get('Status');
-            if (extraStatus && extraStatus !== 200) {
-                return callback(new AJAXError(`自定义请求错误${extraStatus}`, extraStatus, requestParameters.url));
-            } else if (response.ok) {
-                const cacheableResponse = cacheSearch && !cacheIgnoringSave ? response.clone() : null;
-                return finishRequest(response, cacheableResponse, requestTime);
-            } else {
-                return response.json().then(json => {
-                    return callback(new AJAXError(json.message, response.status, requestParameters.url));
-                }).catch(() => {
-                    return callback(new AJAXError(response.statusText, response.status, requestParameters.url));
-                });
-            }
-        }).catch((error: Error) => {
-            if (error.name === 'AbortError') {
-                // silence expected AbortError
-                return;
-            }
-            callback(new Error(`${error.message} ${requestParameters.url}`));
-        });
-    };
-
-    const finishRequest = (response: Response, cacheableResponse?: Response | null, requestTime?: number | null) => {
-        (
-            requestParameters.type === 'arrayBuffer' ? response.arrayBuffer() :
-            requestParameters.type === 'json' ? response.json() :
-            response.text()
-        ).then(result => {
-            if (aborted) return;
-            if (cacheableResponse && requestTime) {
-                // The response needs to be inserted into the cache after it has completely loaded.
-                // Until it is fully loaded there is a chance it will be aborted. Aborting while
-                // reading the body can cause the cache insertion to error. We could catch this error
-                // in most browsers but in Firefox it seems to sometimes crash the tab. Adding
-                // it to the cache here avoids that error.
-                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-                persistence && request.headers.set('Persistence', 'true');
-                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-                cacheGroup && request.headers.set('CacheGroup', cacheGroup);
-                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-                cacheUrl && request.headers.set('CacheUrl', cacheUrl);
-                cachePut(request, cacheableResponse, requestTime);
-            }
-            complete = true;
-            callback(null, result, response.headers);
-        }).catch((err: Error) => {
-            if (!aborted) callback(new Error(err.message));
-        });
-    };
-
-    if (cacheSearch) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        cacheUrl && request.headers.set('CacheUrl', cacheUrl);
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        cacheGroup && request.headers.set('CacheGroup', cacheGroup);
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        persistence && request.headers.set('Persistence', 'true');
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        secondCacheUrl && request.headers.set('SecondCacheUrl', secondCacheUrl);
-        cacheGet(request, validateOrFetch);
-    } else {
-        validateOrFetch(null, null);
     }
 
-    return {
-        cancel: () => {
-            aborted = true;
-            if (!complete) controller.abort();
-        }
-    };
+    const requestTime = Date.now();
+    let fetched: Response;
+    try {
+        fetched = await fetch(request);
+    } catch (err) {
+        // Preserve abort as-is so callers can filter it; for genuine network failures keep
+        // the request URL in the message, matching the pre-Promise diagnostics.
+        if ((err as Error).name === 'AbortError') throw err;
+        throw new Error(`${(err as Error).message} ${requestParameters.url}`, {cause: err});
+    }
+
+    if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (!fetched.ok) throw new AJAXError(fetched.statusText, fetched.status, requestParameters.url);
+
+    // Clone before reading the body; cache the clone after the read completes. Aborting
+    // mid-read can crash the cache insertion in Firefox, so the write must follow the full
+    // read. Fire-and-forget: it must not block handing data to the renderer.
+    const clonedResponse = cacheIgnoringSearch ? fetched.clone() : null;
+    const result = await readResponse<T>(requestParameters, fetched);
+    if (clonedResponse) {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        cachePut(request, clonedResponse, requestTime);
+    }
+    return result;
 }
 
-function makeXMLHttpRequest(requestParameters: RequestParameters, callback: ResponseCallback<unknown>): Cancelable {
-    const xhr: XMLHttpRequest = new XMLHttpRequest();
-    xhr.open(requestParameters.method || 'GET', requestParameters.url, true);
-    if (requestParameters.type === 'arrayBuffer') {
-        xhr.responseType = 'arraybuffer';
-    }
-    for (const k in requestParameters.headers) {
-        xhr.setRequestHeader(k, requestParameters.headers[k]);
-    }
-    if (requestParameters.type === 'json') {
-        xhr.responseType = 'text';
-        xhr.setRequestHeader('Accept', 'application/json');
-    }
-    xhr.withCredentials = requestParameters.credentials === 'include';
-    xhr.onerror = () => {
-        callback(new Error(xhr.statusText));
-    };
-    xhr.onload = () => {
-        if (((xhr.status >= 200 && xhr.status < 300) || xhr.status === 0) && xhr.response !== null) {
-            let data: unknown = xhr.response;
-            if (requestParameters.type === 'json') {
-                // We're manually parsing JSON here to get better error messages.
-                try {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                    data = JSON.parse(xhr.response);
-                } catch (err) {
-                    return callback(err as Error);
+async function makeXMLHttpRequest<T>(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<T>> {
+    return new Promise<RequestResponse<T>>((resolve, reject) => {
+        const xhr: XMLHttpRequest = new XMLHttpRequest();
+
+        const onAbort = () => {
+            signal.removeEventListener('abort', onAbort);
+            xhr.abort();
+            reject(new DOMException('Aborted', 'AbortError'));
+        };
+
+        if (signal) {
+            signal.addEventListener('abort', onAbort);
+        }
+
+        xhr.open(requestParameters.method || 'GET', requestParameters.url, true);
+        if (requestParameters.type === 'arrayBuffer') {
+            xhr.responseType = 'arraybuffer';
+        }
+        for (const k in requestParameters.headers) {
+            xhr.setRequestHeader(k, requestParameters.headers[k]);
+        }
+        if (requestParameters.type === 'json') {
+            xhr.responseType = 'text';
+            xhr.setRequestHeader('Accept', 'application/json');
+        }
+        xhr.withCredentials = requestParameters.credentials === 'include';
+
+        xhr.onerror = () => {
+            if (signal) signal.removeEventListener('abort', onAbort);
+            reject(new Error(xhr.statusText));
+        };
+
+        xhr.onload = () => {
+            if (signal) signal.removeEventListener('abort', onAbort);
+            if (((xhr.status >= 200 && xhr.status < 300) || xhr.status === 0) && xhr.response !== null) {
+                let data: unknown = xhr.response;
+                if (requestParameters.type === 'json') {
+                    // We're manually parsing JSON here to get better error messages.
+                    try {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                        data = JSON.parse(xhr.response);
+                    } catch (err) {
+                        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+                        reject(err as Error);
+                        return;
+                    }
                 }
+                const headers = new Headers();
+                xhr.getAllResponseHeaders().trim().split(NEWLINE_RE).forEach(line => {
+                    const parts = line.split(': ');
+                    const key = parts.shift();
+                    const value = parts.join(': ');
+                    if (key) headers.set(key, value);
+                });
+                resolve({data: data as T, headers});
+            } else {
+                reject(new AJAXError(xhr.statusText, xhr.status, requestParameters.url));
             }
-            const headersObject = new Headers();
-            const headers = xhr.getAllResponseHeaders();
-            headers.trim().split(/[\r\n]+/).forEach(line => {
-                const parts = line.split(': ');
-                const header = parts.shift();
-                const value = parts.join(': ');
-                headersObject.append(header, value);
-            });
-            callback(null, data, headersObject);
-        } else {
-            let message = xhr.statusText;
-            try {
-                message = JSON.parse(xhr.response).message;
-            } catch (e) { /* empty */ }
-            callback(new AJAXError(message, xhr.status, requestParameters.url));
-        }
-    };
-    xhr.send(requestParameters.body);
-    return {cancel: () => xhr.abort()};
+        };
+
+        xhr.send(requestParameters.body);
+    });
 }
 
-export const makeRequest = function (requestParameters: RequestParameters, callback: ResponseCallback<unknown>): Cancelable {
-    // We're trying to use the Fetch API if possible. However, in some situations we can't use it:
-    // - Safari exposes AbortController, but it doesn't work actually abort any requests in
-    //   older versions (see https://bugs.webkit.org/show_bug.cgi?id=174980#c2). In this case,
-    //   we dispatch the request to the main thread so that we can get an accurate referrer header.
-    // - Requests for resources with the file:// URI scheme don't work with the Fetch API either. In
-    //   this case we unconditionally use XHR on the current thread since referrers don't matter.
-    if (!isFileURL(requestParameters.url)) {
-        if (self.fetch && self.Request && self.AbortController && Request.prototype.hasOwnProperty('signal')) {
-            return makeFetchRequest(requestParameters, callback);
-        }
-        if (isWorker(self) && self.worker.actor) {
-            const queueOnMainThread = true;
-            return self.worker.actor.send('getResource', requestParameters, callback, undefined, queueOnMainThread);
-        }
+async function makeRequest<T>(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<T>> {
+    if (signal && signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
     }
-    return makeXMLHttpRequest(requestParameters, callback);
-};
 
-export const getJSON = function (requestParameters: RequestParameters, callback: ResponseCallback<unknown>): Cancelable {
-    return makeRequest(Object.assign(requestParameters, {type: 'json'}), callback);
-};
+    if (isFileURL(requestParameters.url)) {
+        return makeXMLHttpRequest<T>(requestParameters, signal);
+    }
 
-export const getArrayBuffer = function (
-    requestParameters: RequestParameters,
-    callback: ResponseCallback<ArrayBuffer>,
-): Cancelable {
-    return makeRequest(Object.assign(requestParameters, {type: 'arrayBuffer'}), callback);
-};
+    return makeFetchRequest<T>(requestParameters, signal);
+}
 
-export const postData = function (requestParameters: RequestParameters, callback: ResponseCallback<string>): Cancelable {
-    return makeRequest(Object.assign(requestParameters, {method: 'POST'}), callback);
-};
+export async function getJSON<T = unknown>(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<T>> {
+    return makeRequest<T>(Object.assign(requestParameters, {type: 'json'}), signal);
+}
 
-export const getData = function (requestParameters: RequestParameters, callback: ResponseCallback<string>): Cancelable {
-    return makeRequest(Object.assign(requestParameters, {method: 'GET'}), callback);
-};
+export async function getArrayBuffer(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<ArrayBuffer>> {
+    return makeRequest<ArrayBuffer>(Object.assign(requestParameters, {type: 'arrayBuffer'}), signal);
+}
+
+export async function postData(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<string>> {
+    return makeRequest<string>(Object.assign(requestParameters, {method: 'POST'}), signal);
+}
+
+export async function getData(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<string>> {
+    return makeRequest<string>(Object.assign(requestParameters, {method: 'GET'}), signal);
+}
 
 function sameOrigin(url: string) {
     const a: HTMLAnchorElement = document.createElement('a');
@@ -329,45 +286,56 @@ function sameOrigin(url: string) {
     return a.protocol === location.protocol && a.host === location.host;
 }
 
-const transparentPngUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQYV2NgAAIAAAUAAarVyFEAAAAASUVORK5CYII=';
-
-export function arrayBufferToImage(data: ArrayBuffer, callback: Callback<HTMLImageElement>) {
-    const img: HTMLImageElement = new Image();
-    img.onload = () => {
-        callback(null, img);
-        URL.revokeObjectURL(img.src);
-        // prevent image dataURI memory leak in Safari;
-        // but don't free the image immediately because it might be uploaded in the next frame
-        // https://github.com/mapbox/mapbox-gl-js/issues/10226
-        img.onload = null;
-        requestAnimationFrame(() => { img.src = transparentPngUrl; });
-    };
-    img.onerror = () => callback(new Error('Could not load image. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.'));
-    const blob: Blob = new Blob([new Uint8Array(data)], {type: 'image/png'});
-    img.src = data.byteLength ? URL.createObjectURL(blob) : transparentPngUrl;
-}
-
-function arrayBufferToImageBitmap(data: ArrayBuffer, callback: Callback<ImageBitmap>) {
-    const blob: Blob = new Blob([new Uint8Array(data)], {type: 'image/png'});
-    createImageBitmap(blob).then((imgBitmap) => {
-        callback(null, imgBitmap);
-    }).catch((e) => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        callback(new Error(`Could not load image because of ${e.message}. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.`));
-    });
-}
-
-let imageQueue, numImageRequests;
+// Limit concurrent image loads to help with raster sources performance on big screens.
+// See https://github.com/mapbox/mapbox-gl-js/issues/1470.
+let imageRequestQueue: Array<() => void>;
+let activeImageRequests: number;
 export const resetImageRequestQueue = () => {
-    imageQueue = [];
-    numImageRequests = 0;
+    imageRequestQueue = [];
+    activeImageRequests = 0;
 };
 resetImageRequestQueue();
 
-export const getImage = function (
-    requestParameters: RequestParameters,
-    callback: ResponseCallback<HTMLImageElement | ImageBitmap>,
-): Cancelable {
+function acquireImageRequest(signal?: AbortSignal): Promise<() => void> {
+    return new Promise((resolve, reject) => {
+        if (signal && signal.aborted) {
+            reject(new DOMException('Aborted', 'AbortError'));
+            return;
+        }
+
+        const release = () => {
+            assert(activeImageRequests > 0);
+            const next = imageRequestQueue.shift();
+            if (next) {
+                next();
+            } else {
+                activeImageRequests--;
+            }
+        };
+
+        if (activeImageRequests < config.MAX_PARALLEL_IMAGE_REQUESTS) {
+            activeImageRequests++;
+            resolve(release);
+            return;
+        }
+
+        const dequeue = () => {
+            if (signal) signal.removeEventListener('abort', cancel);
+            resolve(release);
+        };
+
+        const cancel = () => {
+            const index = imageRequestQueue.indexOf(dequeue);
+            if (index !== -1) imageRequestQueue.splice(index, 1);
+            reject(new DOMException('Aborted', 'AbortError'));
+        };
+
+        if (signal) signal.addEventListener('abort', cancel);
+        imageRequestQueue.push(dequeue);
+    });
+}
+
+export async function getImage(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<ImageBitmap>> {
     if (webpSupported.supported) {
         if (!requestParameters.headers) {
             requestParameters.headers = {};
@@ -375,81 +343,42 @@ export const getImage = function (
         requestParameters.headers['accept'] = 'image/webp,*/*';
     }
 
-    // limit concurrent image loads to help with raster sources performance on big screens
-    if (numImageRequests >= config.MAX_PARALLEL_IMAGE_REQUESTS) {
-        const queued = {
-            requestParameters,
-            callback,
-            cancelled: false,
-            cancel() { this.cancelled = true; }
-        };
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        imageQueue.push(queued);
-        return queued;
+    const release = await acquireImageRequest(signal);
+    try {
+        // fetch the image as an ArrayBuffer rather than via an <img> element so it shares the HTTP cache
+        const {data, headers} = await getArrayBuffer(requestParameters, signal);
+        let bitmap: ImageBitmap;
+        try {
+            bitmap = await createImageBitmap(new Blob([new Uint8Array(data)], {type: 'image/png'}));
+        } catch (e) {
+            throw new Error(`Could not load image because of ${(e as Error).message}. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.`, {cause: e});
+        }
+        // A late-resolving body must not deliver after abort, or it resurrects torn-down ImageSource state.
+        if (signal && signal.aborted) {
+            throw new DOMException('Aborted', 'AbortError');
+        }
+        return {data: bitmap, headers};
+    } finally {
+        release();
     }
-    numImageRequests++;
+}
 
-    let advanced = false;
-    const advanceImageRequestQueue = () => {
-        if (advanced) return;
-        advanced = true;
-        numImageRequests--;
-        assert(numImageRequests >= 0);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        while (imageQueue.length && numImageRequests < config.MAX_PARALLEL_IMAGE_REQUESTS) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            const request = imageQueue.shift();
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-            const {requestParameters, callback, cancelled} = request;
-            if (!cancelled) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
-                request.cancel = getImage(requestParameters, callback).cancel;
-            }
-        }
-    };
-
-    // request the image with XHR to work around caching issues
-    // see https://github.com/mapbox/mapbox-gl-js/issues/1470
-    const request = getArrayBuffer(requestParameters, (err?: Error | null, data?: ArrayBuffer | null, headers?: Headers) => {
-
-        advanceImageRequestQueue();
-
-        if (err) {
-            callback(err);
-        } else if (data) {
-            if (self.createImageBitmap) {
-                arrayBufferToImageBitmap(data, (err, imgBitmap) => callback(err, imgBitmap, headers));
-                //@ts-expect-error 111
-            } else if (Image && !requestParameters.returnArraybuffer) {
-                arrayBufferToImage(data, (err, img) => callback(err, img, headers));
-            } else {
-                // @ts-expect-error 1111
-                callback(err, data, headers);
-            }
-        }
-    });
-
-    return {
-        cancel: () => {
-            request.cancel();
-            advanceImageRequestQueue();
-        }
-    };
-};
-
-export const getVideo = function (urls: Array<string>, callback: Callback<HTMLVideoElement>): Cancelable {
+export async function getVideo(urls: Array<string>): Promise<HTMLVideoElement> {
     const video: HTMLVideoElement = document.createElement('video');
     video.muted = true;
-    video.onloadstart = function () {
-        callback(null, video);
-    };
-    for (let i = 0; i < urls.length; i++) {
+    for (const url of urls) {
         const s: HTMLSourceElement = document.createElement('source');
-        if (!sameOrigin(urls[i])) {
+        if (!sameOrigin(url)) {
             video.crossOrigin = 'Anonymous';
         }
-        s.src = urls[i];
+        s.src = url;
         video.appendChild(s);
     }
-    return {cancel: () => {}};
-};
+
+    await new Promise<void>((resolve, reject) => {
+        video.onloadstart = () => resolve();
+        video.onerror = () => reject(new Error(`Could not load video: ${urls.join(', ')}`));
+    });
+
+    return video;
+}

@@ -1,6 +1,5 @@
-import {PerformanceUtils} from './util/performance';
-import assert from 'assert';
-import {supported, notSupportedReason} from '@mapbox/mapbox-gl-supported';
+import assert from './style-spec/util/assert';
+import {isSupported as supported, notSupportedReason} from '@mapbox/mapbox-gl-supported';
 import {version} from '../package.json';
 import {Map} from './ui/map';
 import NavigationControl from './ui/control/navigation_control';
@@ -16,17 +15,14 @@ import LngLat, {LngLatBounds} from './geo/lng_lat';
 import Point from '@mapbox/point-geometry';
 import MercatorCoordinate from './geo/mercator_coordinate';
 import {Evented} from './util/evented';
-import config from './util/config';
-import {Debug} from './util/debug';
-import {isSafari} from './util/util';
+import config, {setAccessToken, setBaseApiUrl, setMaxParallelImageRequests, getDracoUrl, setDracoUrl, getMeshoptUrl, setMeshoptUrl, getBuildingGenUrl, setBuildingGenUrl} from './util/config';
 import {setRTLTextPlugin, getRTLTextPluginStatus} from './source/rtl_text_plugin';
-import WorkerPool from './util/worker_pool';
+import {addTileProvider} from './source/tile_provider';
+import {getWorkerCount, setWorkerCount} from './util/worker_pool';
 import WorkerClass from './util/worker_class';
 import {prewarm, clearPrewarmedResources} from './util/worker_pool_factory';
 import {clearTileCache, getCacheContainer} from './util/tile_request_cache';
-import {WorkerPerformanceUtils} from './util/worker_performance_utils';
 import {FreeCameraOptions} from './ui/free_camera';
-import {getDracoUrl, setDracoUrl, setMeshoptUrl, getMeshoptUrl} from '../3d-style/util/loaders';
 import browser from './util/browser';
 
 import type {Class} from './types/class';
@@ -52,6 +48,9 @@ export type {FeatureSelector} from './style/style';
 export type {StyleImageInterface} from './style/style_image';
 export type {CustomLayerInterface} from './style/style_layer/custom_style_layer';
 export type {CustomSourceInterface} from './source/custom_source';
+export type {CanvasSourceSpecification} from './source/canvas_source';
+export type {TileProvider, TileDataResponse} from './source/tile_provider';
+export type {TileJSON} from './types/tilejson';
 
 export type {Anchor} from './ui/anchor';
 export type {PopupOptions} from './ui/popup';
@@ -62,6 +61,7 @@ export type {NavigationControlOptions} from './ui/control/navigation_control';
 export type {FullscreenControlOptions} from './ui/control/fullscreen_control';
 export type {AttributionControlOptions} from './ui/control/attribution_control';
 export type {MapOptions, IControl, ControlPosition} from './ui/map';
+export type {FontstackCompositing} from './style/glyph_loader';
 export type {AnimationOptions, CameraOptions, EasingOptions} from './ui/camera';
 
 export type {
@@ -85,6 +85,7 @@ const exported = {
     notSupportedReason,
     setRTLTextPlugin,
     getRTLTextPluginStatus,
+    addTileProvider,
     Map,
     NavigationControl,
     GeolocateControl,
@@ -153,7 +154,7 @@ const exported = {
     },
 
     set accessToken(token: string) {
-        config.ACCESS_TOKEN = token;
+        setAccessToken(token);
     },
 
     /**
@@ -169,7 +170,7 @@ const exported = {
     },
 
     set baseApiUrl(url: string) {
-        config.API_URL = url;
+        setBaseApiUrl(url);
     },
 
     /**
@@ -183,11 +184,11 @@ const exported = {
      * mapboxgl.workerCount = 4;
      */
     get workerCount(): number {
-        return WorkerPool.workerCount;
+        return getWorkerCount();
     },
 
     set workerCount(count: number) {
-        WorkerPool.workerCount = count;
+        setWorkerCount(count);
     },
 
     /**
@@ -204,7 +205,7 @@ const exported = {
     },
 
     set maxParallelImageRequests(numRequests: number) {
-        config.MAX_PARALLEL_IMAGE_REQUESTS = numRequests;
+        setMaxParallelImageRequests(numRequests);
     },
 
     getStorage() {
@@ -278,14 +279,6 @@ const exported = {
         WorkerClass.workerClass = klass;
     },
 
-    get workerParams(): WorkerOptions {
-        return WorkerClass.workerParams;
-    },
-
-    set workerParams(params: WorkerOptions) {
-        WorkerClass.workerParams = params;
-    },
-
     /**
      * Provides an interface for _loading Draco decoding library (draco_decoder_gltf.wasm v1.5.6) from a self-hosted URL.
      * This needs to be set only once, and before any call to `new mapboxgl.Map(..)` takes place.
@@ -311,12 +304,37 @@ const exported = {
         setDracoUrl(url);
     },
 
+    /**
+     * Gets and sets the URL for the Meshopt decoder WASM module.
+     * By default, this is loaded from the Mapbox API CDN relative to
+     * [`baseApiUrl`](https://docs.mapbox.com/mapbox-gl-js/api/properties/#baseapiurl).
+     * The SIMD-optimized variant is automatically selected when supported.
+     *
+     * @var {string} meshoptUrl
+     * @returns {string} The current Meshopt WASM URL.
+     */
     get meshoptUrl(): string {
         return getMeshoptUrl();
     },
 
     set meshoptUrl(url: string) {
         setMeshoptUrl(url);
+    },
+
+    /**
+     * Gets and sets the URL for the building generation WASM module (building_gen.wasm).
+     * By default, this is loaded from the Mapbox API CDN relative to
+     * [`baseApiUrl`](https://docs.mapbox.com/mapbox-gl-js/api/properties/#baseapiurl).
+     *
+     * @var {string} buildingGenUrl
+     * @returns {string} The current building generation WASM URL.
+     */
+    get buildingGenUrl(): string {
+        return getBuildingGenUrl();
+    },
+
+    set buildingGenUrl(url: string) {
+        setBuildingGenUrl(url);
     },
 
     /**
@@ -331,9 +349,6 @@ const exported = {
      */
     restoreNow: browser.restoreNow
 };
-
-//This gets automatically stripped out in production builds.
-Debug.extend(exported, {isSafari, getPerformanceMetrics: PerformanceUtils.getPerformanceMetrics, getPerformanceMetricsAsync: WorkerPerformanceUtils.getPerformanceMetricsAsync});
 
 /**
  * Gets the version of Mapbox GL JS in use as specified in `package.json`,
@@ -372,7 +387,7 @@ Debug.extend(exported, {isSafari, getPerformanceMetrics: PerformanceUtils.getPer
  * @param {boolean} lazy If set to `true`, MapboxGL will defer _loading the plugin until right-to-left text is encountered, and
  * right-to-left text will be rendered only after the plugin finishes _loading.
  * @example
- * mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.2.0/mapbox-gl-rtl-text.js');
+ * mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.4.0/mapbox-gl-rtl-text.js');
  * @see [Example: Add support for right-to-left scripts](https://www.mapbox.com/mapbox-gl-js/example/mapbox-gl-rtl-text/)
  */
 

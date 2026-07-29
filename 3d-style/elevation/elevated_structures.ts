@@ -1,6 +1,6 @@
-import assert from 'assert';
+import assert from '../../src/style-spec/util/assert';
 import Point from "@mapbox/point-geometry";
-import {ElevationPolygons, ElevationPortalGraph, type ElevationPortalEdge, type ElevationPortalType, type LeveledPolygon} from "./elevation_graph";
+import {ElevationPortalGraph, type ElevationPortalEdge, type ElevationPortalType} from "./elevation_graph";
 import {vec2, vec3} from "gl-matrix";
 import {tileToMeter} from '../../src/geo/mercator_coordinate';
 import EXTENT from '../../src/style-spec/data/extent';
@@ -110,12 +110,10 @@ class MeshBuilder {
         this.outIndices.emplaceBack(i1, i2, i3);
     }
 
-    addTriangles(indices: number[], vertices: Point[], heights: number[]) {
+    addTriangles(indices: number[], vertices: Point[], heights: number[], heightOffset: number = 0) {
         if (indices.length === 0) return;
         assert(indices.length % 3 === 0);
-        // For constant height, heights array length is 1
-        assert(vertices.length === heights.length || heights.length === 1);
-        const constantHeight = heights.length === 1;
+        assert(vertices.length === heights.length);
 
         const tmpVec = vec3.create();
         const normal = vec3.create();
@@ -124,9 +122,9 @@ class MeshBuilder {
             const v0 = vertices[indices[i + 0]];
             const v1 = vertices[indices[i + 1]];
             const v2 = vertices[indices[i + 2]];
-            const h0 = constantHeight ? heights[0] : heights[indices[i + 0]];
-            const h1 = constantHeight ? heights[0] : heights[indices[i + 1]];
-            const h2 = constantHeight ? heights[0] : heights[indices[i + 2]];
+            const h0 = heights[indices[i + 0]] + heightOffset;
+            const h1 = heights[indices[i + 1]] + heightOffset;
+            const h2 = heights[indices[i + 2]] + heightOffset;
             vec3.set(tmpVec, v0.x, v0.y, h0);
             const i0 = this.addVertex(tmpVec, normal);
             vec3.set(tmpVec, v1.x, v1.y, h1);
@@ -167,7 +165,6 @@ export class ElevatedStructures {
     shadowCasterSegments: SegmentVector | undefined;
 
     unevaluatedPortals = new ElevationPortalGraph();
-    portalPolygons = new ElevationPolygons();
 
     // Tracks the rail/tunnel mesh same-feature vertex sections
     // (within ElevatedStructure::vertexPositions).
@@ -276,60 +273,62 @@ export class ElevatedStructures {
         }
     }
 
-    addPortalCandidates(id: number, polygon: Point[][], isTunnel: boolean, elevation: ElevationFeature, zLevel: number) {
-        if (polygon.length === 0) return;
-
-        const leveledPoly: LeveledPolygon = {geometry: polygon, zLevel};
-        this.portalPolygons.add(id, leveledPoly);
+    addPortalCandidates(id: number, polygons: Point[][][], isTunnel: boolean, elevation: ElevationFeature, zLevel: number) {
+        if (polygons.length === 0) return;
 
         const pointsEqual = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
 
-        // Each edge of the exterior ring is a potential portal
-        const exterior = polygon[0];
-        assert(exterior.length > 1 && pointsEqual(exterior[0], exterior[exterior.length - 1]));
-
         this.vertexHashLookup.clear();
 
-        let prevEdgeHash = ElevatedStructures.computeEdgeHash(exterior[exterior.length - 2], exterior[exterior.length - 1]);
-
-        for (let i = 0; i < exterior.length - 1; i++) {
-            const a = exterior[i + 0];
-            const b = exterior[i + 1];
-
-            const vavb = vec2.fromValues(b.x - a.x, b.y - a.y);
-            const length = vec2.length(vavb);
-
-            if (length === 0) continue;
-
-            let type: ElevationPortalType = 'unevaluated';
-
-            // "Entrance" portals are entry & exit points for the polygons
-            // from ground level
-            const ha = elevation.pointElevation(a);
-            const hb = elevation.pointElevation(b);
-            const onGround = Math.abs(ha) < 0.01 && Math.abs(hb) < 0.01;
-
-            if (onGround) {
-                type = 'entrance';
-            } else {
-                // Portals on tile borders describes connectivity between tiles
-                if (this.isOnBorder(a.x, b.x) || this.isOnBorder(a.y, b.y)) {
-                    type = 'border';
-                }
+        for (const polygon of polygons) {
+            if (polygon.length === 0) {
+                continue;
             }
+            // Each edge of the exterior ring is a potential portal
+            const exterior = polygon[0];
+            assert(exterior.length > 1 && pointsEqual(exterior[0], exterior.at(-1)));
 
-            const edgeHash = ElevatedStructures.computeEdgeHash(a, b);
-            this.unevaluatedPortals.portals.push({
-                connection: {a: id, b: undefined}, va: a, vb: b, vab: vavb, length, hash: edgeHash, isTunnel, type
-            });
+            let prevEdgeHash = ElevatedStructures.computeEdgeHash(exterior[exterior.length - 2], exterior.at(-1));
 
-            // Construct a lookup table where vertex position maps to hashes of edges it's connected to
-            const posHash = ElevatedStructures.computePosHash(a);
+            for (let i = 0; i < exterior.length - 1; i++) {
+                const a = exterior[i + 0];
+                const b = exterior[i + 1];
 
-            assert(!this.vertexHashLookup.has(posHash));
-            this.vertexHashLookup.set(posHash, {prev: prevEdgeHash, next: edgeHash});
+                const vavb = vec2.fromValues(b.x - a.x, b.y - a.y);
+                const length = vec2.length(vavb);
 
-            prevEdgeHash = edgeHash;
+                if (length === 0) continue;
+
+                let type: ElevationPortalType = 'unevaluated';
+
+                // "Entrance" portals are entry & exit points for the polygons
+                // from ground level
+                const ha = elevation.pointElevation(a);
+                const hb = elevation.pointElevation(b);
+                const onGround = Math.abs(ha) < 0.01 && Math.abs(hb) < 0.01;
+
+                if (onGround) {
+                    type = 'entrance';
+                } else {
+                    // Portals on tile borders describes connectivity between tiles
+                    if (this.isOnBorder(a.x, b.x) || this.isOnBorder(a.y, b.y)) {
+                        type = 'border';
+                    }
+                }
+
+                const edgeHash = ElevatedStructures.computeEdgeHash(a, b);
+                this.unevaluatedPortals.portals.push({
+                    connection: {a: id, b: undefined}, va: a, vb: b, vab: vavb, length, hash: edgeHash, isTunnel, type
+                });
+
+                // Construct a lookup table where vertex position maps to hashes of edges it's connected to
+                const posHash = ElevatedStructures.computePosHash(a);
+
+                assert(!this.vertexHashLookup.has(posHash));
+                this.vertexHashLookup.set(posHash, {prev: prevEdgeHash, next: edgeHash});
+
+                prevEdgeHash = edgeHash;
+            }
         }
     }
 
@@ -408,7 +407,7 @@ export class ElevatedStructures {
         endSegment(depthSegment);
 
         // Include tunnel roofs as shadow casters
-        builder.addTriangles(this.unevalTunnelTriangles, this.unevalVertices, [-0.1]);
+        builder.addTriangles(this.unevalTunnelTriangles, this.unevalVertices, this.unevalHeights, TUNNEL_ENTERANCE_HEIGHT);
         endSegment(shadowCasterSegment);
 
         this.maskSegments = SegmentVector.simpleSegment(0, maskSegment.primitiveOffset, 0, maskSegment.primitiveLength);
@@ -721,8 +720,8 @@ export class ElevatedStructures {
             builder.addQuad(
                 vec3.set(v1, a.coord.x, a.coord.y, a.height),
                 vec3.set(v2, b.coord.x, b.coord.y, b.height),
-                vec3.set(v3, b.coord.x, b.coord.y, edges[i].isTunnel ? -0.1 : 0.0),
-                vec3.set(v4, a.coord.x, a.coord.y, edges[i].isTunnel ? -0.1 : 0.0),
+                vec3.set(v3, b.coord.x, b.coord.y, edges[i].isTunnel ? b.height + tunnelEntranceHeight : 0.0),
+                vec3.set(v4, a.coord.x, a.coord.y, edges[i].isTunnel ? a.height + tunnelEntranceHeight : 0.0),
                 norm);
         }
 

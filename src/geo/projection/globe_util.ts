@@ -472,9 +472,9 @@ export function globeNormalizeECEF(bounds: Aabb): mat4 {
 }
 
 export function globeDenormalizeECEF(bounds: Aabb): mat4 {
-    const m = mat4.fromTranslation(tempMatrix, bounds.min);
     const scale = 1.0 / globeECEFNormalizationScale(bounds);
-    return mat4.scale(m, m, [scale, scale, scale]);
+    mat4.fromTranslation(tempMatrix, bounds.min);
+    return mat4.scale(tempMatrix, tempMatrix, [scale, scale, scale]);
 }
 
 export function globeECEFUnitsToPixelScale(worldSize: number): number {
@@ -659,7 +659,7 @@ export function isLngLatBehindGlobe(tr: Transform, lngLat: LngLat): boolean {
 /**
  * Check if poles are visible inside the current viewport
  *
- * @param {Transform} transform The current map transform.
+ * @param {Transform} tr The current map transform.
  * @returns {[boolean, boolean]} A tuple of booleans [northInViewport, southInViewport]
  */
 export function polesInViewport(tr: Transform): [boolean, boolean] {
@@ -767,7 +767,7 @@ export class GlobeSharedBuffers {
 
         // Index adjustment, used to make strip (x, y) vertex input attribute data
         // to match same data on ordinary grid edges
-        const prepareVertex = (x: number, y: number, isSkirt: boolean) => {
+        const prepareVertex = (x: number, y: number, isSkirt: boolean): [number, number] => {
             if (!EMBED_SKIRTS) return [x, y];
 
             let adjustedX = (() => {
@@ -790,7 +790,6 @@ export class GlobeSharedBuffers {
         // Add first horizontal strip if present
         if (EMBED_SKIRTS) {
             for (let x = 0; x < xVertices; ++x) {
-                // @ts-expect-error - TS2556 - A spread argument must either have a tuple type or be passed to a rest parameter.
                 vertices.emplaceBack(...prepareVertex(x, 0, true));
             }
         }
@@ -800,7 +799,6 @@ export class GlobeSharedBuffers {
             for (let x = 0; x < xVertices; ++x) {
                 const isSideBorder = (x === 0 || x === xVertices - 1);
 
-                // @ts-expect-error - TS2556 - A spread argument must either have a tuple type or be passed to a rest parameter.
                 vertices.emplaceBack(...prepareVertex(x, y, isSideBorder && EMBED_SKIRTS));
             }
         }
@@ -810,7 +808,6 @@ export class GlobeSharedBuffers {
             for (let lodIdx = 0; lodIdx < latitudinalLods.length; ++lodIdx) {
                 const lastYRowForLod = latitudinalLods[lodIdx];
                 for (let x = 0; x < xVertices; ++x) {
-                    // @ts-expect-error - TS2556 - A spread argument must either have a tuple type or be passed to a rest parameter.
                     vertices.emplaceBack(...prepareVertex(x, lastYRowForLod, true));
                 }
             }
@@ -884,7 +881,7 @@ export class GlobeSharedBuffers {
         const poleVertices = GLOBE_VERTEX_GRID_SIZE + 2;
         this._poleSegments = [];
 
-        for (let zoom = 0, offset = 0; zoom < GLOBE_ZOOM_THRESHOLD_MIN; zoom++) {
+        for (let zoom = 0, offset = 0; zoom < GLOBE_ZOOM_THRESHOLD_MAX; zoom++) {
             const tiles = 1 << zoom;
             const endAngle = 360.0 / tiles;
 

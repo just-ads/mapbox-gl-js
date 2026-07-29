@@ -1,4 +1,5 @@
 import browser from '../util/browser';
+import {makeFQID} from '../util/fqid';
 import {mat4} from 'gl-matrix';
 import SourceCache from '../source/source_cache';
 import EXTENT from '../style-spec/data/extent';
@@ -21,43 +22,45 @@ import {clippingMaskUniformValues} from './program/clipping_mask_program';
 import Color from '../style-spec/util/color';
 import symbol from './draw_symbol';
 import circle from './draw_circle';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import heatmap from './draw_heatmap';
 import line, {prepare as prepareLine} from './draw_line';
-import fill, {drawDepthPrepass as fillDepthPrepass, drawGroundShadowMask as fillGroundShadowMask} from './draw_fill';
+import fill from './draw_fill';
 import fillExtrusion from './draw_fill_extrusion';
-import building from '../../3d-style/render/draw_building';
+import {HD, prepareHD} from '../../modules/hd_main';
 import hillshade from './draw_hillshade';
 import raster, {prepare as prepareRaster} from './draw_raster';
-import rasterParticle, {prepare as prepareRasterParticle} from './draw_raster_particle';
 import background from './draw_background';
 import {default as drawDebug, drawDebugPadding, drawDebugQueryGeometry} from './draw_debug';
 import custom from './draw_custom';
 import sky from './draw_sky';
 import Atmosphere from './draw_atmosphere';
-import {BuildingTileBorderManager} from '../../3d-style/render/building_tile_border_manager';
 import {GlobeSharedBuffers, globeToMercatorTransition} from '../geo/projection/globe_util';
 import {Terrain, defaultTerrainUniforms} from '../terrain/terrain';
 import {Debug} from '../util/debug';
-import {DevTools} from '../ui/devtools';
 import Tile from '../source/tile';
 import {RGBAImage} from '../util/image';
 import {LayerTypeMask} from '../../3d-style/util/conflation';
 import {ReplacementSource, ReplacementOrderLandmark, ReplacementOrderBuilding} from '../../3d-style/source/replacement_source';
-import model, {prepare as modelPrepare} from '../../3d-style/render/draw_model';
+import {Standard, prepareStandard} from '../../modules/standard_main';
 import {lightsUniformValues} from '../../3d-style/render/lights';
-import {ShadowRenderer} from '../../3d-style/render/shadow_renderer';
 import {WireframeDebugCache} from './wireframe_cache';
 import {FOG_OPACITY_THRESHOLD} from '../style/fog_helpers';
 import Framebuffer from '../gl/framebuffer';
 import {OcclusionParams} from './occlusion_params';
-import {Rain} from '../precipitation/draw_rain';
-import {Snow} from '../precipitation/draw_snow';
 import {PerformanceUtils} from '../util/performance';
 
+import type {FrcCoverageSnapshot} from '../source/frc_coverage_snapshot';
+import type {FrcCoverageRenderer} from '../../3d-style/render/frc_coverage_renderer';
+import type {RainParams} from '../precipitation/draw_rain';
+import type {SnowParams} from '../precipitation/draw_snow';
+import type {PrecipitationRevealParams} from '../precipitation/precipitation_reveal_params';
+import type {VignetteParams} from '../precipitation/vignette';
+import type {StarsParams} from './draw_atmosphere';
 import type ImageManager from './image_manager';
 import type IndexBuffer from '../gl/index_buffer';
 import type ModelManager from '../../3d-style/render/model_manager';
+import type {ShadowRenderer} from '../../3d-style/render/shadow_renderer';
 import type ProgramConfiguration from '../data/program_configuration';
 import type Style from '../style/style';
 import type Transform from '../geo/transform';
@@ -70,10 +73,12 @@ import type {LightsUniformsType} from '../../3d-style/render/lights';
 import type {OverscaledTileID, UnwrappedTileID} from '../source/tile_id';
 import type {ProgramName} from './program';
 import type {ProgramUniformsType, DynamicDefinesType} from './program/program_uniforms';
-import type {Source} from '../source/source';
+import type {Source, ISource} from '../source/source';
 import type {UniformBindings} from './uniform_binding';
 import type {CrossTileID, VariableOffset} from '../symbol/placement';
-import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
+import type {TypedStyleLayer, CoreStyleLayer, HDStyleLayer, StandardStyleLayer} from '../style/style_layer/typed_style_layer';
+import type {IDevTools} from '../ui/control/devtools';
+import type {ShadowCullCache} from './draw_fill_extrusion';
 
 export type RenderPass = 'offscreen' | 'opaque' | 'translucent' | 'sky' | 'shadow' | 'light-beam';
 export type DepthPrePass = 'initialize' | 'reset' | 'geometry';
@@ -89,6 +94,9 @@ export type CreateProgramParams = {
     defines?: DynamicDefinesType[];
     overrideFog?: boolean;
     overrideRtt?: boolean;
+    overrideTerrain?: boolean;
+    overrideGlobe?: boolean;
+    precompiled?: boolean;
 };
 
 type WireframeOptions = {
@@ -113,6 +121,7 @@ type PainterOptions = {
     isInitialLoad: boolean;
     speedIndexTiming: boolean;
     wireframe: WireframeOptions;
+    paintStartTimeStamp: number;
 };
 
 type TileBoundsBuffers = {
@@ -133,36 +142,51 @@ type DrawStyleLayer = (
     isInitialLoad?: boolean
 ) => void;
 
-const draw: Record<string, DrawStyleLayer> = {
+type PrepareStyleLayer = (layer: TypedStyleLayer, sourceCache: SourceCache, painter: Painter) => void;
+
+const draw: Record<CoreStyleLayer['type'], DrawStyleLayer> & Partial<Record<HDStyleLayer['type'] | StandardStyleLayer['type'], DrawStyleLayer>> = {
     symbol,
     circle,
     heatmap,
     line,
     fill,
     'fill-extrusion': fillExtrusion,
-    building,
     hillshade,
     raster,
-    'raster-particle': rasterParticle,
     background,
     sky,
     custom,
-    model
 };
 
-const prepare = {
+const prepare: Partial<Record<CoreStyleLayer['type'] | HDStyleLayer['type'] | StandardStyleLayer['type'], PrepareStyleLayer>> = {
     line: prepareLine,
-    model: modelPrepare,
     raster: prepareRaster,
-    'raster-particle': prepareRasterParticle
 };
 
-const depthPrepass = {
-    fill: fillDepthPrepass
-};
-const groundShadowMask = {
-    fill: fillGroundShadowMask
-};
+async function setupHD() {
+    await prepareHD();
+    Object.assign(draw, {
+        building: HD.drawBuilding,
+        'raster-particle': HD.drawRasterParticle,
+    });
+    Object.assign(prepare, {
+        'raster-particle': HD.prepareRasterParticle,
+    });
+}
+
+async function setupStandard(painter?: Painter) {
+    await prepareStandard();
+    Object.assign(draw, {
+        model: Standard.drawModels,
+    });
+    Object.assign(prepare, {
+        model: Standard.prepare,
+    });
+    if (painter && !painter._shadowRenderer) {
+        const SR = (Standard as {ShadowRenderer?: new (p: Painter) => ShadowRenderer}).ShadowRenderer;
+        if (SR) painter._shadowRenderer = new SR(painter);
+    }
+}
 
 /**
  * Initialize a new painter object.
@@ -196,19 +220,27 @@ class Painter {
     imageManager: ImageManager;
     glyphManager: GlyphManager;
     modelManager: ModelManager;
-    buildingTileBorderManager: BuildingTileBorderManager;
+    buildingTileBorderManager?: InstanceType<NonNullable<typeof HD.BuildingTileBorderManager>>;
     depthRangeFor3D: DepthRangeType;
     depthOcclusion: boolean;
+    frcCoverageSnapshot: FrcCoverageSnapshot | null;
+    frcCoverageFadeRange: [number, number] | null;
+    frcCoverageSourceLayers: string[];
+    // Lazy-constructed when the HD chunk loads (HD.FrcCoverageRenderer).
+    // Null when SD-HD conflation is not in use and HD hasn't been loaded.
+    frcCoverageRenderer: FrcCoverageRenderer | null;
     opaquePassCutoff: number;
     frameCounter: number;
+    frameTimeDelta: number;
+    lastPaintStartTimeStamp: number;
     renderPass: RenderPass;
     currentLayer: number;
     currentStencilSource: string | null | undefined;
     currentShadowCascade: number;
+    _shadowCullCache: ShadowCullCache | null;
     nextStencilID: number;
     id: string;
     _showOverdrawInspector: boolean;
-    _shadowMapDebug: boolean;
     cache: Record<string, Program<UniformBindings>>;
     symbolFadeChange: number;
     gpuTimers: GPUTimers;
@@ -225,8 +257,8 @@ class Painter {
     loadTimeStamps: Array<number>;
     _backgroundTiles: Record<number, Tile>;
     _atmosphere: Atmosphere | null | undefined;
-    _rain?: Rain;
-    _snow?: Snow;
+    _rain?: InstanceType<NonNullable<typeof HD.Rain>>;
+    _snow?: InstanceType<NonNullable<typeof HD.Snow>>;
     replacementSource: ReplacementSource;
     conflationActive: boolean;
     firstLightBeamLayer: number;
@@ -240,23 +272,46 @@ class Painter {
     _fogVisible: boolean;
     _cachedTileFogOpacities: Record<number, [number, number]>;
     _shadowRenderer?: ShadowRenderer;
+    _devtools?: IDevTools;
     _wireframeDebugCache: WireframeDebugCache;
 
+    updateAverageFPS?: () => void;
+
     _debugParams: {
-        forceEnablePrecipitation: boolean;
-        showTerrainProxyTiles: boolean;
+        // fps
+        averageFPS: number;
+        fpsHistory: Array<number>;
         fpsWindow: number;
         continousRedraw: boolean;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        enabledLayers: any;
+        enabledLayers: Record<string, boolean>;
+        // buildings
+        buildingsShowNormals: boolean;
+        buildingsDrawGroundAO: boolean;
+        buildingsDrawShadowPass: boolean;
+        buildingsDrawTranslucentPass: boolean;
+        // terrain
+        showTerrainProxyTiles: boolean;
+        terrainSortTilesHiZFirst: boolean;
+        terrainDisableRenderCache: boolean;
+        // precipitation
+        forceEnablePrecipitation: boolean;
+        overrideSnowParams: boolean;
+        snowParamsOverride?: SnowParams;
+        snowRevealParamsOverride?: PrecipitationRevealParams;
+        snowVignetteParamsOverride?: VignetteParams;
+        overrideRainParams: boolean;
+        rainParamsOverride?: RainParams;
+        rainRevealParamsOverride?: PrecipitationRevealParams;
+        rainVignetteParamsOverride?: VignetteParams;
+        // stars
+        overrideStarsParams: boolean;
+        starsParamsOverride?: StarsParams;
+        // models
+        show3DModelFootprints: boolean;
+        showElevationIdDebug: boolean;
+        lodSwitchDistance: number;
+        lodSwitchFadeDuration: number;
     };
-
-    _timeStamp: number;
-    _dt: number;
-
-    _averageFPS: number;
-
-    _fpsHistory: Array<number>;
 
     // Depth for occlusion
     // FBO+Underlying texture & empty depth texture
@@ -269,6 +324,7 @@ class Painter {
     _clippingActiveLastFrame: boolean;
 
     scaleFactor: number;
+    maxFrontCutoffRawStart: number;
 
     worldview: string;
 
@@ -282,52 +338,61 @@ class Painter {
         this._tileTextures = {};
         this.frameCopies = [];
         this.loadTimeStamps = [];
-
-        this._timeStamp = browser.now();
-        this._averageFPS = 0;
-        this._fpsHistory = [];
-        this._dt = 0;
+        this.frcCoverageSnapshot = null;
+        this.frcCoverageFadeRange = null;
+        this.frcCoverageSourceLayers = [];
+        // Built when HD module is available (UMD: always; ESM: after prepareHD()).
+        this.frcCoverageRenderer = HD.FrcCoverageRenderer ? new HD.FrcCoverageRenderer() : null;
 
         this._debugParams = {
-            forceEnablePrecipitation: false,
-            showTerrainProxyTiles: false,
+            averageFPS: 0,
+            fpsHistory: [],
             fpsWindow: 30,
             continousRedraw: false,
-            enabledLayers: {
-            }
+            enabledLayers: { },
+            buildingsShowNormals: false,
+            buildingsDrawGroundAO: true,
+            buildingsDrawShadowPass: true,
+            buildingsDrawTranslucentPass: true,
+            showTerrainProxyTiles: false,
+            terrainSortTilesHiZFirst: true,
+            terrainDisableRenderCache: false,
+            forceEnablePrecipitation: false,
+            overrideSnowParams: false,
+            snowParamsOverride: null,
+            snowRevealParamsOverride: null,
+            snowVignetteParamsOverride: null,
+            overrideRainParams: false,
+            rainParamsOverride: null,
+            rainRevealParamsOverride: null,
+            rainVignetteParamsOverride: null,
+            overrideStarsParams: false,
+            starsParamsOverride: null,
+            show3DModelFootprints: false,
+            showElevationIdDebug: false,
+            lodSwitchDistance: -1,
+            lodSwitchFadeDuration: 0.5
         };
 
-        const layerTypes = ["fill", "line", "symbol", "circle", "heatmap", "fill-extrusion", "building", "raster", "raster-particle", "hillshade", "model", "background", "sky"];
+        Debug.run(() => {
+            const layerTypes = ["fill", "line", "symbol", "circle", "heatmap", "fill-extrusion", "building", "raster", "raster-particle", "hillshade", "model", "background", "sky"];
+            for (const layerType of layerTypes) {
+                this._debugParams.enabledLayers[layerType] = true;
+            }
 
-        for (const layerType of layerTypes) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            this._debugParams.enabledLayers[layerType] = true;
-        }
+            this.updateAverageFPS = () => {
+                const fps = this.frameTimeDelta === 0 ? 0 : 1000.0 / this.frameTimeDelta;
 
-        DevTools.addParameter(this._debugParams, 'showTerrainProxyTiles', 'Terrain', {}, () => {
-            this.style.map.triggerRepaint();
-        });
-        DevTools.addParameter(this._debugParams, 'forceEnablePrecipitation', 'Precipitation');
-        DevTools.addParameter(this._debugParams, 'fpsWindow', 'FPS', {min: 1, max: 100, step: 1});
-        DevTools.addBinding(this._debugParams, 'continousRedraw', 'FPS', {
-            readonly: true,
-            label: 'continuous redraw'
-        });
-        DevTools.addBinding(this, '_averageFPS', 'FPS', {
-            readonly: true,
-            label: 'value'
-        });
-        DevTools.addBinding(this, '_averageFPS', 'FPS', {
-            readonly: true,
-            label: 'graph',
-            view: 'graph',
-            min: 0,
-            max: 200
-        });
+                this._debugParams.fpsHistory.push(fps);
+                if (this._debugParams.fpsHistory.length > this._debugParams.fpsWindow) {
+                    this._debugParams.fpsHistory.splice(0, this._debugParams.fpsHistory.length - this._debugParams.fpsWindow);
+                }
 
-        for (const layerType of layerTypes) {
-            DevTools.addParameter(this._debugParams.enabledLayers, layerType, 'Debug > Layers');
-        }
+                this._debugParams.averageFPS = Math.round(this._debugParams.fpsHistory.reduce((accum: number, current: number) => {
+                    return accum + current / this._debugParams.fpsHistory.length;
+                }, 0));
+            };
+        });
 
         this.occlusionParams = new OcclusionParams();
 
@@ -341,6 +406,9 @@ class Painter {
         this.deferredRenderGpuTimeQueries = [];
         this.gpuTimers = {};
         this.frameCounter = 0;
+        this.frameTimeDelta = 0;
+        this.lastPaintStartTimeStamp = 0;
+        this._shadowCullCache = null;
         this._backgroundTiles = {};
 
         this.conflationActive = false;
@@ -349,7 +417,6 @@ class Painter {
         this.minCutoffZoom = 0.0;
         this._fogVisible = false;
         this._cachedTileFogOpacities = {};
-        this._shadowRenderer = new ShadowRenderer(this);
 
         this._wireframeDebugCache = new WireframeDebugCache();
         this.renderDefaultNorthPole = true;
@@ -362,6 +429,7 @@ class Painter {
         this._clippingActiveLastFrame = false;
 
         this.scaleFactor = scaleFactor;
+        this.maxFrontCutoffRawStart = 0;
 
         this.worldview = worldview;
 
@@ -399,7 +467,7 @@ class Painter {
 
         // We start culling where the fog opacity function hits
         // 98% which leaves a non-noticeable change threshold.
-        const [start, end] = fog.getFovAdjustedRange(this.transform._fov);
+        const [start, end] = fog.getRangeForProjection();
 
         if (start > end) {
             this.transform.fogCullDistSq = null;
@@ -641,7 +709,7 @@ class Painter {
     }, Array<OverscaledTileID>] {
         const gl = this.context.gl;
         const coords = tileIDs.sort((a, b) => b.overscaledZ - a.overscaledZ);
-        const minTileZ = coords[coords.length - 1].overscaledZ;
+        const minTileZ = coords.at(-1).overscaledZ;
         const stencilValues = coords[0].overscaledZ - minTileZ + 1;
         if (stencilValues > 1) {
             this.currentStencilSource = undefined;
@@ -756,47 +824,62 @@ class Painter {
         }
     }
 
-    updateAverageFPS() {
-        const fps = this._dt === 0 ? 0 : 1000.0 / this._dt;
-
-        this._fpsHistory.push(fps);
-        if (this._fpsHistory.length > this._debugParams.fpsWindow) {
-            this._fpsHistory.splice(0, this._fpsHistory.length - this._debugParams.fpsWindow);
-        }
-
-        this._averageFPS = Math.round(this._fpsHistory.reduce((accum: number, current: number) => { return accum + current / this._fpsHistory.length; }, 0));
-    }
-
     render(style: Style, options: PainterOptions) {
-        // Update time delta and current timestamp
-        const curTime = browser.now();
-        this._dt = curTime - this._timeStamp;
-        this._timeStamp = curTime;
-
         const renderStartTime = PerformanceUtils.now();
 
-        Debug.run(() => { this.updateAverageFPS(); });
+        // Finalize any pending programs whose parallel compile finished since last frame.
+        // Prevents later uniform-set / draw calls in this frame from triggering sync stalls.
+        this.context.sweepPendingPrograms();
+
+        this.frameTimeDelta = this.lastPaintStartTimeStamp === 0 ? 0 : options.paintStartTimeStamp - this.lastPaintStartTimeStamp;
+        this.lastPaintStartTimeStamp = options.paintStartTimeStamp;
+
+        Debug.run(() => {
+            this.updateAverageFPS();
+        });
 
         // Update debug cache, i.e. clear all unused buffers
         this._wireframeDebugCache.update(this.frameCounter);
 
-        this._debugParams.continousRedraw = style.map.repaint;
+        Debug.run(() => {
+            this._debugParams.continousRedraw = style.map.repaint;
+        });
+
         this.style = style;
         this.options = options;
+
+        // Update FRC coverage polygon GPU buffers from current snapshot
+        if (this.frcCoverageSnapshot && !this.frcCoverageSnapshot.empty()) {
+            // Ensure the renderer exists once HD has loaded after painter construction.
+            if (!this.frcCoverageRenderer && HD.FrcCoverageRenderer) {
+                this.frcCoverageRenderer = new HD.FrcCoverageRenderer();
+            }
+            if (this.frcCoverageRenderer) {
+                this.frcCoverageRenderer.update(this.context, this.frcCoverageSnapshot.tiles);
+            }
+        }
 
         const layers = this.style._mergedLayers;
 
         const drapingEnabled = !!(this.terrain && this.terrain.enabled);
-        const getLayerIds = () => this.style._getOrder(drapingEnabled).filter((id) => {
-            const layer = layers[id];
 
-            if (layer.type in this._debugParams.enabledLayers) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                return this._debugParams.enabledLayers[layer.type];
-            }
+        const getLayerIds = () => {
+            let renderableLayers = this.style._getOrder(drapingEnabled);
 
-            return true;
-        });
+            Debug.run(() => {
+                // eslint-disable-next-line no-warning-comments
+                // TODO: use Set for enabledLayers
+                renderableLayers = renderableLayers.filter((id) => {
+                    const layer = layers[id];
+                    if (layer.type in this._debugParams.enabledLayers) {
+                        return this._debugParams.enabledLayers[layer.type];
+                    }
+                    return true;
+                });
+            });
+
+            return renderableLayers;
+        };
 
         let layerIds = getLayerIds();
 
@@ -843,8 +926,7 @@ class Painter {
                 sourceCache.prepare(this.context);
                 PerformanceUtils.measureLowOverhead(PerformanceUtils.GROUP_RENDERING, `prepare: ${sourceCache.id.toString()}`, sourceCachePrepareStartTime, undefined);
 
-                // @ts-expect-error - TS2339 - Property 'usedInConflation' does not exist on type 'Source'.
-                if (sourceCache.getSource().usedInConflation) {
+                if ((sourceCache.getSource() as ISource).usedInConflation) {
                     ++conflationSourcesOrLayersInStyle;
                 }
             }
@@ -917,8 +999,7 @@ class Painter {
                     const layerIdx = conflationLayerIndicesInStyle[i];
                     const sourceCache = this.style.getLayerSourceCache(layer);
 
-                    // @ts-expect-error - TS2339 - Property 'usedInConflation' does not exist on type 'Source'.
-                    if (!sourceCache || !sourceCache.used || (!sourceCache.getSource().usedInConflation && layer.type !== 'clip' && layer.type !== 'building')) {
+                    if (!sourceCache || !sourceCache.used || (!(sourceCache.getSource() as ISource).usedInConflation && layer.type !== 'clip' && layer.type !== 'building')) {
                         continue;
                     }
 
@@ -937,15 +1018,22 @@ class Painter {
                         // This order is later used by fill-extrusion and instanced tree's rendering code to know
                         // how to deal with landmarks.
                             order = layerIdx;
-                            for (const mask of layer.layout.get('clip-layer-types')) {
-                                clipMask |= (mask === 'model' ? LayerTypeMask.Model : (mask === 'symbol' ? LayerTypeMask.Symbol : LayerTypeMask.FillExtrusion));
-                            }
-                            for (const scope of layer.layout.get('clip-layer-scope')) {
-                                clipScope.push(scope);
-                            }
                             if (layer.isHidden(this.transform.zoom)) {
                                 addToSources = false;
                             } else {
+                                // Hidden layers may not have been recalculated this frame, so `layer.layout`
+                                // can be undefined. Only access evaluated layout when we know the clip layer
+                                // is active for this frame.
+                                if (!layer.layout) {
+                                    addToSources = false;
+                                    continue;
+                                }
+                                for (const mask of layer.layout.get('clip-layer-types')) {
+                                    clipMask |= (mask === 'model' ? LayerTypeMask.Model : (mask === 'symbol' ? LayerTypeMask.Symbol : LayerTypeMask.FillExtrusion));
+                                }
+                                for (const scope of layer.layout.get('clip-layer-scope')) {
+                                    clipScope.push(makeFQID(scope, layer.scope));
+                                }
                                 clippingActiveThisFrame = true;
                             }
                         }
@@ -973,6 +1061,7 @@ class Painter {
         this.minCutoffZoom = 0.0;
         // The longest cutoff range will be used for cutting shadows if any layer has non-zero cutoffRange
         this.longestCutoffRange = 0.0;
+        this.maxFrontCutoffRawStart = 0;
         this.opaquePassCutoff = Infinity;
         this._lastOcclusionLayer = -1;
         this.layersWithOcclusionOpacity = [];
@@ -1024,6 +1113,9 @@ class Painter {
             orderedLayers = layerIds.map(id => layers[id]);
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        if (this.style.enable3dLights() && !this._shadowRenderer) setupStandard(this);
+
         const shadowRenderer = this._shadowRenderer;
         if (shadowRenderer) {
             shadowRenderer.updateShadowParameters(this.transform, this.style.directionalLight);
@@ -1052,7 +1144,7 @@ class Painter {
 
         if (this.style.fog && this.transform.projection.supportsFog) {
             if (!this._atmosphere) {
-                this._atmosphere = new Atmosphere(this);
+                this._atmosphere = new Atmosphere();
             }
 
             this._atmosphere.update(this);
@@ -1063,19 +1155,31 @@ class Painter {
             }
         }
 
-        const snow = this._debugParams.forceEnablePrecipitation || !!(this.style && this.style.snow);
-        const rain = this._debugParams.forceEnablePrecipitation || !!(this.style && this.style.rain);
+        let snow = !!(this.style && this.style.snow);
+        let rain = !!(this.style && this.style.rain);
+        Debug.run(() => {
+            if (this._debugParams.forceEnablePrecipitation) {
+                snow = true;
+                rain = true;
+            }
+        });
 
-        if (snow && !this._snow) {
-            this._snow = new Snow(this);
+        // Load HD for precipitation functionality
+        if ((snow || rain) && !HD.loaded) {
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises
+            prepareHD();
+        }
+
+        if (snow && !this._snow && HD.Snow) {
+            this._snow = new HD.Snow();
         }
         if (!snow && this._snow) {
             this._snow.destroy();
             delete this._snow;
         }
 
-        if (rain && !this._rain) {
-            this._rain = new Rain(this);
+        if (rain && !this._rain && HD.Rain) {
+            this._rain = new HD.Rain();
         }
         if (!rain && this._rain) {
             this._rain.destroy();
@@ -1090,13 +1194,15 @@ class Painter {
         }
 
         if (buildingLayer) {
-            if (!this.buildingTileBorderManager) {
-                this.buildingTileBorderManager = new BuildingTileBorderManager();
+            if (!this.buildingTileBorderManager && HD.BuildingTileBorderManager) {
+                this.buildingTileBorderManager = new HD.BuildingTileBorderManager();
             }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            const buildingLayerSourceCache = this.style.getLayerSourceCache(buildingLayer);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            this.buildingTileBorderManager.updateBorders(buildingLayerSourceCache, buildingLayer);
+            if (this.buildingTileBorderManager) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                const buildingLayerSourceCache = this.style.getLayerSourceCache(buildingLayer);
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                this.buildingTileBorderManager.updateBorders(buildingLayerSourceCache, buildingLayer);
+            }
         }
 
         // Following line is billing related code. Do not change. See LICENSE.txt
@@ -1247,10 +1353,7 @@ class Painter {
         this.currentLayer = 0;
         this.firstLightBeamLayer = Number.MAX_SAFE_INTEGER;
 
-        let shadowLayers = 0;
-        if (shadowRenderer) {
-            shadowLayers = shadowRenderer.getShadowCastingLayerCount();
-        }
+        const groundShadowLayerIndex = shadowRenderer ? shadowRenderer.getGroundShadowLayerIndex() : -1;
 
         let terrainDepthCopied = false;
 
@@ -1308,10 +1411,9 @@ class Painter {
                 const renderDepthSubpass = (pass: DepthPrePass) => {
                     for (this.currentLayer = 0; this.currentLayer < orderedLayers.length; this.currentLayer++) {
                         const depthPassLayer = orderedLayers[this.currentLayer];
-                        if (depthPrepass[depthPassLayer.type]) {
+                        if (depthPassLayer.type === 'fill' && HD.drawDepthPrepass) {
                             const sourceCache = this.style.getLayerSourceCache(depthPassLayer);
-                            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                            depthPrepass[depthPassLayer.type](this, sourceCache, depthPassLayer, coordsForTranslucentLayer(depthPassLayer, sourceCache), pass);
+                            HD.drawDepthPrepass(this, sourceCache, depthPassLayer, coordsForTranslucentLayer(depthPassLayer, sourceCache), pass);
                         }
                     }
                 };
@@ -1341,7 +1443,7 @@ class Painter {
             this.renderLayer(this, sourceCache, layer, coordsForTranslucentLayer(layer, sourceCache));
 
             // Render ground shadows after the last shadow caster layer
-            if (!this.terrain && shadowRenderer && shadowLayers > 0 && layer.hasShadowPass() && --shadowLayers === 0) {
+            if (!this.terrain && shadowRenderer && this.currentLayer === groundShadowLayerIndex) {
                 // Draw ground shadow mask
                 {
                     this.clearStencil();
@@ -1349,10 +1451,9 @@ class Painter {
                     const saveCurrentLayer = this.currentLayer;
                     for (this.currentLayer = 0; this.currentLayer < orderedLayers.length; this.currentLayer++) {
                         const maskLayer = orderedLayers[this.currentLayer];
-                        if (groundShadowMask[maskLayer.type]) {
+                        if (maskLayer.type === 'fill' && HD.drawGroundShadowMask) {
                             const sourceCache = this.style.getLayerSourceCache(maskLayer);
-                            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                            groundShadowMask[maskLayer.type](this, sourceCache, maskLayer, coordsForTranslucentLayer(maskLayer, sourceCache));
+                            HD.drawGroundShadowMask(this, sourceCache, maskLayer, coordsForTranslucentLayer(maskLayer, sourceCache));
                         }
                     }
                     this.currentLayer = saveCurrentLayer;
@@ -1443,9 +1544,11 @@ class Painter {
             }
         }
 
-        if (this.terrain && this._debugParams.showTerrainProxyTiles) {
-            drawDebug(this, this.terrain.proxySourceCache, this.terrain.proxyCoords, new Color(1.0, 0.8, 0.1, 1.0), true, this.options.showParseStatus);
-        }
+        Debug.run(() => {
+            if (this.terrain && this._debugParams.showTerrainProxyTiles) {
+                drawDebug(this, this.terrain.proxySourceCache, this.terrain.proxyCoords, new Color(1.0, 0.8, 0.1, 1.0), true, this.options.showParseStatus);
+            }
+        });
 
         if (this.options.showPadding) {
             drawDebugPadding(this);
@@ -1493,8 +1596,15 @@ class Painter {
         const startTime = PerformanceUtils.now();
         this.gpuTimingStart(layer);
         if ((!painter.transform.projection.unsupportedLayers || !painter.transform.projection.unsupportedLayers.includes(layer.type) ||
-            (painter.terrain && layer.type === 'custom')) && layer.type !== 'clip') {
+            (painter.terrain && layer.type === 'custom')) && layer.type !== 'clip' && layer.type !== 'slot' && draw[layer.type]) {
             draw[layer.type](painter, sourceCache, layer, coords, this.style.placement.variableOffsets, this.options.isInitialLoad);
+        }
+        if (!draw[layer.type]) {
+            // Trigger lazy module loads so drawing will be possible once they load.
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises
+            if (layer.mayUse('HD')) setupHD();
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises
+            if (layer.mayUse('Standard')) setupStandard(painter);
         }
         this.gpuTimingEnd();
         PerformanceUtils.measureLowOverhead(PerformanceUtils.GROUP_RENDERING_DETAILED, `renderLayer: ${layer.type.toString()}`, startTime, undefined);
@@ -1617,7 +1727,7 @@ class Painter {
         ];
 
         const translatedMatrix = new Float32Array(16);
-        mat4.translate(translatedMatrix, matrix, translation as [number, number, number]);
+        mat4.translate(translatedMatrix, matrix, translation);
         return translatedMatrix;
     }
 
@@ -1662,8 +1772,10 @@ class Painter {
      * @returns {string[]}
      * @private
      */
-    currentGlobalDefines(name: string, overrideFog?: boolean | null, overrideRtt?: boolean | null): DynamicDefinesType[] {
+    currentGlobalDefines(name: string, overrideFog?: boolean | null, overrideRtt?: boolean | null, overrideTerrain?: boolean | null, overrideGlobe?: boolean | null): DynamicDefinesType[] {
         const rtt = (overrideRtt === undefined) ? this.terrain && this.terrain.renderingToTexture : overrideRtt;
+        const terrainElevated = (overrideTerrain === undefined) ? this.terrainRenderModeElevated() : overrideTerrain;
+        const globe = (overrideGlobe === undefined) ? this.transform.projection.name === 'globe' : overrideGlobe;
         const defines: DynamicDefinesType[] = [];
 
         if (this.style && this.style.enable3dLights()) {
@@ -1678,40 +1790,50 @@ class Painter {
                 }
             }
         }
-        if (this.renderPass === 'shadow') {
-            if (!this._shadowMapDebug) defines.push('DEPTH_TEXTURE');
-        }
-        if (this.terrainRenderModeElevated()) {
+        if (terrainElevated) {
             defines.push('TERRAIN');
             if (this.linearFloatFilteringSupported()) defines.push('TERRAIN_DEM_FLOAT_FORMAT');
         }
-        if (this.transform.projection.name === 'globe') defines.push('GLOBE');
+        if (globe) defines.push('GLOBE');
         // When terrain is active, fog is rendered as part of draping, not as part of tile
         // rendering. Removing the fog flag during tile rendering avoids additional defines.
         if (this._fogVisible && !rtt && (overrideFog === undefined || overrideFog)) {
-            defines.push('FOG', 'FOG_DITHERING');
+            defines.push('FOG');
         }
         if (rtt) defines.push('RENDER_TO_TEXTURE');
         if (this._showOverdrawInspector) defines.push('OVERDRAW_INSPECTOR');
+
         return defines;
     }
 
     getOrCreateProgram<T extends ProgramName>(name: T, options?: CreateProgramParams): Program<ProgramUniformsType[T]> {
         this.cache = this.cache || {};
-        const defines = (options && options.defines) || [];
-        const config = options && options.config;
-        const overrideFog = options && options.overrideFog;
-        const overrideRtt = options && options.overrideRtt;
+        const {defines, config, overrideFog, overrideRtt, overrideTerrain, overrideGlobe, precompiled} = options || {};
 
-        const globalDefines = this.currentGlobalDefines(name, overrideFog, overrideRtt);
-        const allDefines = globalDefines.concat(defines);
-        const key = Program.cacheKey(shaders[name], name, allDefines, config);
+        const globalDefines = this.currentGlobalDefines(name, overrideFog, overrideRtt, overrideTerrain, overrideGlobe);
+        const allDefines = globalDefines.concat(defines || []);
+
+        const shaderSource = this.getShaderSource(name);
+        const hdUniforms = HD.programUniforms as Record<string, (context: Context) => UniformBindings> | undefined;
+        const standardUniforms = Standard.programUniforms as Record<string, (context: Context) => UniformBindings> | undefined;
+        const uniforms = (programUniforms as Record<string, (context: Context) => UniformBindings>)[name] ||
+            (hdUniforms && hdUniforms[name]) ||
+            (standardUniforms && standardUniforms[name]);
+        const key = Program.cacheKey(shaderSource, name, allDefines, config);
 
         if (!this.cache[key]) {
-            this.cache[key] = new Program(this.context, name, shaders[name], config, programUniforms[name] as (Context) => UniformBindings, allDefines);
+            this.cache[key] = new Program(this.context, name, shaderSource, config, uniforms, allDefines, precompiled);
         }
 
         return this.cache[key] as Program<ProgramUniformsType[T]>;
+    }
+
+    // Returns shader source metadata for a program name, including the usedDefines set
+    // used to prune cartesian variant enumeration in the precompiler.
+    getShaderSource(name: ProgramName) {
+        const hdShaders = HD.shaders;
+        const standardShaders = Standard.shaders;
+        return shaders[name as keyof typeof shaders] || (hdShaders && hdShaders[name as keyof typeof hdShaders]) || (standardShaders && standardShaders[name as keyof typeof standardShaders]);
     }
 
     /*
@@ -1801,7 +1923,7 @@ class Painter {
         }
     }
 
-    uploadCommonUniforms(context: Context, program: Program<ProgramUniformsType[ProgramName]>, tileID?: UnwrappedTileID | null, fogMatrix?: Float32Array | null, cutoffParams?: CutoffParams | null) {
+    uploadCommonUniforms(context: Context, program: Program<ProgramUniformsType[ProgramName]>, tileID?: UnwrappedTileID | null, fogMatrix?: mat4 | null, cutoffParams?: CutoffParams | null) {
         this.uploadCommonLightUniforms(context, program as unknown as Program<LightsUniformsType>);
 
         // Fog is not enabled when rendering to texture so we
@@ -1874,9 +1996,7 @@ class Painter {
         return true;
     }
 
-    getBackgroundTiles(): {
-        [key: number]: Tile;
-        } {
+    getBackgroundTiles(): Record<number, Tile> {
         const oldTiles = this._backgroundTiles;
         const newTiles = this._backgroundTiles = {};
 

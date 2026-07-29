@@ -1,6 +1,6 @@
 import earcut from 'earcut';
 import classifyRings from '../../util/classify_rings';
-import assert from 'assert';
+import assert from '../../style-spec/util/assert';
 import {register} from '../../util/web_worker_transfer';
 import loadGeometry from '../load_geometry';
 import toEvaluationFeature from '../evaluation_feature';
@@ -65,6 +65,10 @@ class ClipBucket implements Bucket {
     }
 
     updateAppearances(_canonical?: CanonicalTileID, _featureState?: FeatureStates, _availableImages?: Array<ImageId>, _globalProperties?: GlobalProperties) {
+        return {
+            hasLayoutChanges: false,
+            hasUboChanges: false
+        };
     }
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {

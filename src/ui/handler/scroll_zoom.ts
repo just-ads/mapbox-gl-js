@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from '../../style-spec/util/assert';
 import * as DOM from '../../util/dom';
 import {ease as _ease, bindAll, bezier, isFullscreen} from '../../util/util';
 import browser from '../../util/browser';
@@ -21,6 +21,8 @@ const wheelZoomRate = 1 / 450;
 // upper bound on how much we scale the map in any single render frame; this
 // is used to limit zoom rate in the case of very fast scrolling
 const maxScalePerFrame = 2;
+
+const MAC_OR_IPAD_RE = /(Mac|iPad)/i;
 
 export type ScrollZoomHandlerOptions = {
     around?: 'center';
@@ -319,7 +321,7 @@ class ScrollZoomHandler implements Handler {
         const easing = this._easing;
 
         let finished = false;
-        let zoom;
+        let zoom: number;
         if (this._type === 'wheel' && startZoom && easing) {
             assert(easing && typeof startZoom === 'number');
 
@@ -401,7 +403,7 @@ class ScrollZoomHandler implements Handler {
         if (this._map && !this._alertContainer) {
             this._alertContainer = DOM.create('div', 'mapboxgl-scroll-zoom-blocker', this._map._container);
 
-            if (/(Mac|iPad)/i.test(navigator.userAgent)) {
+            if (MAC_OR_IPAD_RE.test(navigator.userAgent)) {
                 this._alertContainer.textContent = this._map._getUIString('ScrollZoomBlocker.CmdMessage');
             } else {
                 this._alertContainer.textContent = this._map._getUIString('ScrollZoomBlocker.CtrlMessage');

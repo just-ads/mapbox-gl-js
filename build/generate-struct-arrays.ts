@@ -6,19 +6,17 @@
  *    - Particular, named StructArray subclasses, when fancy struct accessors are needed (e.g. CollisionBoxArray)
  */
 
-'use strict'; // eslint-disable-line strict
+'use strict';
 
 import fs from 'fs';
-import ejs from 'ejs';
+import {compile} from 'yeahjs';
 import {createLayout, viewTypes} from '../src/util/struct_array';
 
 // eslint-disable-next-line import-x/order
 import type {ViewType, StructArrayLayout, StructArrayMember} from '../src/util/struct_array';
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const structArrayLayoutJs = ejs.compile(fs.readFileSync('src/util/struct_array_layout.js.ejs', 'utf8'), {strict: true});
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const structArrayJs = ejs.compile(fs.readFileSync('src/util/struct_array.js.ejs', 'utf8'), {strict: true});
+const structArrayLayoutJs = compile(fs.readFileSync('src/util/struct_array_layout.js.ejs', 'utf8'));
+const structArrayJs = compile(fs.readFileSync('src/util/struct_array.js.ejs', 'utf8'));
 
 const typeAbbreviations = {
     'Int8': 'b',
@@ -43,7 +41,6 @@ const arraysWithStructAccessors: ArrayWithStructAccessors[] = [];
 const arrayTypeEntries = new Set();
 const layoutCache: Record<string, {className: string; members: StructArrayMember[]; size: number; usedTypes: Set<string>}> = {};
 
-// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 function normalizeMembers(members: StructArrayMember[], usedTypes: Set<string | ViewType>): StructArrayMember[] {
     return members.map((member) => {
         if (usedTypes && !usedTypes.has(member.type)) {
@@ -53,7 +50,7 @@ function normalizeMembers(members: StructArrayMember[], usedTypes: Set<string | 
         return Object.assign(member, {
             size: sizeOf(member.type),
             view: member.type.toLowerCase()
-        }) as StructArrayMember;
+        });
     });
 }
 
@@ -94,13 +91,14 @@ function createStructArrayLayoutType({
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     if (!alignment || alignment === 1) members = members.reduce((memo, member) => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        if (memo.length > 0 && memo[memo.length - 1].type === member.type) {
+        if (memo.length > 0 && memo.at(-1).type === member.type) {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-            const last = memo[memo.length - 1];
-            return memo.slice(0, -1).concat(Object.assign({}, last, {
+            const last = memo.at(-1);
+            return memo.slice(0, -1).concat({
+                ...last,
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
                 components: last.components + member.components,
-            }));
+            });
         }
         return memo.concat(member);
     }, []);
@@ -145,7 +143,7 @@ createStructArrayType('raster_bounds', boundsAttributes);
 
 import {circleAttributes, circleAttributesExt, circleGlobeAttributesExt} from '../src/data/bucket/circle_attributes';
 import {fillLayoutAttributes, fillLayoutAttributesExt, intersectionsAttributes, intersectionNormalAttributes as intersectionsNormalAttributes} from '../src/data/bucket/fill_attributes';
-import {lineLayoutAttributes, lineZOffsetAttributes} from '../src/data/bucket/line_attributes';
+import {lineLayoutAttributes, lineZOffsetAttributes, lineElevationIdColAttributes, lineElevationGroundScaleAttributes} from '../src/data/bucket/line_attributes';
 import lineAttributesExt from '../src/data/bucket/line_attributes_ext';
 import lineAttributesPattern from '../src/data/bucket/line_attributes_pattern';
 import {patternAttributes} from '../src/data/bucket/pattern_attributes';
@@ -211,6 +209,7 @@ import {
     glyphOffset,
     lineVertex,
     zOffsetAttributes,
+    featureIdAttributes,
     orientationAttributes,
 } from '../src/data/bucket/symbol_attributes';
 
@@ -230,6 +229,7 @@ createStructArrayType('symbol_instance', symbolInstance, true);
 createStructArrayType('glyph_offset', glyphOffset, true);
 createStructArrayType('symbol_line_vertex', lineVertex, true);
 createStructArrayType('z_offset_vertex', zOffsetAttributes);
+createStructArrayType('symbol_feature_id', featureIdAttributes);
 createStructArrayType('symbol_orientation', orientationAttributes);
 
 import globeAttributes from '../src/terrain/globe_attributes';
@@ -282,6 +282,12 @@ createStructArrayType('line_strip_index', createLayout([
 
 // line z offset extension
 createStructArrayType('line_z_offset_ext', lineZOffsetAttributes);
+
+// line elevation id col
+createStructArrayType('line_elevation_id_col', lineElevationIdColAttributes);
+
+// line elevation ground scale
+createStructArrayType('line_elevation_ground_scale', lineElevationGroundScaleAttributes);
 
 // skybox vertex array
 createStructArrayType(`skybox_vertex`, skyboxAttributes);
@@ -352,16 +358,14 @@ fs.writeFileSync('src/data/array_types.ts',
 `// This file is generated. Edit build/generate-struct-arrays.ts, then run \`npm run codegen\`.
 /* eslint-disable camelcase */
 
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {Struct, StructArray} from '../util/struct_array';
 import {register} from '../util/web_worker_transfer';
 
 import type {IStructArrayLayout} from '../util/struct_array';
 
-${// eslint-disable-next-line @typescript-eslint/no-base-to-string, @typescript-eslint/no-unsafe-argument
-    layouts.map(structArrayLayoutJs).join('\n')}
-${// eslint-disable-next-line @typescript-eslint/no-base-to-string, @typescript-eslint/no-unsafe-argument
-    arraysWithStructAccessors.map(structArrayJs).join('\n')}
+${layouts.map(structArrayLayoutJs).join('\n')}
+${arraysWithStructAccessors.map(structArrayJs).join('\n')}
 export {
     ${layouts.map(layout => layout.className).join(',\n    ')},
     ${// eslint-disable-next-line @typescript-eslint/no-base-to-string

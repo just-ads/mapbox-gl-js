@@ -14,7 +14,7 @@ import {fixedNum} from '../../util/fixed';
 import {makeFQID} from '../../../src/util/fqid';
 import {ImageId} from '../../../src/style-spec/expression/types/image_id';
 import {createConstElevationDEM, setMockElevationTerrain} from '../../util/dem_mock';
-import {getGlobalWorkerPool, getImageRasterizerWorkerPool} from '../../../src/util/worker_pool_factory';
+import {getGlobalWorkerPool} from '../../../src/util/worker_pool_factory';
 
 // Mock implementation of elevation
 const createElevation = (func, exaggeration) => {
@@ -814,7 +814,7 @@ describe('Map', () => {
                     if (e.sourceDataType === 'metadata') {
                         setTimeout(() => {
                             expect(clearSourceSpy).toHaveBeenCalledTimes(1);
-                            expect(clearSourceSpy.mock.calls[clearSourceSpy.mock.calls.length - 1][0]).toEqual('mapbox');
+                            expect(clearSourceSpy.mock.calls.at(-1)[0]).toEqual('mapbox');
                             resolve();
                         }, 0);
                     }
@@ -879,7 +879,7 @@ describe('Map', () => {
                     if (e.sourceDataType === 'metadata') {
                         setTimeout(() => {
                             expect(clearSourceSpy).toHaveBeenCalledTimes(1);
-                            expect(clearSourceSpy.mock.calls[clearSourceSpy.mock.calls.length - 1][0]).toEqual('mapbox');
+                            expect(clearSourceSpy.mock.calls.at(-1)[0]).toEqual('mapbox');
                             resolve();
                         }, 0);
                     }
@@ -955,6 +955,45 @@ describe('Map', () => {
                 resolve();
             }, 100);
         });
+    });
+
+    test('idle for invisible layers with transitions', async () => {
+        const style = createStyle();
+        style.sources.mapbox = {
+            type: 'vector',
+            minzoom: 1,
+            maxzoom: 10,
+            tiles: ['/test/util/fixtures/{z}/{x}/{y}.pbf']
+        };
+        style.layers.push({
+            id: 'layerId',
+            type: 'circle',
+            source: 'mapbox',
+            'source-layer': 'sourceLayer',
+            layout: {
+                'visibility': 'none'
+            },
+            paint: {
+                'circle-radius': 10.0
+            }
+        });
+
+        const map = createMap({style});
+
+        await waitFor(map, "idle");
+        expect(map.idle()).toBeTruthy();
+
+        // Modify paint property while visibility is none/visible
+        // Both should result in reporting of idle state
+        map.setLayoutProperty('layerId', 'visibility', 'visible');
+        map.setPaintProperty('layerId', 'circle-radius', 20.0);
+        await waitFor(map, "idle");
+        expect(map.idle()).toBeTruthy();
+
+        map.setLayoutProperty('layerId', 'visibility', 'none');
+        map.setPaintProperty('layerId', 'circle-radius', 30.0);
+        await waitFor(map, "idle");
+        expect(map.idle()).toBeTruthy();
     });
 
     test('no render after idle event', async () => {
@@ -1372,17 +1411,16 @@ describe('Map', () => {
 
     test('#remove cleans up all workers on maps with terrain or vector icons', async () => {
         const pool = getGlobalWorkerPool();
-        const pool2 = getImageRasterizerWorkerPool();
-        const numActive = pool.numActive() + pool2.numActive();
+        const numActive = pool.numActive();
         const map = createMap();
         const TILE_SIZE = 128;
         const zeroDem = createConstElevationDEM(0, TILE_SIZE);
         await waitFor(map, 'style.load');
         setMockElevationTerrain(map, zeroDem, TILE_SIZE);
         await waitFor(map, 'render');
-        expect(pool.numActive() + pool2.numActive()).toEqual(numActive + 2);
+        expect(pool.numActive()).toEqual(numActive + 1);
         map.remove();
-        expect(pool.numActive() + pool2.numActive()).toEqual(numActive);
+        expect(pool.numActive()).toEqual(numActive);
     });
 });
 
@@ -1456,4 +1494,48 @@ test('Disallow usage of FQID separator in the public APIs', async () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         expect(event.error.message).toMatch(/can't contain special symbols/);
     }
+});
+
+describe('Map#setLayerProperty', () => {
+    test('fires the appearances telemetry event', async () => {
+        const map = createMap({
+            style: {
+                version: 8,
+                sources: {},
+                layers: [{id: 'bg', type: 'background'}]
+            }
+        });
+        await waitFor(map, 'style.load');
+        const telemetrySpy = vi.spyOn(map, '_postAddingAppearancesToStyleEvent').mockImplementation(() => {});
+        map.setLayerProperty('bg', 'appearances', []);
+        expect(telemetrySpy).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Map#getLayerProperty', () => {
+    test('delegates to the style and returns the value', async () => {
+        const map = createMap({
+            style: {
+                version: 8,
+                sources: {},
+                layers: [{id: 'bg', type: 'background', minzoom: 3, maxzoom: 12}]
+            }
+        });
+        await waitFor(map, 'style.load');
+        expect(map.getLayerProperty('bg', 'minzoom')).toBe(3);
+        expect(map.getLayerProperty('bg', 'maxzoom')).toBe(12);
+    });
+
+    test('returns undefined for unknown layer', async () => {
+        const map = createMap();
+        await waitFor(map, 'style.load');
+        expect(map.getLayerProperty('nonexistent', 'minzoom')).toBeUndefined();
+    });
+
+    test('returns null for FQID-shaped ids', async () => {
+        const map = createMap();
+        map.on('error', () => {});
+        await waitFor(map, 'style.load');
+        expect(map.getLayerProperty(makeFQID('id', 'scope'), 'minzoom')).toBeNull();
+    });
 });

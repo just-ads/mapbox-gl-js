@@ -1,5 +1,8 @@
 import Point from '@mapbox/point-geometry';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
+
+const FIREFOX_UA_RE = /firefox/i;
+const MACINTOSH_UA_RE = /macintosh/i;
 
 // refine the return type based on tagName, e.g. 'button' -> HTMLButtonElement
 export function create<T extends keyof HTMLElementTagNameMap>(tagName: T, className?: string | null, container?: HTMLElement) {
@@ -26,7 +29,7 @@ export function createSVG(
 
 const docStyle = typeof document !== 'undefined' ? document.documentElement && document.documentElement.style : null;
 const selectProp = docStyle && docStyle.userSelect !== undefined ? 'userSelect' : 'WebkitUserSelect';
-let userSelect;
+let userSelect: string | undefined;
 
 export function disableDrag() {
     if (docStyle && selectProp) {
@@ -38,7 +41,6 @@ export function disableDrag() {
 
 export function enableDrag() {
     if (docStyle && selectProp) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         docStyle[selectProp] = userSelect;
     }
 }
@@ -74,7 +76,7 @@ export function touchPos(el: HTMLElement, touches: TouchList): Array<Point> {
 
 export function mouseButton(e: MouseEvent): number {
     assert(e.type === 'mousedown' || e.type === 'mouseup');
-    if (/firefox/i.test(navigator.userAgent) && /macintosh/i.test(navigator.userAgent) && e.button === 2 && e.ctrlKey) {
+    if (FIREFOX_UA_RE.test(navigator.userAgent) && MACINTOSH_UA_RE.test(navigator.userAgent) && e.button === 2 && e.ctrlKey) {
         // Fix for https://github.com/mapbox/mapbox-gl-js/issues/3131:
         // Firefox on Mac (detected by user agent) determines e.button = 2 when
         // using Control + left click

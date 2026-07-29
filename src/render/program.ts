@@ -3,7 +3,7 @@ import {
     FRAGMENT_PRELUDE_BLOCK,
     VERTEX_PRELUDE_BLOCK
 } from '../shaders/shaders';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import VertexArrayObject from './vertex_array_object';
 import {terrainUniforms, globeUniforms} from '../terrain/terrain';
 import {fogUniforms} from './fog';
@@ -15,6 +15,8 @@ import StencilMode from '../gl/stencil_mode';
 import ColorMode from '../gl/color_mode';
 import Color from '../style-spec/util/color';
 import {Uniform1i} from './uniform_binding';
+import {warnOnce} from '../util/util';
+import browser from '../util/browser';
 
 import type ProgramConfiguration from '../data/program_configuration';
 import type Context from '../gl/context';
@@ -93,6 +95,13 @@ class Program<Us extends UniformBindings> {
     forceManualRenderingForInstanceIDShaders: boolean;
     instancingUniforms: InstancingUniformType | null | undefined;
 
+    _pending: boolean;
+    _context: Context;
+    _fragmentShader: WebGLShader | null;
+    _vertexShader: WebGLShader | null;
+    _fixedUniformsFn: (arg1: Context) => Us;
+    _precompiled: boolean;
+
     static cacheKey(
         source: ShaderSource,
         name: string,
@@ -106,8 +115,12 @@ class Program<Us extends UniformBindings> {
         }
 
         for (const define of defines) {
-            if (source.usedDefines.has(define)) {
-                parts.push(define as string);
+            // Include known defines that are used, or all custom string defines (like MAX_SYMBOL_FEATURES)
+            if (typeof define === 'string' && define.includes(' ')) {
+                // Custom numeric define (e.g., "MAX_SYMBOL_FEATURES 128")
+                parts.push(define);
+            } else if (source.usedDefines.has(define)) {
+                parts.push(define);
             }
         }
 
@@ -120,14 +133,24 @@ class Program<Us extends UniformBindings> {
         source: ShaderSource,
         configuration: ProgramConfiguration | null | undefined,
         fixedUniforms: (arg1: Context) => Us,
-        fixedDefines: DynamicDefinesType[]
+        fixedDefines: DynamicDefinesType[],
+        precompiled: boolean = false
     ) {
         const gl = context.gl;
         this.program = gl.createProgram();
 
+        this._context = context;
+        this._fixedUniformsFn = fixedUniforms;
+        this._pending = true;
+        this._precompiled = precompiled;
+        this.attributes = {};
+
         this.configuration = configuration;
         this.name = name;
         this.fixedDefines = [...fixedDefines];
+
+        if (precompiled) context._compileStats.precompiled++;
+        else context._compileStats.onDemand++;
 
         const configDefines = configuration ? configuration.defines() : [];
         const defines = configDefines.concat(fixedDefines.map((define) => `#define ${define}`)).join('\n');
@@ -162,42 +185,94 @@ class Program<Us extends UniformBindings> {
         const fragmentShader = (gl.createShader(gl.FRAGMENT_SHADER));
         if (gl.isContextLost()) {
             this.failedToCreate = true;
+            this._pending = false;
             return;
         }
         gl.shaderSource(fragmentShader, fragmentSource);
         gl.compileShader(fragmentShader);
-        assert(gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS), gl.getShaderInfoLog(fragmentShader));
         gl.attachShader(this.program, fragmentShader);
 
         const vertexShader = (gl.createShader(gl.VERTEX_SHADER));
         if (gl.isContextLost()) {
             this.failedToCreate = true;
+            this._pending = false;
             return;
         }
         gl.shaderSource(vertexShader, vertexSource);
         gl.compileShader(vertexShader);
-        assert(gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS), gl.getShaderInfoLog(vertexShader));
         gl.attachShader(this.program, vertexShader);
 
-        this.attributes = {};
-
         gl.linkProgram(this.program);
-        assert(gl.getProgramParameter(this.program, gl.LINK_STATUS), gl.getProgramInfoLog(this.program));
 
-        gl.deleteShader(vertexShader);
-        gl.deleteShader(fragmentShader);
+        this._fragmentShader = fragmentShader;
+        this._vertexShader = vertexShader;
 
-        this.fixedUniforms = fixedUniforms(context);
+        // When KHR_parallel_shader_compile isn't available, all sync paths
+        // (getShaderParameter / getProgramParameter) would stall anyway — just finalize now.
+        if (!context.extParallelShaderCompile) {
+            this._finalize();
+        } else {
+            context._pendingPrograms.add(this);
+        }
+    }
+
+    _finalize() {
+        if (!this._pending) return;
+        this._pending = false;
+
+        const context = this._context;
+        const gl = context.gl;
+        context._pendingPrograms.delete(this);
+
+        // Only LINK_STATUS is checked — it blocks until both compiles + link are done.
+        // COMPILE_STATUS would be a redundant blocking call (info logs are non-blocking).
+        // Time *only* this call: it isolates GPU compile-completion wait from JS/GL bookkeeping
+        // (deleteShader, getUniformLocation, etc.) so the metric is comparable across KHR/no-KHR.
+        const t0 = browser.now();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const linkOk = gl.getProgramParameter(this.program, gl.LINK_STATUS);
+        const ms = browser.now() - t0;
+
+        const stats = context._compileStats;
+        stats.totalStallMs += ms;
+        if (ms > stats.maxStallMs) stats.maxStallMs = ms;
+
+        if (ms > 1) { // only collect meaningful stalls
+            stats.framesMissed += Math.floor(ms * 60 / 1000);
+            const defines = this.fixedDefines.join(',');
+            stats.stalls.push({name: `${this.name}${defines ? '/' : ''}${defines}`, ms, timestamp: t0});
+        }
+
+        if (this._fragmentShader) {
+            if (!linkOk) warnOnce(`Fragment shader '${this.name}': ${gl.getShaderInfoLog(this._fragmentShader)}`);
+            gl.deleteShader(this._fragmentShader);
+            this._fragmentShader = null;
+        }
+        if (this._vertexShader) {
+            if (!linkOk) warnOnce(`Vertex shader '${this.name}': ${gl.getShaderInfoLog(this._vertexShader)}`);
+            gl.deleteShader(this._vertexShader);
+            this._vertexShader = null;
+        }
+
+        if (!linkOk) {
+            warnOnce(`Failed to link program '${this.name}': ${gl.getProgramInfoLog(this.program)}`);
+            this.failedToCreate = true;
+            return;
+        }
+
+        this.fixedUniforms = this._fixedUniformsFn(context);
         this.fixedUniformsEntries = Object.entries(this.fixedUniforms);
-        this.binderUniforms = configuration ? configuration.getUniforms(context) : [];
+        this.binderUniforms = this.configuration ? this.configuration.getUniforms(context) : [];
 
         if (this.forceManualRenderingForInstanceIDShaders) {
             this.instancingUniforms = instancingUniforms(context);
         }
 
+        const fixedDefines = this.fixedDefines;
+        const name = this.name;
         // Symbol and circle layer are depth (terrain + 3d layers) occluded
         // For the sake of native compatibility depth occlusion goes via terrain uniforms block
-        if (fixedDefines.includes('TERRAIN') || name.includes('symbol') || name.includes('circle')) {
+        if (fixedDefines.includes('TERRAIN') || fixedDefines.includes('ELEVATED') || name.includes('symbol') || name.includes('circle')) {
             this.terrainUniforms = terrainUniforms(context);
         }
         if (fixedDefines.includes('GLOBE')) {
@@ -217,7 +292,26 @@ class Program<Us extends UniformBindings> {
         }
     }
 
+    // Opportunistic finalize from idle sweep. Uses the non-blocking COMPLETION_STATUS_KHR poll —
+    // skips finalize when the driver hasn't finished, leaving the program for a later sweep.
+    maybeFinalize() {
+        if (!this._pending) return;
+        const ext = this._context.extParallelShaderCompile;
+        if (ext && !this._context.gl.getProgramParameter(this.program, ext.COMPLETION_STATUS_KHR)) return;
+        this._finalize();
+    }
+
+    _ensureReady() {
+        if (!this._pending) return;
+        this._finalize();
+
+        // Sibling sweep AFTER our stall — driver threads may have finished others during our LINK_STATUS wait.
+        // Non-blocking completion polls finalize ready ones now so their future draw-path use doesn't stall.
+        this._context.sweepPendingPrograms();
+    }
+
     getAttributeLocation(gl: WebGL2RenderingContext, name: string): number {
+        this._ensureReady();
         let location = this.attributes[name];
         if (location === undefined) {
             location = this.attributes[name] = gl.getAttribLocation(this.program, name);
@@ -226,6 +320,7 @@ class Program<Us extends UniformBindings> {
     }
 
     setTerrainUniformValues(context: Context, terrainUniformValues: UniformValues<TerrainUniformsType>) {
+        this._ensureReady();
         if (!this.terrainUniforms) return;
         const uniforms: TerrainUniformsType = this.terrainUniforms;
 
@@ -241,6 +336,7 @@ class Program<Us extends UniformBindings> {
     }
 
     setGlobeUniformValues(context: Context, globeUniformValues: UniformValues<GlobeUniformsType>) {
+        this._ensureReady();
         if (!this.globeUniforms) return;
         const uniforms: GlobeUniformsType = this.globeUniforms;
 
@@ -256,6 +352,7 @@ class Program<Us extends UniformBindings> {
     }
 
     setFogUniformValues(context: Context, fogUniformValues: UniformValues<FogUniformsType>) {
+        this._ensureReady();
         if (!this.fogUniforms) return;
         const uniforms: FogUniformsType = this.fogUniforms;
 
@@ -269,6 +366,7 @@ class Program<Us extends UniformBindings> {
     }
 
     setCutoffUniformValues(context: Context, cutoffUniformValues: UniformValues<CutoffUniformsType>) {
+        this._ensureReady();
         if (!this.cutoffUniforms) return;
         const uniforms: CutoffUniformsType = this.cutoffUniforms;
 
@@ -282,6 +380,7 @@ class Program<Us extends UniformBindings> {
     }
 
     setLightsUniformValues(context: Context, lightsUniformValues: UniformValues<LightsUniformsType>) {
+        this._ensureReady();
         if (!this.lightsUniforms) return;
         const uniforms: LightsUniformsType = this.lightsUniforms;
 
@@ -295,6 +394,7 @@ class Program<Us extends UniformBindings> {
     }
 
     setShadowUniformValues(context: Context, shadowUniformValues: UniformValues<ShadowUniformsType>) {
+        this._ensureReady();
         if (this.failedToCreate || !this.shadowUniforms) return;
 
         const uniforms: ShadowUniformsType = this.shadowUniforms;
@@ -363,6 +463,7 @@ class Program<Us extends UniformBindings> {
 
         const debugDefines: DynamicDefinesType[] = [...this.fixedDefines, 'DEBUG_WIREFRAME'];
         const debugProgram = painter.getOrCreateProgram(this.name, {config: this.configuration, defines: debugDefines});
+        debugProgram._ensureReady();
 
         context.program.set(debugProgram.program);
 
@@ -452,28 +553,28 @@ class Program<Us extends UniformBindings> {
     }
 
     draw<Us>(
-         painter: Painter,
-         drawMode: DrawMode,
-         depthMode: Readonly<DepthMode>,
-         stencilMode: Readonly<StencilMode>,
-         colorMode: Readonly<ColorMode>,
-         cullFaceMode: Readonly<CullFaceMode>,
-         uniformValues: UniformValues<Us>,
-         layerID: string,
-         layoutVertexBuffer: VertexBuffer,
-         indexBuffer: IndexBuffer | undefined,
-         segments: SegmentVector,
-         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-         currentProperties?: PossiblyEvaluated<any>,
-         zoom?: number,
-         configuration?: ProgramConfiguration,
-         dynamicLayoutBuffers?: Array<VertexBuffer | null | undefined>,
-         instanceCount?: number
+        painter: Painter,
+        drawMode: DrawMode,
+        depthMode: Readonly<DepthMode>,
+        stencilMode: Readonly<StencilMode>,
+        colorMode: Readonly<ColorMode>,
+        cullFaceMode: Readonly<CullFaceMode>,
+        uniformValues: UniformValues<Us>,
+        layerID: string,
+        layoutVertexBuffer: VertexBuffer,
+        indexBuffer: IndexBuffer | undefined,
+        segments: SegmentVector,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        currentProperties?: PossiblyEvaluated<any>,
+        zoom?: number,
+        configuration?: ProgramConfiguration,
+        dynamicLayoutBuffers?: Array<VertexBuffer | null | undefined>,
+        instanceCount?: number
     ) {
-
         const context = painter.context;
         const gl = context.gl;
 
+        this._ensureReady();
         if (this.failedToCreate) return;
 
         context.program.set(this.program);

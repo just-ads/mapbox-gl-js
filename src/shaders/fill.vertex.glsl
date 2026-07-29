@@ -1,7 +1,7 @@
 #include "_prelude_fog.vertex.glsl"
 #include "_prelude_shadow.vertex.glsl"
 
-in vec2 a_pos;
+in ivec2 a_pos;
 #ifdef ELEVATED_ROADS
 in float a_road_z_offset;
 out highp float v_road_z_offset;
@@ -21,6 +21,7 @@ out highp float v_z_offset;
 #endif
 
 uniform mat4 u_matrix;
+uniform lowp float u_opacity_multiplier;
 
 #pragma mapbox: define highp vec4 color
 #pragma mapbox: define lowp float opacity
@@ -52,7 +53,7 @@ void main() {
 #endif
 
 #ifdef FOG
-    v_fog_pos = fog_position(a_pos);
+    v_fog_pos = fog_position(vec2(a_pos));
 #endif
 #ifdef INDICATOR_CUTOUT
     v_z_offset = z_offset;

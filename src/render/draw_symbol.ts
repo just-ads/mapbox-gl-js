@@ -8,7 +8,7 @@ import StencilMode from '../gl/stencil_mode';
 import DepthMode from '../gl/depth_mode';
 import CullFaceMode from '../gl/cull_face_mode';
 import {addDynamicAttributes} from '../data/bucket/symbol_bucket';
-import {calculateGroundShadowFactor} from '../../3d-style/render/shadow_renderer';
+import {calculateGroundShadowFactor} from '../../3d-style/render/shadow_utils';
 import {getAnchorAlignment, WritingMode} from '../symbol/shaping';
 import ONE_EM from '../symbol/one_em';
 import {evaluateVariableOffset} from '../symbol/symbol_layout';
@@ -218,7 +218,7 @@ function updateVariableAnchorsForBucket(bucket: SymbolBucket, rotateWithMap: boo
             let dx = 0, dy = 0, dz = 0;
             const renderElevatedRoads = bucket.elevationType === 'road';
             if (elevation || renderElevatedRoads) {
-                const elevationFeature = renderElevatedRoads ? bucket.getElevationFeatureForText(s) : null;
+                const elevationFeature = renderElevatedRoads && bucket.hdExt ? bucket.hdExt.getElevationFeatureForPlacedSymbol(bucket, bucket.text, s) : null;
                 const h = Elevation.getAtTileOffset(coord, new Point(tileAnchorX, tileAnchorY), elevation, elevationFeature);
                 const [ux, uy, uz] = projection.upVector(coord.canonical, tileAnchorX, tileAnchorY);
                 dx = h * ux * metersToTile;
@@ -386,6 +386,13 @@ function drawLayerSymbols(
             return groundShadowFactor;
         };
 
+        const setUBODefines = (defines: DynamicDefinesType[]) => {
+            // MAX_UBO_SIZE_VEC4: number of vec4 slots available for u_properties / u_block_indices.
+            const uboSizeDwords = Math.floor(painter.context.maxUniformBlockSize / 4);
+            const maxUBOSizeVec4 = Math.floor(uboSizeDwords / 4);
+            defines.push(`MAX_UBO_SIZE_VEC4 ${maxUBOSizeVec4}u`);
+        };
+
         const setOcclusionDefines = (defines: DynamicDefinesType[]) => {
             // Globe or orthographic - no depth occlusion needed
             if (!tr.depthOcclusionForSymbolsAndCircles) {
@@ -465,15 +472,16 @@ function drawLayerSymbols(
             }
 
             if (renderWithShadows) {
-                baseDefines.push('RENDER_SHADOWS', 'DEPTH_TEXTURE', 'NORMAL_OFFSET');
+                baseDefines.push('RENDER_SHADOWS', 'NORMAL_OFFSET');
             }
 
             if (renderElevatedRoads && iconPitchWithMap && !painter.terrain && bucket.icon.orientationVertexBuffer) {
                 baseDefines.push('ELEVATED_ROADS');
             }
 
-            const programConfiguration = bucket.icon.programConfigurations.get(layer.id);
-            const program = painter.getOrCreateProgram('symbol', {config: programConfiguration, defines: baseDefines});
+            setUBODefines(baseDefines);
+
+            const program = painter.getOrCreateProgram('symbol', {defines: baseDefines});
 
             const texSize: [number, number] = tile.imageAtlasTexture ? tile.imageAtlasTexture.size : [0, 0];
             const sizeData = bucket.iconSizeData;
@@ -484,9 +492,14 @@ function drawLayerSymbols(
 
             const glCoordMatrix = symbolProjection.getGlCoordMatrix(tileMatrix, tile.tileID.canonical, iconPitchWithMap, iconRotateWithMap, tr, bucket.getProjection(), s);
 
-            const uglCoordMatrix = painter.translatePosMatrix(glCoordMatrix, tile, iconTranslate, iconTranslateAnchor, true);
+            // When icon-translate is per-feature (appearances define it), the translate is stored
+            // in the UBO and applied per-vertex in the shader. The matrix must have no translate.
+            const iconTranslateDataDriven = !!(bucket.icon.uboBinder && bucket.icon.uboBinder.hasPerFeatureTranslate());
+            const effectiveIconTranslate: [number, number] = iconTranslateDataDriven ? [0, 0] : iconTranslate;
 
-            const matrix = painter.translatePosMatrix(tileMatrix, tile, iconTranslate, iconTranslateAnchor);
+            const uglCoordMatrix = painter.translatePosMatrix(glCoordMatrix, tile, effectiveIconTranslate, iconTranslateAnchor, true);
+
+            const matrix = painter.translatePosMatrix(tileMatrix, tile, effectiveIconTranslate, iconTranslateAnchor);
             const uLabelPlaneMatrix = projectedPosOnLabelSpace ? identityMat4 : labelPlaneMatrixRendering;
             const rotateInShader = iconRotateWithMap && !iconPitchWithMap && !alongLine;
 
@@ -578,7 +591,7 @@ function drawLayerSymbols(
             baseDefines.push('RENDER_SDF');
 
             if (renderWithShadows) {
-                baseDefines.push('RENDER_SHADOWS', 'DEPTH_TEXTURE', 'NORMAL_OFFSET');
+                baseDefines.push('RENDER_SHADOWS', 'NORMAL_OFFSET');
             }
 
             if (renderElevatedRoads && textPitchWithMap && !painter.terrain && bucket.text.orientationVertexBuffer) {
@@ -587,12 +600,13 @@ function drawLayerSymbols(
 
             setOcclusionDefines(baseDefines);
 
-            const programConfiguration = bucket.text.programConfigurations.get(layer.id);
-            const program = painter.getOrCreateProgram('symbol', {config: programConfiguration, defines: baseDefines});
+            setUBODefines(baseDefines);
+
+            const program = painter.getOrCreateProgram('symbol', {defines: baseDefines});
 
             let texSizeIcon: [number, number] = [0, 0];
             let atlasTextureIcon: Texture | null = null;
-            let atlasInterpolationIcon;
+            let atlasInterpolationIcon: WebGL2RenderingContext['NEAREST'] | WebGL2RenderingContext['LINEAR'] | undefined;
 
             const sizeData = bucket.textSizeData;
 
@@ -612,9 +626,14 @@ function drawLayerSymbols(
             // labelPlaneMatrixInv is used for converting vertex pos to tile coordinates needed for sampling elevation.
             const glCoordMatrix = symbolProjection.getGlCoordMatrix(tileMatrix, tile.tileID.canonical, textPitchWithMap, textRotateWithMap, tr, bucket.getProjection(), s);
 
-            const uglCoordMatrix = painter.translatePosMatrix(glCoordMatrix, tile, textTranslate, textTranslateAnchor, true);
+            // When text-translate is per-feature (appearances define it), the translate is stored
+            // in the UBO and applied per-vertex in the shader. The matrix must have no translate.
+            const textTranslateDataDriven = !!(bucket.text.uboBinder && bucket.text.uboBinder.hasPerFeatureTranslate());
+            const effectiveTextTranslate: [number, number] = textTranslateDataDriven ? [0, 0] : textTranslate;
 
-            const matrix = painter.translatePosMatrix(tileMatrix, tile, textTranslate, textTranslateAnchor);
+            const uglCoordMatrix = painter.translatePosMatrix(glCoordMatrix, tile, effectiveTextTranslate, textTranslateAnchor, true);
+
+            const matrix = painter.translatePosMatrix(tileMatrix, tile, effectiveTextTranslate, textTranslateAnchor);
             const uLabelPlaneMatrix = projectedPosOnLabelSpace ? identityMat4 : labelPlaneMatrixRendering;
 
             // Line label rotation happens in `updateLineLabels`
@@ -658,7 +677,6 @@ function drawLayerSymbols(
                 atlasTexture,
                 atlasTextureIcon,
                 atlasInterpolation,
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 atlasInterpolationIcon,
                 isSDF: true,
                 hasHalo,
@@ -779,9 +797,67 @@ function drawSymbolElements(buffers: SymbolBuffers, segments: SegmentVector, lay
     const context = painter.context;
     const gl = context.gl;
     const dynamicBuffers = [buffers.dynamicLayoutVertexBuffer, buffers.opacityVertexBuffer, buffers.iconTransitioningVertexBuffer, buffers.globeExtVertexBuffer, buffers.zOffsetVertexBuffer, buffers.orientationVertexBuffer];
-    program.draw(painter, gl.TRIANGLES, depthMode, stencilMode, colorMode, CullFaceMode.disabled,
-        uniformValues, layer.id, buffers.layoutVertexBuffer,
-        buffers.indexBuffer, segments, layer.paint,
-        painter.transform.zoom, buffers.programConfigurations.get(layer.id), dynamicBuffers,
-        instanceCount);
+
+    if (buffers.featureIdBuffer) {
+        dynamicBuffers.push(buffers.featureIdBuffer);
+    }
+
+    const programConfiguration = buffers.uboBinder ? null : buffers.programConfigurations.get(layer.id);
+
+    // Set constant paint property uniforms (u_spp_*) for UBO mode.
+    // These are evaluated at the current render zoom so camera (zoom-only) expressions
+    // are up-to-date every frame without requiring a UBO rewrite.
+    if (buffers.uboBinder) {
+        // 'layer' is omitted from worker→main serialization (see register() in symbol_property_binder_ubo.ts).
+        // Reassign the current style layer before any evaluation so paint values are up-to-date.
+        buffers.uboBinder.layer = layer;
+        const renderZoom = painter.transform.zoom;
+        const brightness = painter.style.getBrightness ? painter.style.getBrightness() : null;
+        const cv = buffers.uboBinder.getConstantUniformValues(renderZoom, brightness);
+        uniformValues['u_spp_fill_np_color']     = cv.fill_np_color;
+        uniformValues['u_spp_halo_np_color']     = cv.halo_np_color;
+        uniformValues['u_spp_opacity']           = cv.opacity;
+        uniformValues['u_spp_halo_width']        = cv.halo_width;
+        uniformValues['u_spp_halo_blur']         = cv.halo_blur;
+        uniformValues['u_spp_emissive_strength'] = cv.emissive_strength;
+        uniformValues['u_spp_occlusion_opacity'] = cv.occlusion_opacity;
+        uniformValues['u_spp_z_offset']          = cv.z_offset;
+        // Per-property precomputed zoom interpolation factor
+        const zf = cv.zoomFactors;
+        uniformValues['u_spp_fill_color_zoom_factor']        = zf[0];
+        uniformValues['u_spp_halo_color_zoom_factor']        = zf[1];
+        uniformValues['u_spp_opacity_zoom_factor']           = zf[2];
+        uniformValues['u_spp_halo_width_zoom_factor']        = zf[3];
+        uniformValues['u_spp_halo_blur_zoom_factor']         = zf[4];
+        uniformValues['u_spp_emissive_strength_zoom_factor'] = zf[5];
+        uniformValues['u_spp_occlusion_opacity_zoom_factor'] = zf[6];
+        uniformValues['u_spp_z_offset_zoom_factor']          = zf[7];
+        uniformValues['u_spp_translate_zoom_factor']         = zf[8];
+        // Compute translate-anchor rotation for per-feature translate (appearances).
+        // When translate is data-driven (bit 8 of dataDrivenMask), u_coord_matrix has no translate
+        // baked in (set to [0,0] in drawLayerSymbols). The shader applies per-feature translate
+        // from the UBO rotated by this uniform.
+        const isText = buffers.uboBinder.isText;
+        const translateAnchor = isText ?
+            layer.paint.get('text-translate-anchor') :
+            layer.paint.get('icon-translate-anchor');
+        const hasPerFeatureTranslate = buffers.uboBinder.hasPerFeatureTranslate();
+        const rotAngle = hasPerFeatureTranslate && translateAnchor === 'map' ?
+            painter.transform.angle : 0;
+        uniformValues['u_spp_translate_rotation'] = [Math.cos(rotAngle), Math.sin(rotAngle)];
+    }
+
+    const {batchIndices, batchSegments} = buffers.getBatchGrouping(segments);
+
+    for (const batchIndex of batchIndices) {
+        const batchSegmentVector = batchSegments.get(batchIndex);
+        if (buffers.uboBinder) {
+            buffers.uboBinder.bind(context, program.program, batchIndex);
+        }
+        program.draw(painter, gl.TRIANGLES, depthMode, stencilMode, colorMode, CullFaceMode.disabled,
+            uniformValues, layer.id, buffers.layoutVertexBuffer,
+            buffers.indexBuffer, batchSegmentVector, layer.paint,
+            painter.transform.zoom, programConfiguration, dynamicBuffers,
+            instanceCount);
+    }
 }

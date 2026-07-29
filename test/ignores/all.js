@@ -30,9 +30,6 @@ const todo = [
     // "https://github.com/mapbox/mapbox-gl-js/issues/10365"
     "render-tests/terrain/symbol-draping/style.json",
 
-    // Requires complete landmark rendering support such as shadows and materials
-    "render-tests/model-layer/landmark-conflation-buckingham",
-
     // https://mapbox.atlassian.net/browse/MAPS3D-987
     "render-tests/model-layer/landmark-shadows-terrain",
 
@@ -108,6 +105,7 @@ const todo = [
     "render-tests/icon-text-fit/stretch-nine-part-content-interpolate-text-size",
     // https://mapbox.atlassian.net/browse/GLJS-1189
     "render-tests/background-pattern/image-update/delayed/same-size-before-color-theme-change",
+
 ];
 
 const skip = [
@@ -137,15 +135,17 @@ const skip = [
     // Current behavior is arbitrary
     "render-tests/geojson/inline-linestring-fill",
 
-    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3407
-    "render-tests/icon-size/small-stretch-area",
+    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3482
+    "render-tests/appearance/empty-image-in-appearance",
+    "render-tests/appearance/icon-text-fit-vertical/non-existent-image",
+    "render-tests/appearance/icon-text-fit-vertical/zero-icon-size",
+    "render-tests/appearance/non-existent-image-in-appearance",
 
-    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3448
-    "render-tests/icon-size/depends-on-coalesce-image",
-    "render-tests/appearance/icon-size-depends-on-coalesce-image",
+    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3474
+    "render-tests/appearance/icon-text-fit-vertical/other-image",
 
-    // Broken in similar way as gl-native https://mapbox.atlassian.net/browse/MAPSNAT-3462
-    "render-tests/appearance/no-icon-size-in-appearance-non-default-layout-icon-size",
+    // Broken - https://mapbox.atlassian.net/browse/GLJS-1583
+    "render-tests/appearance/line-placement/icon-appears-below",
 
     // Mapbox-gl-js does not support tile-mode
     "render-tests/icon-text-fit/text-variable-anchor-tile-map-mode",
@@ -241,7 +241,7 @@ const skip = [
     "render-tests/background-pattern/image-update/delayed/different-size-with-color-theme",
 
     // https://mapbox.atlassian.net/browse/GLJS-1295
-    "render-tests/placement/icon-optional",
+    "render-tests/placement/icon-optional/basic",
     "render-tests/placement/text-optional/basic",
     "render-tests/placement/text-optional/text-variable-anchor",
     // limit number of holes experimental for native
@@ -273,14 +273,31 @@ const skip = [
 
     // Requires support for hd-roads-markup/elevationId - not yet supported in gl-js
     "render-tests/model-layer/model-elevation-reference/hd-road-markup/with-elevation-id",
+    "render-tests/model-layer/model-elevation-reference/hd-road-markup/with-terrain-fallback-to-ground",
     "render-tests/building/terrain/terrain-toggle-conflation-works",
     "render-tests/building/terrain/terrain-unsupported",
     "render-tests/building/globe-unsupported",
 
-    // Ignore procedural buiding clip layer render tests for now.
-    "render-tests/building/clip-layer/default",
-    "render-tests/building/clip-layer/lower-order-clipping-skipped",
-    "render-tests/building/clip-layer/with-FE-and-landmarks"
+    // Not implemented, https://mapbox.atlassian.net/browse/GLJS-1591
+    "render-tests/slots/inner-slot-before-outer",
+    "render-tests/slots/mixed-slot-order-with-imports",
+
+    // gl-native only: indicator cutout with front cutoff
+    "render-tests/front-cutoff/indicator-cutout",
+    "render-tests/front-cutoff/indicator-cutout-transparency",
+    "render-tests/front-cutoff/indicator-cutout-2x-pixelratio",
+
+    // gl-native only: elevated HD road markup (geojson line with hd-road-markup elevation reference not supported in gl-js)
+    "render-tests/hd-sd-transition/elevated-hd-sd-end",
+
+    // gl-native only: animated config change (pinBooleanTransitionProgress) is not supported in gl-js.
+    "render-tests/hd-sd-transition/elevated-hd-sd",
+    "render-tests/hd-sd-transition/elevated-hd-sd-mid-forward",
+    "render-tests/hd-sd-transition/elevated-hd-sd-mid-reverse",
+    "render-tests/hd-sd-transition/elevated-hd-sd-landuse",
+    "render-tests/hd-sd-transition/hd-on-remove-import",
+    "render-tests/hd-sd-transition/sd-on-steady",
+
 ];
 
 export default {todo, skip};

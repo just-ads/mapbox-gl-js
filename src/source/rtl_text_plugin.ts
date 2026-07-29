@@ -1,7 +1,7 @@
 import {Event, Evented} from '../util/evented';
 import {getArrayBuffer} from '../util/ajax';
 import browser from '../util/browser';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {isWorker} from '../util/util';
 
 import type {Callback} from '../types/callback';
@@ -30,11 +30,10 @@ let _completionCallback = null;
 let pluginStatus: PluginStatus = rtlPluginStatus.unavailable;
 let pluginURL: string | null | undefined = null;
 
-export const triggerPluginCompletionEvent = function (error?: Error | null) {
-    // NetworkError's are not correctly reflected by the plugin status which prevents reloading plugin
-// @ts-expect-error - TS2339 - Property 'indexOf' does not exist on type 'never'.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    if (error && typeof error === 'string' && error.indexOf('NetworkError') > -1) {
+export const triggerPluginCompletionEvent = function (error?: Error | string | null) {
+    // Reset plugin status on any error so the consumer's callback can retry
+    // `setRTLTextPlugin` without hitting the "cannot be called multiple times" guard.
+    if (error) {
         pluginStatus = rtlPluginStatus.error;
     }
 
@@ -95,14 +94,12 @@ export const downloadRTLTextPlugin = function () {
     pluginStatus = rtlPluginStatus.loading;
     sendPluginStateToWorker();
     if (pluginURL) {
-        getArrayBuffer({url: pluginURL}, (error) => {
-            if (error) {
-                triggerPluginCompletionEvent(error);
-            } else {
+        getArrayBuffer({url: pluginURL})
+            .then(() => {
                 pluginStatus = rtlPluginStatus.loaded;
                 sendPluginStateToWorker();
-            }
-        });
+            })
+            .catch((err: Error) => { triggerPluginCompletionEvent(err); });
     }
 };
 

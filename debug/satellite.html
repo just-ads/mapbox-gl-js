@@ -24,13 +24,12 @@
     <label><input id="terrain" type="checkbox" checked> terrain</label>
 </div>
 
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
 
-mapboxgl.accessToken = getAccessToken();
-
 var map = window.map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     zoom: 12.5,

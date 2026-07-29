@@ -1,5 +1,5 @@
 import StyleLayer from '../style_layer';
-import FillExtrusionBucket, {ELEVATION_SCALE, ELEVATION_OFFSET, fillExtrusionHeightLift, resampleFillExtrusionPolygonsForGlobe} from '../../data/bucket/fill_extrusion_bucket';
+import FillExtrusionBucket, {ELEVATION_SCALE, ELEVATION_OFFSET, fillExtrusionHeightLift, resampleFillExtrusionPolygonsForGlobe, HIDDEN_BY_CLIP} from '../../data/bucket/fill_extrusion_bucket';
 import {polygonIntersectsPolygon, polygonIntersectsMultiPolygon} from '../../util/intersection_tests';
 import {translateDistance, tilespaceTranslate} from '../query_utils';
 import {getLayoutProperties, getPaintProperties} from './fill_extrusion_style_layer_properties';
@@ -41,7 +41,7 @@ class FillExtrusionStyleLayer extends StyleLayer {
         this._stats = {numRenderedVerticesInShadowPass: 0, numRenderedVerticesInTransparentPass: 0};
     }
 
-    createBucket(parameters: BucketParameters<FillExtrusionStyleLayer>): FillExtrusionBucket {
+    override createBucket(parameters: BucketParameters<this>): FillExtrusionBucket {
         return new FillExtrusionBucket(parameters);
     }
 
@@ -94,14 +94,18 @@ class FillExtrusionStyleLayer extends StyleLayer {
         const terrainVisible = elevationHelper && transform.elevation;
         const exaggeration = transform.elevation ? transform.elevation.exaggeration() : 1;
         const bucket = queryGeometry.tile.getBucket(this);
-        if (terrainVisible && bucket instanceof FillExtrusionBucket) {
-            const centroidVertexArray = bucket.centroidVertexArray;
+        if (bucket instanceof FillExtrusionBucket) {
+            const centroidData = bucket.centroidData.find(d => layoutVertexArrayOffset >= d.vertexArrayOffset && layoutVertexArrayOffset < d.vertexArrayOffset + d.vertexCount);
+            if (centroidData && (centroidData.flags & HIDDEN_BY_CLIP)) return false;
+            if (terrainVisible) {
+                const centroidVertexArray = bucket.centroidVertexArray;
 
-            // See FillExtrusionBucket#encodeCentroid(), centroid is inserted at vertexOffset + 1
-            const centroidOffset = layoutVertexArrayOffset + 1;
-            if (centroidOffset < centroidVertexArray.length) {
-                centroid[0] = centroidVertexArray.geta_centroid_pos0(centroidOffset);
-                centroid[1] = centroidVertexArray.geta_centroid_pos1(centroidOffset);
+                // See FillExtrusionBucket#encodeCentroid(), centroid is inserted at vertexOffset + 1
+                const centroidOffset = layoutVertexArrayOffset + 1;
+                if (centroidOffset < centroidVertexArray.length) {
+                    centroid[0] = centroidVertexArray.geta_centroid_pos0(centroidOffset);
+                    centroid[1] = centroidVertexArray.geta_centroid_pos1(centroidOffset);
+                }
             }
         }
 
@@ -382,7 +386,7 @@ function projectExtrusion3D(geometry: Array<Array<Point>>, zBase: number, zTop: 
             v[1] = y;
             v[2] = heightOffset.base;
             v[3] = 1;
-            vec4.transformMat4(v as [number, number, number, number], v as [number, number, number, number], m);
+            vec4.transformMat4(v, v, m);
             v[3] = Math.max(v[3], 0.00001);
             const base = new Point3D(v[0] / v[3], v[1] / v[3], v[2] / v[3]);
 
@@ -390,7 +394,7 @@ function projectExtrusion3D(geometry: Array<Array<Point>>, zBase: number, zTop: 
             v[1] = y;
             v[2] = heightOffset.top;
             v[3] = 1;
-            vec4.transformMat4(v as [number, number, number, number], v as [number, number, number, number], m);
+            vec4.transformMat4(v, v, m);
             v[3] = Math.max(v[3], 0.00001);
             const top = new Point3D(v[0] / v[3], v[1] / v[3], v[2] / v[3]);
 

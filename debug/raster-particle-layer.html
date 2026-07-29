@@ -55,15 +55,11 @@
 <body>
 <div id="map"></div>
 <div id="config"></div>
-<script src="../dist/mapbox-gl-dev.js"></script>
+<script type='text/javascript' src="https://cdn.jsdelivr.net/npm/tweakpane@3.1.9/dist/tweakpane.min.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
 
-mapboxgl.accessToken = getAccessToken();
-</script>
-<script type='text/javascript' src="https://cdn.jsdelivr.net/npm/tweakpane@3.1.9/dist/tweakpane.min.js"></script>
-
-<script>
 const PARAMS = {
     projection: 'globe',
     showTileBoundaries: false,
@@ -79,7 +75,7 @@ const PARAMS = {
 const RASTERARRAY_LAYER = '10winds';
 
 window.onload = function() {
-    const gui = new Tweakpane.Pane({  // eslint-disable-line
+    const gui = new window.Tweakpane.Pane({  // eslint-disable-line
         container: document.querySelector('#config'),
         title: 'Particle animation settings'
     });
@@ -160,6 +156,7 @@ window.onload = function() {
 };
 
 const map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     maxZoom: 2,
     minZoom: 2,

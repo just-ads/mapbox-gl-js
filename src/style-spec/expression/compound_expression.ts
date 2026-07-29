@@ -1,8 +1,8 @@
 import {toString} from './types';
-import ParsingContext from './parsing_context';
-import assert from 'assert';
+import assert from '../util/assert';
 
 import type EvaluationContext from './evaluation_context';
+import type ParsingContext from './parsing_context';
 import type {Expression, ExpressionRegistry, SerializedExpression} from './expression';
 import type {Type} from './types';
 import type {Value} from './values';
@@ -67,7 +67,7 @@ class CompoundExpression implements Expression {
         const type = Array.isArray(definition) ?
             definition[0] : definition.type;
 
-        const availableOverloads = Array.isArray(definition) ?
+        const availableOverloads: Array<[Signature, Evaluate]> = Array.isArray(definition) ?
             [[definition[1], definition[2]]] :
             definition.overloads;
 
@@ -83,9 +83,16 @@ class CompoundExpression implements Expression {
             overloadParams.push(params);
             overloadIndex++;
 
-            // Use a fresh context for each attempted signature so that, if
-            // we eventually succeed, we haven't polluted `context.errors`.
-            signatureContext = new ParsingContext(context.registry, context.path, null, context.scope, undefined, context._scope, context.options, context.iconImageUseTheme);
+            // Use a fresh-looking context for each attempted signature so
+            // that, if we eventually succeed, we haven't polluted
+            // `context.errors`. We allocate the context once and reset its
+            // errors between overload attempts; the other fields are
+            // identical across attempts.
+            if (signatureContext === null) {
+                signatureContext = context._forkForSignature();
+            } else {
+                signatureContext.errors.length = 0;
+            }
 
             // First parse all the args, potentially coercing to the
             // types expected by this overload.
@@ -93,13 +100,10 @@ class CompoundExpression implements Expression {
             let argParseFailed = false;
             for (let i = 1; i < args.length; i++) {
                 const arg = args[i];
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 const expectedType = Array.isArray(params) ?
                     params[i - 1] :
-                // @ts-expect-error - TS2339 - Property 'type' does not exist on type 'Varargs | Evaluate'.
                     params.type;
 
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
                 const parsed = signatureContext.parse(arg, 1 + parsedArgs.length, expectedType);
                 if (!parsed) {
                     argParseFailed = true;
@@ -121,16 +125,12 @@ class CompoundExpression implements Expression {
             }
 
             for (let i = 0; i < parsedArgs.length; i++) {
-                // @ts-expect-error - TS2339 - Property 'type' does not exist on type 'Varargs | Evaluate'.
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
                 const expected = Array.isArray(params) ? params[i] : params.type;
                 const arg = parsedArgs[i];
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                signatureContext.concat(i + 1).checkSubtype(expected, arg.type);
+                signatureContext.checkSubtype(expected, arg.type, i + 1);
             }
 
             if (signatureContext.errors.length === 0) {
-                // @ts-expect-error - TS2345 - Argument of type 'Signature | Evaluate' is not assignable to parameter of type 'Evaluate'.
                 return new CompoundExpression(op, type, evaluate, parsedArgs, overloadIndex);
             }
         }

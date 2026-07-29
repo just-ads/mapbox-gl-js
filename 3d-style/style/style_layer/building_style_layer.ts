@@ -1,9 +1,10 @@
 import StyleLayer from '../../../src/style/style_layer';
-import {BuildingBucket, BUILDING_VISIBLE} from '../../data/bucket/building_bucket';
+import {BUILDING_VISIBLE} from '../../data/bucket/building_bucket_flags';
 import {getLayoutProperties, getPaintProperties} from './building_style_layer_properties';
 import {checkIntersection, projectExtrusion} from '../../../src/style/style_layer/fill_extrusion_style_layer';
 import Point from '@mapbox/point-geometry';
-import assert from 'assert';
+import assert from '../../../src/style-spec/util/assert';
+import {BuildingBucket, prepareBuildingGen} from '../../../modules/hd_worker';
 
 import type {Layout, Transitionable, Transitioning, PossiblyEvaluated, ConfigOptions} from '../../../src/style/properties';
 import type {Bucket, BucketParameters} from '../../../src/data/bucket';
@@ -15,6 +16,7 @@ import type {LUT} from "../../../src/util/lut";
 import type {TilespaceQueryGeometry} from '../../../src/style/query_geometry';
 import type Transform from '../../../src/geo/transform';
 import type {VectorTileFeature} from '@mapbox/vector-tile';
+import type {RuntimeModuleType} from '../../../src/style/style_layer';
 
 class BuildingStyleLayer extends StyleLayer {
     override type: 'building';
@@ -35,7 +37,15 @@ class BuildingStyleLayer extends StyleLayer {
         this._stats = {numRenderedVerticesInShadowPass: 0, numRenderedVerticesInTransparentPass: 0};
     }
 
-    createBucket(parameters: BucketParameters<BuildingStyleLayer>): BuildingBucket {
+    override mayUse(type: RuntimeModuleType): boolean {
+        return type === 'HD';
+    }
+
+    override prepare(): Promise<void> {
+        return prepareBuildingGen();
+    }
+
+    override createBucket(parameters: BucketParameters<this>): BuildingBucket {
         return new BuildingBucket(parameters);
     }
 
@@ -73,6 +83,7 @@ class BuildingStyleLayer extends StyleLayer {
         pixelPosMatrix: Float32Array,
         elevationHelper: DEMSampler | null | undefined,
         layoutVertexArrayOffset: number,
+        scope: string | undefined
     ): boolean | number {
         let height = this.layout.get('building-height').evaluate(feature, featureState);
         const base = this.layout.get('building-base').evaluate(feature, featureState);

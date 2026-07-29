@@ -5,6 +5,7 @@
 uniform highp float u_device_pixel_ratio;
 uniform highp float u_width_scale;
 uniform highp float u_alpha_discard_threshold;
+uniform lowp float u_opacity_multiplier;
 uniform highp vec2 u_texsize;
 uniform highp float u_tile_units_to_pixels;
 uniform highp vec2 u_trim_offset;
@@ -49,9 +50,9 @@ in highp vec4 v_pos_light_view_1;
 in highp float v_depth;
 #endif
 
-#pragma mapbox: define mediump vec4 pattern
+#pragma mapbox: define mediump uvec4 pattern
 #ifdef LINE_PATTERN_TRANSITION
-#pragma mapbox: define mediump vec4 pattern_b
+#pragma mapbox: define mediump uvec4 pattern_b
 #endif
 #pragma mapbox: define mediump float pixel_ratio
 #pragma mapbox: define mediump float blur
@@ -59,17 +60,17 @@ in highp float v_depth;
 #pragma mapbox: define lowp float emissive_strength
 
 void main() {
-    #pragma mapbox: initialize mediump vec4 pattern
+    #pragma mapbox: initialize mediump uvec4 pattern
     #ifdef LINE_PATTERN_TRANSITION
-    #pragma mapbox: initialize mediump vec4 pattern_b
+    #pragma mapbox: initialize mediump uvec4 pattern_b
     #endif
     #pragma mapbox: initialize mediump float pixel_ratio
     #pragma mapbox: initialize mediump float blur
     #pragma mapbox: initialize mediump float opacity
     #pragma mapbox: initialize lowp float emissive_strength
 
-    vec2 pattern_tl = pattern.xy;
-    vec2 pattern_br = pattern.zw;
+    vec2 pattern_tl = vec2(pattern.xy);
+    vec2 pattern_br = vec2(pattern.zw);
 
     vec2 display_size = (pattern_br - pattern_tl) / pixel_ratio;
 
@@ -102,8 +103,8 @@ void main() {
 #endif
 
 #ifdef LINE_PATTERN_TRANSITION
-    vec2 pattern_b_tl = pattern_b.xy;
-    vec2 pattern_b_br = pattern_b.zw;
+    vec2 pattern_b_tl = vec2(pattern_b.xy);
+    vec2 pattern_b_br = vec2(pattern_b.zw);
     highp vec2 pos_b = mix(pattern_b_tl * texel_size - texel_size, pattern_b_br * texel_size + texel_size, vec2(x, y));
     vec4 color_b = textureLodCustom(u_image, pos_b, lod_pos);
     color = color * (1.0 - u_pattern_transition) + color_b * u_pattern_transition;
@@ -160,7 +161,7 @@ void main() {
     color = fog_dither(fog_apply_premultiplied(color, v_fog_pos));
 #endif
 
-    color *= (alpha * opacity);
+    color *= (alpha * opacity * u_opacity_multiplier);
 
     if (u_alpha_discard_threshold != 0.0) {
         if (color.a < u_alpha_discard_threshold) {

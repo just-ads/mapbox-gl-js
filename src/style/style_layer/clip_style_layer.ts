@@ -29,7 +29,7 @@ class ClipStyleLayer extends StyleLayer {
         super.recalculate(parameters, availableImages);
     }
 
-    createBucket(parameters: BucketParameters<ClipStyleLayer>): ClipBucket {
+    override createBucket(parameters: BucketParameters<this>): ClipBucket {
         return new ClipBucket(parameters);
     }
 

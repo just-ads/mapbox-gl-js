@@ -5,23 +5,19 @@ import GeoJSONRT from './geojson_rt';
 import writePbf from './vector_tile_to_pbf';
 import Supercluster from 'supercluster';
 import geojsonvt from 'geojson-vt';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import VectorTileWorkerSource from './vector_tile_worker_source';
 import {createExpression} from '../style-spec/expression/index';
 
 import type {
+    WorkerSourceOptions,
     WorkerSourceVectorTileRequest,
-    WorkerSourceVectorTileCallback,
-} from './worker_source';
-import type Actor from '../util/actor';
-import type StyleLayerIndex from '../style/style_layer_index';
+    WorkerSourceVectorTileResult,
+} from '../source/worker_source';
 import type {Feature} from './geojson_wrapper';
 import type {Feature as ExpressionFeature} from '../style-spec/expression/index';
 import type {LoadVectorDataCallback} from './load_vector_tile';
 import type {RequestParameters, ResponseCallback} from '../util/ajax';
-import type {Callback} from '../types/callback';
-import type {ImageId} from '../style-spec/expression/types/image_id';
-import type {StyleModelMap} from '../style/style_mode';
 
 export type GeoJSONWorkerOptions = {
     source: string;
@@ -48,8 +44,6 @@ type FeatureCollectionOrFeature = GeoJSON.FeatureCollection | GeoJSON.Feature;
 type ResourceTiming = Record<string, PerformanceResourceTiming[]>;
 
 export type LoadGeoJSONResult = FeatureCollectionOrFeature & {resourceTiming?: ResourceTiming};
-
-export type LoadGeoJSON = (params: LoadGeoJSONParameters, callback: ResponseCallback<LoadGeoJSONResult>) => void;
 
 export interface GeoJSONIndex {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -104,16 +98,14 @@ function loadGeoJSONTile(this: GeoJSONWorkerSource, params: WorkerSourceVectorTi
     // across `VectorTileSource` and `GeoJSONSource` data.
     const rawData = writePbf(layers).buffer as ArrayBuffer;
 
-    callback(null, {vectorTile, rawData});
+    callback(null, {vectorTile, rawData, headers: new Headers()});
 }
 
 /**
  * The {@link WorkerSource} implementation that supports {@link GeoJSONSource}.
  * This class is designed to be easily reused to support custom source types
  * for data formats that can be parsed/converted into an in-memory GeoJSON
- * representation.  To do so, create it with
- * `new GeoJSONWorkerSource(actor, layerIndex, customLoadGeoJSONFunction)`.
- * For a full example, see [mapbox-gl-topojson](https://github.com/developmentseed/mapbox-gl-topojson).
+ * representation.
  *
  * @private
  */
@@ -122,16 +114,11 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
     _dynamicIndex: GeoJSONRT;
 
     /**
-     * @param [loadGeoJSON] Optional method for custom loading/parsing of
-     * GeoJSON based on parameters passed from the main-thread Source.
-     * See {@link GeoJSONWorkerSource#loadGeoJSON}.
      * @private
      */
-    constructor(actor: Actor, layerIndex: StyleLayerIndex, availableImages: ImageId[], availableModels: StyleModelMap, isSpriteLoaded: boolean, loadGeoJSON?: LoadGeoJSON | null, brightness?: number | null) {
-        super(actor, layerIndex, availableImages, availableModels, isSpriteLoaded, loadGeoJSONTile, brightness);
-        if (loadGeoJSON) {
-            this.loadGeoJSON = loadGeoJSON;
-        }
+    constructor(options: WorkerSourceOptions) {
+        super(options);
+        this.loadVectorData = loadGeoJSONTile;
         this._dynamicIndex = new GeoJSONRT();
     }
 
@@ -141,7 +128,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
      * can correctly serve up tiles.
      *
      * Defers to {@link GeoJSONWorkerSource#loadGeoJSON} for the fetching/parsing,
-     * expecting `callback(error, data)` to be called with either an error or a
+     * expecting the callback to be called with either an error or a
      * parsed GeoJSON object.
      *
      * When `loadData` requests come in faster than they can be processed,
@@ -150,103 +137,97 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
      *
      * @private
      */
-    loadData(params: LoadGeoJSONParameters, callback: ResponseCallback<{resourceTiming?: ResourceTiming}>): void {
+    async loadData(params: LoadGeoJSONParameters): Promise<{resourceTiming?: ResourceTiming}> {
         const requestParam = params && params.request;
         const perf = requestParam && requestParam.collectResourceTiming;
 
         this._geoJSONIndex = null;
 
-        this.loadGeoJSON(params, (err?: Error, data?: FeatureCollectionOrFeature) => {
-            if (err || !data) {
-                return callback(err);
-
-            } else if (typeof data !== 'object') {
-                return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
-
-            } else {
-                try {
-                    if (params.filter) {
-                        const compiled = createExpression(params.filter, {type: 'boolean', 'property-type': 'data-driven', overridable: false, transition: false});
-                        if (compiled.result === 'error')
-                            throw new Error(compiled.value.map(err => `${err.key}: ${err.message}`).join(', '));
-
-                        (data as GeoJSON.FeatureCollection).features = (data as GeoJSON.FeatureCollection).features.filter(feature => compiled.value.evaluate({zoom: 0}, feature as unknown as ExpressionFeature));
-                    }
-
-                    // for GeoJSON sources that are marked as dynamic, we retain the GeoJSON data
-                    // as a id-to-feature map so that we can later update features by id individually
-                    if (params.dynamic) {
-                        if (data.type === 'Feature') data = {type: 'FeatureCollection', features: [data]};
-
-                        if (!params.append) {
-                            this._dynamicIndex.clear();
-                            this.loaded = {};
-                        }
-
-                        this._dynamicIndex.load(data.features, this.loaded);
-
-                        if (params.cluster) data.features = this._dynamicIndex.getFeatures() as unknown as GeoJSON.Feature[];
-                    } else {
-                        this.loaded = {};
-                    }
-
-                    this._geoJSONIndex =
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                        params.cluster ? new Supercluster(getSuperclusterOptions(params)).load((data as GeoJSON.FeatureCollection).features as Array<GeoJSON.Feature<GeoJSON.Point, object>>) :
-                            params.dynamic ? this._dynamicIndex :
-                                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                                geojsonvt(data, params.geojsonVtOptions);
-
-
-                } catch (err) {
-                    return callback(err as Error);
-                }
-
-                const result: {resourceTiming?: ResourceTiming} = {};
-                if (perf) {
-                    const resourceTimingData = getPerformanceMeasurement(requestParam);
-                    // it's necessary to eval the result of getEntriesByName() here via parse/stringify
-                    // late evaluation in the main thread causes TypeError: illegal invocation
-                    if (resourceTimingData) {
-                        result.resourceTiming = {};
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-                        result.resourceTiming[params.source] = JSON.parse(JSON.stringify(resourceTimingData));
-                    }
-                }
-                callback(null, result);
-            }
+        let data = await new Promise<FeatureCollectionOrFeature | undefined>((resolve, reject) => {
+            this.loadGeoJSON(params, (err?: Error, data?: FeatureCollectionOrFeature) => {
+                if (err) reject(err);
+                else resolve(data);
+            });
         });
+
+        if (!data) return {};
+        if (typeof data !== 'object') throw new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`);
+
+        if (params.filter) {
+            const compiled = createExpression(params.filter, {type: 'boolean', 'property-type': 'data-driven', overridable: false, transition: false});
+            if (compiled.result === 'error')
+                throw new Error(compiled.value.map(err => `${err.key}: ${err.message}`).join(', '));
+
+            (data as GeoJSON.FeatureCollection).features = (data as GeoJSON.FeatureCollection).features.filter(feature => compiled.value.evaluate({zoom: 0}, feature as unknown as ExpressionFeature));
+        }
+
+        // for GeoJSON sources that are marked as dynamic, we retain the GeoJSON data
+        // as a id-to-feature map so that we can later update features by id individually
+        if (params.dynamic) {
+            if (data.type === 'Feature') data = {type: 'FeatureCollection', features: [data]};
+
+            if (!params.append) {
+                this._dynamicIndex.clear();
+                this.loaded = {};
+            }
+
+            this._dynamicIndex.load(data.features, this.loaded);
+
+            if (params.cluster) data.features = this._dynamicIndex.getFeatures() as unknown as GeoJSON.Feature[];
+
+        } else {
+            this.loaded = {};
+        }
+
+        this._geoJSONIndex =
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+            params.cluster ? new Supercluster(getSuperclusterOptions(params)).load((data as GeoJSON.FeatureCollection).features as Array<GeoJSON.Feature<GeoJSON.Point, object>>) :
+            params.dynamic ? this._dynamicIndex :
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+            geojsonvt(data, params.geojsonVtOptions);
+
+        const result: {resourceTiming?: ResourceTiming} = {};
+        if (perf) {
+            const resourceTimingData = getPerformanceMeasurement(requestParam);
+            // it's necessary to eval the result of getEntriesByName() here via parse/stringify
+            // late evaluation in the main thread causes TypeError: illegal invocation
+            if (resourceTimingData) {
+                result.resourceTiming = {};
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                result.resourceTiming[params.source] = JSON.parse(JSON.stringify(resourceTimingData));
+            }
+        }
+        return result;
     }
 
     /**
-     * Implements {@link WorkerSource#reloadTile}.
-     *
-     * If the tile is loaded, uses the implementation in VectorTileWorkerSource.
-     * Otherwise, such as after a setData() call, we load the tile fresh.
-     *
-     * @private
-     */
-    override reloadTile(params: WorkerSourceVectorTileRequest, callback: WorkerSourceVectorTileCallback): void {
+    * Implements {@link WorkerSource#reloadTile}.
+    *
+    * If the tile is loaded, uses the implementation in VectorTileWorkerSource.
+    * Otherwise, such as after a setData() call, we load the tile fresh.
+    *
+    * @private
+    */
+    override async reloadTile(params: WorkerSourceVectorTileRequest): Promise<WorkerSourceVectorTileResult | undefined | null> {
         const loaded = this.loaded,
             uid = params.uid;
 
         if (loaded && loaded[uid]) {
-            return super.reloadTile(params, callback);
+            if (params.partial) {
+                return;
+            }
+            return super.reloadTile(params);
         } else {
-            return this.loadTile(params, callback);
+            return this.loadTile(params);
         }
     }
 
     /**
-     * Fetch and parse GeoJSON according to the given params.  Calls `callback`
-     * with `(err, data)`, where `data` is a parsed GeoJSON object.
+     * Fetch and parse GeoJSON according to the given params.
      *
      * GeoJSON is loaded and parsed from `params.url` if it exists, or else
      * expected as a literal (string or object) `params.data`.
      *
-     * @param params
-     * @param [params.url] A URL to the remote GeoJSON data.
-     * @param [params.data] Literal GeoJSON data. Must be provided if `params.url` is not.
      * @private
      */
     loadGeoJSON(params: LoadGeoJSONParameters, callback: ResponseCallback<FeatureCollectionOrFeature>): void {
@@ -255,13 +236,14 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         // ie: /foo/bar.json or http://example.com/bar.json
         // but not ../foo/bar.json
         if (params.request) {
-            getJSON(params.request, callback);
+            getJSON<FeatureCollectionOrFeature>(params.request)
+                .then(({data}) => callback(null, data))
+                .catch((err: Error) => callback(err));
         } else if (typeof params.data === 'string') {
             // delay loading by one tick to hopefully let GC clean up the previous index (if present)
             setTimeout(() => {
                 try {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                    return callback(null, JSON.parse(params.data));
+                    return callback(null, JSON.parse(params.data) as FeatureCollectionOrFeature);
                 } catch (e) {
                     return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
                 }
@@ -273,34 +255,22 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
 
     getClusterExpansionZoom(params: {
         clusterId: number;
-    }, callback: Callback<number>) {
-        try {
-            callback(null, this._geoJSONIndex.getClusterExpansionZoom(params.clusterId));
-        } catch (e) {
-            callback(e as Error);
-        }
+    }): number {
+        return this._geoJSONIndex.getClusterExpansionZoom(params.clusterId);
     }
 
     getClusterChildren(params: {
         clusterId: number;
-    }, callback: Callback<Array<GeoJSON.Feature>>) {
-        try {
-            callback(null, this._geoJSONIndex.getChildren(params.clusterId));
-        } catch (e) {
-            callback(e as Error);
-        }
+    }): Array<GeoJSON.Feature> {
+        return this._geoJSONIndex.getChildren(params.clusterId);
     }
 
     getClusterLeaves(params: {
         clusterId: number;
         limit: number;
         offset: number;
-    }, callback: Callback<Array<GeoJSON.Feature>>) {
-        try {
-            callback(null, this._geoJSONIndex.getLeaves(params.clusterId, params.limit, params.offset));
-        } catch (e) {
-            callback(e as Error);
-        }
+    }): Array<GeoJSON.Feature> {
+        return this._geoJSONIndex.getLeaves(params.clusterId, params.limit, params.offset);
     }
 }
 

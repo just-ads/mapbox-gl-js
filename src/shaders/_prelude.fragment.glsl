@@ -4,6 +4,8 @@
 #ifdef DUAL_SOURCE_BLENDING
 layout(location = 0, index = 0) out vec4 glFragColor;
 layout(location = 0, index = 1) out vec4 glFragColorSrc1;
+#elif defined(FLOAT_RENDER_TARGET)
+layout(location = 0) out highp vec4 glFragColor;
 #else
 layout(location = 0) out vec4 glFragColor;
 #endif
@@ -35,6 +37,13 @@ uniform vec3 u_indicator_cutout_centers;
 uniform vec4 u_indicator_cutout_params;
 #endif
 
+const float DITHER_THRESHOLDS[16] = float[16](
+    1.0 / 17.0,  9.0 / 17.0,  3.0 / 17.0, 11.0 / 17.0,
+    13.0 / 17.0,  5.0 / 17.0, 15.0 / 17.0,  7.0 / 17.0,
+    4.0 / 17.0, 12.0 / 17.0,  2.0 / 17.0, 10.0 / 17.0,
+    16.0 / 17.0,  8.0 / 17.0, 14.0 / 17.0,  6.0 / 17.0
+);
+
 vec4 applyCutout(vec4 color, float height) {
 #ifdef INDICATOR_CUTOUT
     float verticalFadeRange = u_indicator_cutout_centers.z * 0.25; // Fade relative to the height of the indicator
@@ -46,6 +55,33 @@ vec4 applyCutout(vec4 color, float height) {
     return color * min(smoothstep(fadeStart, holeRadius, distA) + holeMinOpacity, 1.0);
 #else
     return color;
+#endif
+}
+
+// Cutout with uniform vertical transparency across the building face.
+// All coordinates are in NDC [-1,1]. Centers, radius, fadeStart pre-converted to NDC on CPU.
+// groundRoof = (groundNdcX, groundNdcY, roofNdcX, roofNdcY).
+// Returns indicator cutout opacity for dithering. Color is not modified.
+float cutoutGroundRoofOpacity(vec4 groundRoof) {
+#ifdef INDICATOR_CUTOUT
+    float fadeStartX = u_indicator_cutout_params.w;
+    float holeRadius = u_indicator_cutout_params.y;
+
+    float holeMinOpacity = mix(u_indicator_cutout_params.x, 1.0,
+        smoothstep(u_indicator_cutout_params.z, u_indicator_cutout_centers.z, groundRoof.y));
+
+    float distX = abs(u_indicator_cutout_centers.x - groundRoof.x);
+
+    float roofOpacity = mix(holeMinOpacity, 1.0,
+        smoothstep(fadeStartX, holeRadius,
+                   u_indicator_cutout_centers.y - groundRoof.w));
+
+    float groundOpacity = min(smoothstep(fadeStartX, holeRadius, distX)
+                              + holeMinOpacity, 1.0);
+
+    return max(roofOpacity, groundOpacity);
+#else
+    return 1.0;
 #endif
 }
 
@@ -81,13 +117,24 @@ vec4 textureLodCustom(sampler2D image, highp vec2 pos, highp vec2 lod_coord) {
     return textureLod(image, pos, lod);
 }
 
-vec4 applyLUT(highp sampler3D lut, vec4 col) {
-    vec3 size = vec3(textureSize(lut, 0));
-    // Sample from the center of the pixel in the LUT
-    vec3 uvw = (col.rbg * float(size - 1.0) + 0.5) / size;
-    return vec4(texture(lut, uvw).rgb * col.a, col.a);
+vec4 premultiplyColor(vec3 nonPremultipliedColor, float a) {
+    return vec4(nonPremultipliedColor * a, a);
+}
+
+vec3 unpremultiplyColor(vec4 premultipliedColor) {
+    if (premultipliedColor.a > 0.0) {
+        return premultipliedColor.rgb / premultipliedColor.a;
+    }
+    return premultipliedColor.rgb;
 }
 
 vec3 applyLUT(highp sampler3D lut, vec3 col) {
-    return applyLUT(lut, vec4(col, 1.0)).rgb;
+    vec3 size = vec3(textureSize(lut, 0));
+    // Sample from the center of the pixel in the LUT
+    vec3 uvw = (col.rbg * float(size - 1.0) + 0.5) / size;
+    return texture(lut, uvw).rgb;
+}
+
+vec4 applyLUT(highp sampler3D lut, vec4 premultipliedColor) {
+    return premultiplyColor(applyLUT(lut, unpremultiplyColor(premultipliedColor)), premultipliedColor.a);
 }

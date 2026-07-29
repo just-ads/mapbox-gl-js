@@ -1,7 +1,7 @@
 #include "_prelude_fog.vertex.glsl"
 #include "_prelude_shadow.vertex.glsl"
 
-in vec2 a_pos;
+in ivec2 a_pos;
 #ifdef ELEVATED_ROADS
 in float a_road_z_offset;
 #endif
@@ -17,6 +17,7 @@ out highp float v_depth;
 
 uniform mat4 u_matrix;
 uniform vec2 u_world;
+uniform lowp float u_opacity_multiplier;
 
 out highp vec2 v_pos;
 
@@ -54,6 +55,6 @@ void main() {
 #endif
 
 #ifdef FOG
-    v_fog_pos = fog_position(a_pos);
+    v_fog_pos = fog_position(vec2(a_pos));
 #endif
 }

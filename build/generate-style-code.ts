@@ -1,6 +1,6 @@
 
 import fs from 'fs';
-import ejs from 'ejs';
+import {compile} from 'yeahjs';
 import spec from '../src/style-spec/reference/latest';
 import Color from '../src/style-spec/util/color';
 
@@ -175,12 +175,11 @@ global.propertyValue = function (type, property, valueType) {
     }
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const layerPropertiesJs = ejs.compile(fs.readFileSync('src/style/style_layer/layer_properties.js.ejs', 'utf8'), {strict: true});
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const layerPropertiesJs3Dstyle = ejs.compile(fs.readFileSync('src/style/style_layer/layer_properties.js.ejs', 'utf8'), {strict: true});
+const layerPropertiesJs = compile(fs.readFileSync('src/style/style_layer/layer_properties.js.ejs', 'utf8'));
+const layerPropertiesJs3Dstyle = compile(fs.readFileSync('src/style/style_layer/layer_properties.js.ejs', 'utf8'));
 
-const appearanceProperties = [];
+const appearanceLayoutProperties = [];
+const appearancePaintProperties = [];
 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
 const layers = Object.keys(spec.layer.type.values).map((type) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -208,7 +207,7 @@ const layers = Object.keys(spec.layer.type.values).map((type) => {
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (layoutSpec[name].appearance) {
-            appearanceProperties.push({
+            appearanceLayoutProperties.push({
                 src: `layout_${type}`,
                 srcSection: 'layout',
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -230,8 +229,8 @@ const layers = Object.keys(spec.layer.type.values).map((type) => {
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (paintSpec[name].appearance) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            appearanceProperties.push({
+
+            appearancePaintProperties.push({
                 src: `paint_${type}`,
                 srcSection: 'paint',
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -260,31 +259,43 @@ const layers = Object.keys(spec.layer.type.values).map((type) => {
     return {type, layoutProperties, paintProperties};
 });
 
+// Add -use-theme counterparts for color paint appearance properties
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+for (const prop of [...appearancePaintProperties]) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    if (prop.type === 'color') {
+        appearancePaintProperties.push({
+            'type': 'string',
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            'type_': prop.type_,
+            'default': 'default',
+            'property-type': 'data-driven',
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            'name': `${prop.name}-use-theme`
+        });
+    }
+}
+
 // Appearances
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const appearancePropertiesJs = ejs.compile(fs.readFileSync('src/style/appearance_properties.js.ejs', 'utf8'), {strict: true});
-// eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
-fs.writeFileSync(`src/style/appearance_properties.ts`, appearancePropertiesJs(appearanceProperties));
+const appearancePropertiesJs = compile(fs.readFileSync('src/style/appearance_properties.js.ejs', 'utf8'));
+fs.writeFileSync(`src/style/appearance_properties.ts`, appearancePropertiesJs({layoutProperties: appearanceLayoutProperties, paintProperties: appearancePaintProperties}));
 
 for (const layer of layers) {
     let srcDir = '../..';
     let styleDir = '..';
     let outputDir = `src/style/style_layer`;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     let properties = layerPropertiesJs;
     if (layer.type === 'model' || layer.type === 'building') {
         srcDir = '../../../src';
         styleDir = '../../../src/style';
         outputDir = `3d-style/style/style_layer`;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         properties = layerPropertiesJs3Dstyle;
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
     fs.writeFileSync(`${outputDir}/${layer.type.replace('-', '_')}_style_layer_properties.ts`, properties({layer, srcDir, styleDir}));
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const lightPropertiesJs = ejs.compile(fs.readFileSync('3d-style/style/light_properties.js.ejs', 'utf8'), {strict: true});
+const lightPropertiesJs = compile(fs.readFileSync('3d-style/style/light_properties.js.ejs', 'utf8'));
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
 const lights = Object.keys(spec['light-3d'].type.values).map((type) => {
@@ -314,13 +325,11 @@ const lights = Object.keys(spec['light-3d'].type.values).map((type) => {
 });
 
 for (const light of lights) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
     fs.writeFileSync(`3d-style/style/${light.type}_light_properties.ts`, lightPropertiesJs(light));
 }
 
 // Snow
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const snowPropertiesJs = ejs.compile(fs.readFileSync('3d-style/style/snow_properties.js.ejs', 'utf8'), {strict: true});
+const snowPropertiesJs = compile(fs.readFileSync('3d-style/style/snow_properties.js.ejs', 'utf8'));
 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
 const snowProperties = Object.keys(spec[`snow`]).reduce((memo, name) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -331,12 +340,10 @@ const snowProperties = Object.keys(spec[`snow`]).reduce((memo, name) => {
     memo.push(spec[`snow`][name]);
     return memo;
 }, []);
-// eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
 fs.writeFileSync(`3d-style/style/snow_properties.ts`, snowPropertiesJs(snowProperties));
 
 // Rain
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-const rainPropertiesJs = ejs.compile(fs.readFileSync('3d-style/style/rain_properties.js.ejs', 'utf8'), {strict: true});
+const rainPropertiesJs = compile(fs.readFileSync('3d-style/style/rain_properties.js.ejs', 'utf8'));
 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
 const rainProperties = Object.keys(spec[`rain`]).reduce((memo, name) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -347,5 +354,4 @@ const rainProperties = Object.keys(spec[`rain`]).reduce((memo, name) => {
     memo.push(spec[`rain`][name]);
     return memo;
 }, []);
-// eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call
 fs.writeFileSync(`3d-style/style/rain_properties.ts`, rainPropertiesJs(rainProperties));

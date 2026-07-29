@@ -1,4 +1,5 @@
-import StyleLayer from '../style_layer';
+import StyleLayer, {rawLayoutMayUseHD} from '../style_layer';
+import {prepareHD} from '../../../modules/hd_worker';
 import FillBucket from '../../data/bucket/fill_bucket';
 import {polygonIntersectsMultiPolygon} from '../../util/intersection_tests';
 import {translateDistance, translate} from '../query_utils';
@@ -15,6 +16,7 @@ import type Transform from '../../geo/transform';
 import type {LayerSpecification} from '../../style-spec/types';
 import type {TilespaceQueryGeometry} from '../query_geometry';
 import type {VectorTileFeature} from '@mapbox/vector-tile';
+import type {RuntimeModuleType} from '../style_layer';
 import type {CreateProgramParams} from '../../render/painter';
 import type {LUT} from "../../util/lut";
 import type {ImageId} from '../../style-spec/expression/types/image_id';
@@ -69,7 +71,7 @@ class FillStyleLayer extends StyleLayer {
         }
     }
 
-    createBucket(parameters: BucketParameters<FillStyleLayer>): FillBucket {
+    override createBucket(parameters: BucketParameters<this>): FillBucket {
         return new FillBucket(parameters);
     }
 
@@ -108,6 +110,14 @@ class FillStyleLayer extends StyleLayer {
 
     override hasElevation(): boolean {
         return this.layout && this.layout.get('fill-elevation-reference') !== 'none';
+    }
+
+    override mayUse(type: RuntimeModuleType): boolean {
+        return type === 'HD' && rawLayoutMayUseHD(this, 'fill-elevation-reference', v => v !== 'none');
+    }
+
+    override prepare(): Promise<void> {
+        return this.mayUse('HD') ? prepareHD() : Promise.resolve();
     }
 
     override hasShadowPass(): boolean {

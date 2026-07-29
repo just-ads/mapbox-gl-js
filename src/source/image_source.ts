@@ -8,11 +8,10 @@ import boundsAttributes from '../data/bounds_attributes';
 import SegmentVector from '../data/segment';
 import Texture, {UserManagedTexture} from '../render/texture';
 import MercatorCoordinate, {MAX_MERCATOR_LATITUDE} from '../geo/mercator_coordinate';
-import browser from '../util/browser';
 import tileTransform, {getTilePoint} from '../geo/projection/tile_transform';
 import {GLOBE_VERTEX_GRID_SIZE} from '../geo/projection/globe_constants';
 import {mat3, vec3} from 'gl-matrix';
-import assert from "assert";
+import assert from '../style-spec/util/assert';
 
 import type LngLat from '../geo/lng_lat';
 import type {ISource, SourceEvents} from './source';
@@ -21,12 +20,10 @@ import type {Map} from '../ui/map';
 import type Dispatcher from '../util/dispatcher';
 import type Tile from './tile';
 import type {Callback} from '../types/callback';
-import type {Cancelable} from '../types/cancelable';
 import type VertexBuffer from '../gl/vertex_buffer';
 import type IndexBuffer from '../gl/index_buffer';
 import type {ProjectedPoint} from '../geo/projection/projection';
 import type {
-    CustomTags,
     ImageSourceSpecification,
     VideoSourceSpecification
 } from '../style-spec/types';
@@ -247,7 +244,7 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
     dispatcher: Dispatcher;
     map: Map;
     texture: Texture | UserManagedTexture | null;
-    image: HTMLImageElement | ImageBitmap | ImageData;
+    image: ImageBitmap | ImageData;
     tileID?: CanonicalTileID;
     onNorthPole: boolean;
     onSouthPole: boolean;
@@ -263,7 +260,7 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
     elevatedGlobeGridMatrix: Float32Array | null | undefined;
     _loaded: boolean;
     _dirty: boolean;
-    _imageRequest: Cancelable | null | undefined;
+    _imageRequest: AbortController | null | undefined;
     perspectiveTransform: [number, number];
     elevatedGlobePerspectiveTransform: [number, number];
 
@@ -273,8 +270,6 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
     hasTile: undefined;
     afterUpdate: undefined;
 
-    customTags?: CustomTags;
-
     /**
      * @private
      */
@@ -283,10 +278,6 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
         this.id = id;
         this.dispatcher = dispatcher;
         this.coordinates = options.coordinates;
-
-        if (options.type !== "canvas") {
-            this.customTags = options.customTags;
-        }
 
         this.type = 'image' as T;
         this.minzoom = 0;
@@ -318,25 +309,27 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
             return;
         }
 
-        this._imageRequest = getImage(this.map._requestManager.transformRequest(this.url, ResourceType.Image, this.customTags), (err, image) => {
+        const request = this.map._requestManager.transformRequest(this.url, ResourceType.Image);
+        const controller = new AbortController();
+        this._imageRequest = controller;
+        getImage(request, controller.signal).then(({data}) => {
             this._imageRequest = null;
             this._loaded = true;
-            if (err) {
-                this.fire(new ErrorEvent(err));
-            } else if (image) {
-                if (image instanceof HTMLImageElement) {
-                    this.image = browser.getImageData(image);
-                } else {
-                    this.image = image;
-                }
-                this._dirty = true;
-                this.width = this.image.width;
-                this.height = this.image.height;
-                if (newCoordinates) {
-                    this.coordinates = newCoordinates;
-                }
-                this._finishLoading();
+            this.image = data;
+            this._dirty = true;
+            this.width = this.image.width;
+            this.height = this.image.height;
+            if (newCoordinates) {
+                this.coordinates = newCoordinates;
             }
+            this._finishLoading();
+        }).catch((err: Error) => {
+            // A cancelled load rejects AbortError; leave _loaded/_imageRequest untouched so a
+            // late settle can't resurrect state after updateImage/onRemove already moved on.
+            if (err.name === 'AbortError') return;
+            this._imageRequest = null;
+            this._loaded = true;
+            this.fire(new ErrorEvent(err));
         });
     }
 
@@ -389,7 +382,7 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
         }
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (this._imageRequest && options.url !== this.options.url) {
-            this._imageRequest.cancel();
+            this._imageRequest.abort();
             this._imageRequest = null;
         }
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -426,7 +419,7 @@ class ImageSource<T = 'image'> extends Evented<SourceEvents> implements ISource<
 
     onRemove(_: Map) {
         if (this._imageRequest) {
-            this._imageRequest.cancel();
+            this._imageRequest.abort();
             this._imageRequest = null;
         }
         if (this.texture && !(this.texture instanceof UserManagedTexture)) this.texture.destroy();

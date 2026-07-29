@@ -25,9 +25,9 @@ import RasterParticleState from './raster_particle_state';
 import Texture from './texture';
 import {mercatorXfromLng, mercatorYfromLat} from '../geo/mercator_coordinate';
 import rasterFade from './raster_fade';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {RGBAImage} from '../util/image';
-import {smoothstep} from '../util/util';
+import {smoothstep, esgtsaHash} from '../util/util';
 import {GLOBE_ZOOM_THRESHOLD_MAX} from '../geo/projection/globe_constants';
 
 import type Transform from '../geo/transform';
@@ -58,20 +58,12 @@ function drawRasterParticle(painter: Painter, sourceCache: SourceCache, layer: R
 function createPositionRGBAData(textureDimension: number): Uint8Array {
     const numParticles = textureDimension * textureDimension;
     const RGBAPositions = new Uint8Array(4 * numParticles);
-    // Hash function from https://www.shadertoy.com/view/XlGcRh
-    const esgtsa = function (s: number): number {
-        s |= 0;
-        s = Math.imul(s ^ 2747636419, 2654435769);
-        s = Math.imul(s ^ (s >>> 16), 2654435769);
-        s = Math.imul(s ^ (s >>> 16), 2654435769);
-        return (s >>> 0) / 4294967296;
-    };
     // Pack random positions in [0, 1] into RGBA pixels. Matches the GLSL
     // `pack_pos_to_rgba` behavior.
     const invScale = 1.0 / RASTER_PARTICLE_POS_SCALE;
     for (let i = 0; i < numParticles; i++) {
-        const x = invScale * (esgtsa(2 * i + 0) + RASTER_PARTICLE_POS_OFFSET);
-        const y = invScale * (esgtsa(2 * i + 1) + RASTER_PARTICLE_POS_OFFSET);
+        const x = invScale * (esgtsaHash(2 * i + 0) + RASTER_PARTICLE_POS_OFFSET);
+        const y = invScale * (esgtsaHash(2 * i + 1) + RASTER_PARTICLE_POS_OFFSET);
 
         const rx = x;
         const ry = (x * 255.0) % 1;
@@ -460,7 +452,8 @@ function renderTextureToMap(painter: Painter, sourceCache: SourceCache, layer: R
 
         context.activeTexture.set(gl.TEXTURE1);
 
-        let parentScaleBy, parentTL;
+        let parentScaleBy: number | undefined;
+        let parentTL: [number, number] | undefined;
         if (parentTile && parentTile.rasterParticleState) {
             parentTile.rasterParticleState.targetColorTexture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
             parentScaleBy = Math.pow(2, parentTile.tileID.overscaledZ - tile.tileID.overscaledZ);
@@ -469,7 +462,7 @@ function renderTextureToMap(painter: Painter, sourceCache: SourceCache, layer: R
             particleState.targetColorTexture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
         }
 
-        const projMatrix = isGlobeProjection ? Float32Array.from(painter.transform.expandedFarZProjMatrix) : painter.transform.calculateProjMatrix(unwrappedTileID, align);
+        const projMatrix = isGlobeProjection ? painter.transform.expandedFarZProjMatrix : painter.transform.calculateProjMatrix(unwrappedTileID, align);
 
         const tr = painter.transform;
         const cutoffParams = cutoffParamsForElevation(tr);
@@ -502,12 +495,10 @@ function renderTextureToMap(painter: Painter, sourceCache: SourceCache, layer: R
             globeMatrix,
             globeMercatorMatrix,
             gridMatrix,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             parentTL || [0, 0],
             globeToMercatorTransition(painter.transform.zoom),
             mercatorCenter,
             cutoffParams,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             parentScaleBy || 1,
             fade,
             rasterElevation
@@ -563,8 +554,7 @@ export function prepare(layer: RasterParticleStyleLayer, sourceCache: SourceCach
     const band = layer.paint.get('raster-particle-array-band') || source.getInitialBand(sourceLayer);
     if (band == null) return;
 
-    // @ts-expect-error - TS2322 - Type 'Tile[]' is not assignable to type 'RasterArrayTile[]'.
-    const tiles: Array<RasterArrayTile> = sourceCache.getIds().map(id => sourceCache.getTileByID(id));
+    const tiles = sourceCache.getIds().map(id => sourceCache.getTileByID(id) as RasterArrayTile);
     for (const tile of tiles) {
         if (tile.updateNeeded(layer.id, band)) {
             source.prepareTile(tile, sourceLayer, layer.id, band);

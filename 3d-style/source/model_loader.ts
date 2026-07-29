@@ -1,5 +1,5 @@
 import Point from '@mapbox/point-geometry';
-import assert from 'assert';
+import assert from '../../src/style-spec/util/assert';
 import earcut from 'earcut';
 import {mat4, vec3} from 'gl-matrix';
 import {Aabb} from '../../src/util/primitives';
@@ -15,6 +15,7 @@ import {GLTF_TO_ARRAY_TYPE, GLTF_COMPONENTS} from '../util/loaders';
 import {base64DecToArr} from '../../src/util/util';
 import TriangleGridIndex from '../../src/util/triangle_grid_index';
 import {HEIGHTMAP_DIM} from '../data/model';
+import {ModelBVH} from './model_bvh';
 
 import type {vec2} from 'gl-matrix';
 import type {Class} from '../../src/types/class';
@@ -94,23 +95,6 @@ function convertMaterial(materialDesc: Partial<MaterialDescription>, textures: A
     };
 }
 
-function computeCentroid(indexArray: Uint32Array | Float32Array, vertexArray: ArrayBufferView): vec3 {
-    const out: [number, number, number] = [0.0, 0.0, 0.0];
-    const indexSize = indexArray.length;
-    if (indexSize > 0) {
-        for (let i = 0; i < indexSize; i++) {
-            const index = indexArray[i] * 3;
-            out[0] += vertexArray[index];
-            out[1] += vertexArray[index + 1];
-            out[2] += vertexArray[index + 2];
-        }
-        out[0] /= indexSize;
-        out[1] /= indexSize;
-        out[2] /= indexSize;
-    }
-    return out;
-}
-
 function getNormalizedScale(arrayType: Class<ArrayBufferView>) {
     switch (arrayType) {
     case Int8Array:
@@ -152,14 +136,13 @@ function setArrayData(gltf: GLTF, accessor: GLTFAccessor, array: StructArray, bu
     const float32Array = (array).float32;
 
     const components = float32Array.length / array.capacity;
+    const total = accessor.count * numElements;
 
-    for (let i = 0, count = 0;  i < accessor.count * numElements; i += numElements, count += components) {
+    for (let i = 0, count = 0;  i < total; i += numElements, count += components) {
         for (let j = 0; j < components; j++) {
             float32Array[count + j] = buffer[i + j] * norm;
         }
     }
-
-    array._trim();
 }
 
 function convertPrimitive(primitive: GLTFPrimitive, gltf: GLTF, textures: Array<ModelTexture>): Mesh {
@@ -169,35 +152,26 @@ function convertPrimitive(primitive: GLTFPrimitive, gltf: GLTF, textures: Array<
 
     const mesh: Mesh = {} as Mesh;
 
-    // eslint-disable-next-line no-warning-comments
-    // TODO: Investigate a better way to pass arrays to StructArrays and avoid the double componentType indices
     mesh.indexArray = new TriangleIndexArray();
-    // eslint-disable-next-line no-warning-comments
-    // TODO: There might be no need to copy element by element to mesh.indexArray.
     const indexAccessor = gltf.json.accessors[indicesIdx];
 
-    const numTriangles = indexAccessor.count / 3;
-    mesh.indexArray.reserve(numTriangles);
     const indexArrayBuffer = getBufferData(gltf, indexAccessor);
-    for (let i = 0; i < numTriangles; i++) {
-        mesh.indexArray.emplaceBack(indexArrayBuffer[i * 3], indexArrayBuffer[i * 3 + 1], indexArrayBuffer[i * 3 + 2]);
-    }
-    mesh.indexArray._trim();
+    mesh.indexArray.resizeExact(indexAccessor.count / 3);
+    mesh.indexArray.uint16.set(indexArrayBuffer);
+
     // vertices
     mesh.vertexArray = new ModelLayoutArray();
 
     const positionAccessor = gltf.json.accessors[attributeMap.POSITION];
 
-    mesh.vertexArray.reserve(positionAccessor.count);
     const vertexArrayBuffer = getBufferData(gltf, positionAccessor);
-
-    for (let i = 0; i < positionAccessor.count; i++) {
-        mesh.vertexArray.emplaceBack(vertexArrayBuffer[i * 3], vertexArrayBuffer[i * 3 + 1], vertexArrayBuffer[i * 3 + 2]);
-    }
-    mesh.vertexArray._trim();
+    mesh.vertexArray.resizeExact(positionAccessor.count);
+    mesh.vertexArray.float32.set(vertexArrayBuffer);
     // bounding box
     mesh.aabb = new Aabb(positionAccessor.min, positionAccessor.max);
-    mesh.centroid = computeCentroid(indexArrayBuffer, vertexArrayBuffer);
+    const [minX, minY, minZ] = positionAccessor.min;
+    const [maxX, maxY, maxZ] = positionAccessor.max;
+    mesh.centroid = [(minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5];
 
     // colors
     if (attributeMap.COLOR_0 !== undefined) {
@@ -207,7 +181,7 @@ function convertPrimitive(primitive: GLTFPrimitive, gltf: GLTF, textures: Array<
         const colorArrayBuffer = getBufferData(gltf, colorAccessor);
         mesh.colorArray = numElements === 3 ? new Color3fLayoutArray() : new Color4fLayoutArray();
 
-        mesh.colorArray.resize(colorAccessor.count);
+        mesh.colorArray.resizeExact(colorAccessor.count);
         setArrayData(gltf, colorAccessor, mesh.colorArray, colorArrayBuffer);
     }
 
@@ -217,7 +191,7 @@ function convertPrimitive(primitive: GLTFPrimitive, gltf: GLTF, textures: Array<
 
         const normalAccessor = gltf.json.accessors[attributeMap.NORMAL];
 
-        mesh.normalArray.resize(normalAccessor.count);
+        mesh.normalArray.resizeExact(normalAccessor.count);
         const normalArrayBuffer = getBufferData(gltf, normalAccessor);
         setArrayData(gltf, normalAccessor, mesh.normalArray, normalArrayBuffer);
     }
@@ -228,7 +202,7 @@ function convertPrimitive(primitive: GLTFPrimitive, gltf: GLTF, textures: Array<
 
         const texcoordAccessor = gltf.json.accessors[attributeMap.TEXCOORD_0];
 
-        mesh.texcoordArray.resize(texcoordAccessor.count);
+        mesh.texcoordArray.resizeExact(texcoordAccessor.count);
         const texcoordArrayBuffer = getBufferData(gltf, texcoordAccessor);
         setArrayData(gltf, texcoordAccessor, mesh.texcoordArray, texcoordArrayBuffer);
     }
@@ -261,6 +235,7 @@ function convertPrimitive(primitive: GLTFPrimitive, gltf: GLTF, textures: Array<
 
 function convertMeshes(gltf: GLTF, textures: Array<ModelTexture>): Array<Array<Mesh>> {
     const meshes: Mesh[][] = [];
+    if (!gltf.json.meshes) return meshes;
 
     for (const meshDesc of gltf.json.meshes) {
         const primitives: Mesh[] = [];
@@ -271,6 +246,98 @@ function convertMeshes(gltf: GLTF, textures: Array<ModelTexture>): Array<Array<M
         meshes.push(primitives);
     }
     return meshes;
+}
+
+function loadNodeBVH(gltf: GLTF, extData: Record<string, number>, meshIdx: number | undefined): ModelBVH | null {
+    const binAccIdx = extData['binaryAccessor'];
+    const posMinAccIdx = extData['positionMinAccessor'];
+    const posMaxAccIdx = extData['positionMaxAccessor'];
+    const idxAccIdx = extData['indexAccessor'];
+
+    if (!Number.isInteger(binAccIdx) || !Number.isInteger(posMinAccIdx) ||
+        !Number.isInteger(posMaxAccIdx) || !Number.isInteger(idxAccIdx)) return null;
+
+    const accessors = gltf.json.accessors;
+    if (binAccIdx >= accessors.length || posMinAccIdx >= accessors.length ||
+        posMaxAccIdx >= accessors.length || idxAccIdx >= accessors.length) return null;
+
+    const binAcc = accessors[binAccIdx];
+    const posMinAcc = accessors[posMinAccIdx];
+    const posMaxAcc = accessors[posMaxAccIdx];
+    const idxAcc = accessors[idxAccIdx];
+
+    if (binAcc.bufferView === undefined || posMinAcc.bufferView === undefined ||
+        posMaxAcc.bufferView === undefined || idxAcc.bufferView === undefined) return null;
+
+    const bv = gltf.json.bufferViews;
+    if (binAcc.bufferView >= bv.length || posMinAcc.bufferView >= bv.length ||
+        posMaxAcc.bufferView >= bv.length || idxAcc.bufferView >= bv.length) return null;
+
+    const binBV = bv[binAcc.bufferView];
+    const posMinBV = bv[posMinAcc.bufferView];
+    const posMaxBV = bv[posMaxAcc.bufferView];
+    const idxBV = bv[idxAcc.bufferView];
+
+    if (binBV.buffer >= gltf.buffers.length || posMinBV.buffer >= gltf.buffers.length ||
+        posMaxBV.buffer >= gltf.buffers.length || idxBV.buffer >= gltf.buffers.length) return null;
+
+    // Validate each accessor's [byteOffset, byteOffset + dataSize) lies within its buffer view.
+    const fits = (accByteOffset: number, dataSize: number, viewLen: number) => accByteOffset >= 0 && accByteOffset <= viewLen && dataSize <= viewLen - accByteOffset;
+
+    const binAccOffset = binAcc.byteOffset || 0;
+    const posMinAccOffset = posMinAcc.byteOffset || 0;
+    const posMaxAccOffset = posMaxAcc.byteOffset || 0;
+    const idxAccOffset = idxAcc.byteOffset || 0;
+
+    if (!fits(binAccOffset, 0, binBV.byteLength) ||
+        !fits(posMinAccOffset, posMinAcc.count * 3 * 4, posMinBV.byteLength) ||
+        !fits(posMaxAccOffset, posMaxAcc.count * 3 * 4, posMaxBV.byteLength) ||
+        !fits(idxAccOffset, idxAcc.count * 4, idxBV.byteLength)) return null;
+
+    const binData = new Uint8Array(gltf.buffers[binBV.buffer], (binBV.byteOffset || 0) + binAccOffset, binBV.byteLength - binAccOffset);
+
+    const posMinData = new Float32Array(gltf.buffers[posMinBV.buffer], (posMinBV.byteOffset || 0) + posMinAccOffset, posMinAcc.count * 3);
+
+    const posMaxData = new Float32Array(gltf.buffers[posMaxBV.buffer], (posMaxBV.byteOffset || 0) + posMaxAccOffset, posMaxAcc.count * 3);
+
+    const idxData = new Uint32Array(gltf.buffers[idxBV.buffer], (idxBV.byteOffset || 0) + idxAccOffset, idxAcc.count);
+
+    const bvh = new ModelBVH();
+    bvh.serializeFromGltf(binData, posMinData, posMaxData, idxData);
+
+    // Set vertex positions from the mesh's POSITION accessor
+    if (meshIdx !== undefined && gltf.json.meshes && gltf.json.meshes[meshIdx]) {
+        const primitive = gltf.json.meshes[meshIdx].primitives[0];
+        if (primitive && primitive.attributes.POSITION !== undefined &&
+            primitive.attributes.POSITION < accessors.length) {
+            const posAcc = accessors[primitive.attributes.POSITION];
+            if (posAcc.bufferView !== undefined && posAcc.bufferView < bv.length) {
+                const posBV = bv[posAcc.bufferView];
+                if (posBV.buffer < gltf.buffers.length) {
+                    const posAccOffset = posAcc.byteOffset || 0;
+                    const stride = posBV.byteStride ? posBV.byteStride / 4 : 3;
+                    const needed = posAcc.count * stride * 4;
+                    if (fits(posAccOffset, needed, posBV.byteLength)) {
+                        const byteOffset = (posBV.byteOffset || 0) + posAccOffset;
+                        if (stride === 3) {
+                            bvh.setVertices(new Float32Array(gltf.buffers[posBV.buffer], byteOffset, posAcc.count * 3));
+                        } else {
+                            const src = new Float32Array(gltf.buffers[posBV.buffer], byteOffset, posAcc.count * stride);
+                            const vertices = new Float32Array(posAcc.count * 3);
+                            for (let i = 0; i < posAcc.count; i++) {
+                                vertices[i * 3] = src[i * stride];
+                                vertices[i * 3 + 1] = src[i * stride + 1];
+                                vertices[i * 3 + 2] = src[i * stride + 2];
+                            }
+                            bvh.setVertices(vertices);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return bvh;
 }
 
 function convertNode(nodeDesc: GLTFNode, gltf: GLTF, meshes: Array<Array<Mesh>>): ModelNode {
@@ -302,6 +369,12 @@ function convertNode(nodeDesc: GLTFNode, gltf: GLTF, meshes: Array<Array<Mesh>>)
         if (extras['MAPBOX_geometry_bloom']) {
             node.isGeometryBloom = extras['MAPBOX_geometry_bloom'] as boolean;
         }
+        if (extras['MAPBOX_zoom_min']) {
+            node.minZoom = extras['MAPBOX_zoom_min'] as number;
+        }
+        if (extras['MAPBOX_zoom_max']) {
+            node.maxZoom = extras['MAPBOX_zoom_max'] as number;
+        }
     }
 
     if (children) {
@@ -310,6 +383,20 @@ function convertNode(nodeDesc: GLTFNode, gltf: GLTF, meshes: Array<Array<Mesh>>)
             converted.push(convertNode(gltf.json.nodes[childNodeIdx], gltf, meshes));
         }
         node.children = converted;
+    }
+
+    if (nodeDesc.extensions && nodeDesc.extensions['mbx_bvh']) {
+        node.meshBVH = loadNodeBVH(gltf, nodeDesc.extensions['mbx_bvh'] as Record<string, number>, mesh);
+    }
+
+    // Propagate meshBVH from children if this node has none
+    if (!node.meshBVH && node.children) {
+        for (const child of node.children) {
+            if (child.meshBVH) {
+                node.meshBVH = child.meshBVH;
+                break;
+            }
+        }
     }
 
     return node;
@@ -377,7 +464,7 @@ function parseLegacyFootprintMesh(gltfNode: GLTFNode): FootprintMesh | null | un
         return null;
     }
 
-    if (vertices.length > 1 && vertices[vertices.length - 1].equals(vertices[0])) {
+    if (vertices.length > 1 && vertices.at(-1).equals(vertices[0])) {
         vertices.pop();
     }
 
@@ -527,16 +614,23 @@ function convertFootprints(convertedNodes: ModelNode[], sceneNodes: number[], mo
     }
 }
 
+function findScene(scenes: Array<{name?: string; nodes: number[]}>, name: string): number {
+    for (let i = 0; i < scenes.length; i++) {
+        if (scenes[i].name === name) return i;
+    }
+    return -1;
+}
+
 export default function convertModel(gltf: GLTF): Array<ModelNode> {
     const textures = convertTextures(gltf, gltf.images);
     const meshes = convertMeshes(gltf, textures);
 
     const {scenes, scene, nodes} = gltf.json;
 
-    // select the correct node hierarchy
-    const sceneNodes = scenes ?
-        scenes[scene || 0].nodes :
-        [...nodes.keys()];
+    // Find "Default Scene" by name; fall back to the GLTF default scene index
+    let sceneIndex = scenes ? findScene(scenes, "Default Scene") : -1;
+    if (sceneIndex < 0) sceneIndex = scene || 0;
+    const sceneNodes: number[] = scenes && scenes[sceneIndex] ? scenes[sceneIndex].nodes || [] : [...nodes.keys()];
 
     const resultNodes: ModelNode[] = [];
     for (const nodeIdx of sceneNodes) {
@@ -544,14 +638,44 @@ export default function convertModel(gltf: GLTF): Array<ModelNode> {
     }
 
     convertFootprints(resultNodes, sceneNodes, gltf.json.nodes);
+
+    // Find "LOD" scene by name; match nodes to primary scene counterparts via extras.id
+    const lodSceneIndex = scenes ? findScene(scenes, "LOD") : -1;
+    if (lodSceneIndex >= 0) {
+        const lodSceneNodes = scenes[lodSceneIndex].nodes;
+        const lodNodeById: Map<string, ModelNode> = new Map();
+        for (const nodeIdx of lodSceneNodes) {
+            const lodNode = convertNode(nodes[nodeIdx], gltf, meshes);
+            if (lodNode.id) {
+                lodNodeById.set(lodNode.id, lodNode);
+            }
+        }
+        for (const node of resultNodes) {
+            if (node.id) {
+                const lodNode = lodNodeById.get(node.id);
+                if (lodNode && lodNode.meshes) {
+                    node.lodMeshes = lodNode.meshes;
+                    if (lodNode.meshBVH) {
+                        node.meshBVH = lodNode.meshBVH;
+                    }
+                }
+            }
+        }
+    }
+
     return resultNodes;
 }
 
 export function process3DTile(gltf: GLTF, zScale: number): Array<ModelNode> {
+    // If the tile uses the mbx_bvh extension, all nodes will have a BVH picking mesh
+    // so we can skip the expensive heightmap generation.
+    const hasBVH = gltf.json.extensionsUsed && gltf.json.extensionsUsed.includes('mbx_bvh');
     const nodes = convertModel(gltf);
     for (const node of nodes) {
-        for (const mesh of node.meshes) {
-            parseHeightmap(mesh);
+        if (!hasBVH) {
+            for (const mesh of node.meshes) {
+                parseHeightmap(mesh);
+            }
         }
         if (node.lights) {
             node.lightMeshIndex = node.meshes.length;
@@ -618,14 +742,14 @@ export function calculateLightsMesh(lights: Array<AreaLight>, zScale: number, in
         // door posts. Later, additional vertices at depth distance from door could be reconsidered.
         // 0.01f to prevent intersection with door post.
         const width = light.width - 2 * light.depth * zScale * (horizontalSpread + 0.01);
-        const v1 = vec3.scaleAndAdd([], light.pos, tangent as [number, number, number], width / 2);
-        const v2 = vec3.scaleAndAdd([], light.pos, tangent as [number, number, number], -width / 2);
+        const v1 = vec3.scaleAndAdd([], light.pos, tangent, width / 2);
+        const v2 = vec3.scaleAndAdd([], light.pos, tangent, -width / 2);
         const v0 = [v1[0], v1[1], v1[2] + light.height];
         const v3 = [v2[0], v2[1], v2[2] + light.height];
 
-        const v1extrusion = vec3.scaleAndAdd([], light.normal, tangent as [number, number, number], horizontalSpread);
+        const v1extrusion = vec3.scaleAndAdd([], light.normal, tangent, horizontalSpread);
         vec3.scale(v1extrusion, v1extrusion, fallOff);
-        const v2extrusion = vec3.scaleAndAdd([], light.normal, tangent as [number, number, number], -horizontalSpread);
+        const v2extrusion = vec3.scaleAndAdd([], light.normal, tangent, -horizontalSpread);
         vec3.scale(v2extrusion, v2extrusion, fallOff);
 
         vec3.add(v1extrusion, v1, v1extrusion);
@@ -683,6 +807,12 @@ function createLightsMesh(lights: Array<AreaLight>, zScale: number): Mesh {
     mesh.indexArray = new TriangleIndexArray();
     mesh.vertexArray = new ModelLayoutArray();
     mesh.colorArray = new Color4fLayoutArray();
+
+    // calculateLightsMesh emits 4 triangles, 10 vertices, and 10 colors per light;
+    // pre-size exactly so so we don't overallocate for a known size
+    mesh.indexArray.reserveExact(lights.length * 4);
+    mesh.vertexArray.reserveExact(lights.length * 10);
+    mesh.colorArray.reserveExact(lights.length * 10);
 
     calculateLightsMesh(lights, zScale, mesh.indexArray, mesh.vertexArray, mesh.colorArray);
 

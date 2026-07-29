@@ -7,7 +7,7 @@ in vec3 a_pos_3f;
 #pragma mapbox: define-attribute highp vec2 uv_2f
 #pragma mapbox: define-attribute highp vec3 color_3f
 #pragma mapbox: define-attribute highp vec4 color_4f
-#pragma mapbox: define-attribute-vertex-shader-only highp vec4 pbr
+#pragma mapbox: define-attribute-vertex-shader-only highp uvec4 pbr
 #pragma mapbox: define-attribute-vertex-shader-only highp vec3 heightBasedEmissiveStrength
 
 // pbr
@@ -51,6 +51,10 @@ out lowp vec4 v_color_mix;
 out highp float v_depth;
 #endif
 
+#ifdef FEATURE_CUTOUT_VERTEX
+out highp float v_cutout_factor;
+#endif
+
 #ifdef HAS_ATTRIBUTE_a_pbr
 out lowp vec4 v_roughness_metallic_emissive_alpha;
 out mediump vec4 v_height_based_emission_params;
@@ -70,7 +74,7 @@ void main() {
     #pragma mapbox: initialize-attribute highp vec2 uv_2f
     #pragma mapbox: initialize-attribute highp vec3 color_3f
     #pragma mapbox: initialize-attribute highp vec4 color_4f
-    #pragma mapbox: initialize-attribute-custom highp vec4 pbr
+    #pragma mapbox: initialize-attribute-custom highp uvec4 pbr
     #pragma mapbox: initialize-attribute-custom highp vec3 heightBasedEmissiveStrength
 
     highp mat4 normal_matrix;
@@ -78,6 +82,10 @@ void main() {
     normal_matrix = mat4(a_normal_matrix0, a_normal_matrix1, a_normal_matrix2, a_normal_matrix3);
 #else
     normal_matrix = u_normal_matrix;
+#endif
+
+#ifdef FEATURE_CUTOUT_VERTEX
+    v_cutout_factor = 1.0;
 #endif
 
     vec3 local_pos;
@@ -110,6 +118,25 @@ void main() {
     gl_Position = mix(u_matrix * pos, AWAY, hidden);
     pos.z *= meter_to_tile;
     v_position_height.xyz = pos.xyz - u_camera_pos;
+
+#ifdef FEATURE_CUTOUT_VERTEX
+    // Sample cutout from the tile position of the feature
+    highp vec4 ground_pos = vec4(pos_a.xy, 0.0, 1.0);
+    highp vec4 cutout_clip_pos = mix(u_matrix * ground_pos, AWAY, hidden);
+    highp vec3 cutout_ndc = cutout_clip_pos.xyz / cutout_clip_pos.w;
+    vec2 uv = cutout_ndc.xy * 0.5 + 0.5;
+    highp float fragDepthNDC = cutout_ndc.z * 0.5 + 0.5;
+#ifdef FLIP_Y
+    fragDepthNDC = cutout_ndc.z;
+#endif
+    highp float cutoutFactor = get_cutout_factors_vert(uv).x;
+    highp float cutoutDepthNDC = sample_cutout_depth(u_cutout_depth_image, uv);
+    // Prevent cutting above ground
+    highp float groundThreshold = 0.001;
+    highp float groundLimit = clamp((fragDepthNDC + groundThreshold - cutoutDepthNDC) / groundThreshold + 0.5, 0.0, 1.0);
+    v_cutout_factor = mix(1.0 - cutoutFactor, 1.0, groundLimit);
+#endif
+
 #else
     local_pos = a_pos_3f;
     gl_Position = u_matrix * vec4(a_pos_3f, 1);
@@ -118,9 +145,9 @@ void main() {
 #endif
     v_position_height.w = a_pos_3f.z;
 #ifdef HAS_ATTRIBUTE_a_pbr
-    vec4 albedo_c = decode_color(pbr.xy);
+    vec4 albedo_c = decode_color(vec2(pbr.xy));
 
-    vec2 e_r_m = unpack_float(pbr.z);
+    vec2 e_r_m = unpack_float(float(pbr.z));
     vec2 r_m =  unpack_float(e_r_m.y * 16.0);
     r_m.r = r_m.r * 16.0;
 
@@ -134,7 +161,7 @@ void main() {
     v_height_based_emission_params.x = heightBasedRelativeIntepolation;
     v_height_based_emission_params.y = heightBasedEmissiveStrength.z;
 
-    vec2 emissionMultiplierValues = unpack_float(pbr.w) / 256.0;
+    vec2 emissionMultiplierValues = unpack_float(float(pbr.w)) / 256.0;
 
     v_height_based_emission_params.z = emissionMultiplierValues.x;
     v_height_based_emission_params.w = emissionMultiplierValues.y - emissionMultiplierValues.x;

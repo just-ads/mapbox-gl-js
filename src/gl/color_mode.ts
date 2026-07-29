@@ -7,6 +7,8 @@ export const ONE = 0x0001;
 export const SRC_ALPHA = 0x0302;
 export const ONE_MINUS_SRC_ALPHA = 0x0303;
 export const DST_COLOR = 0x0306;
+export const ONE_MINUS_DST_ALPHA = 0x0305;
+export const DST_ALPHA = 0x0304;
 
 export default class ColorMode {
     blendFunction: BlendFuncType;
@@ -28,7 +30,10 @@ export default class ColorMode {
     static alphaBlended: Readonly<ColorMode>;
     static alphaBlendedNonPremultiplied: Readonly<ColorMode>;
     static multiply: Readonly<ColorMode>;
+    static multiplyAccumulateAlpha: Readonly<ColorMode>;
     static additive: Readonly<ColorMode>;
+    static additiveAlphaWeighted: Readonly<ColorMode>;
+    static additiveAlphaWeightedUnboundedAlpha: Readonly<ColorMode>;
 }
 
 ColorMode.Replace = [ONE, ZERO, ONE, ZERO];
@@ -38,4 +43,7 @@ ColorMode.unblended = new ColorMode(ColorMode.Replace, Color.transparent, [true,
 ColorMode.alphaBlended = new ColorMode([ONE, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA], Color.transparent, [true, true, true, true]);
 ColorMode.alphaBlendedNonPremultiplied = new ColorMode([SRC_ALPHA, ONE_MINUS_SRC_ALPHA, SRC_ALPHA, ONE_MINUS_SRC_ALPHA], Color.transparent, [true, true, true, true]);
 ColorMode.multiply = new ColorMode([DST_COLOR, ZERO, DST_COLOR, ZERO], Color.transparent, [true, true, true, true]);
+ColorMode.multiplyAccumulateAlpha = new ColorMode([DST_COLOR, ZERO, ONE, ONE_MINUS_SRC_ALPHA], Color.transparent, [true, true, true, true]);
 ColorMode.additive = new ColorMode([ONE, ONE, ONE, ONE], Color.transparent, [true, true, true, true]);
+ColorMode.additiveAlphaWeighted = new ColorMode([SRC_ALPHA, ONE, ONE_MINUS_DST_ALPHA, ONE], Color.transparent, [true, true, true, true]);
+ColorMode.additiveAlphaWeightedUnboundedAlpha = new ColorMode([SRC_ALPHA, ONE, ONE, ONE], Color.transparent, [true, true, true, true]);

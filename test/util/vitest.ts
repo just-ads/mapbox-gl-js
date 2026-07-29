@@ -49,6 +49,28 @@ export function doneAsync() {
     };
 }
 
+const _createdMaps: Map[] = [];
+let _testBaseline = 0;
+
+// Called from `beforeEach` in test/unit/setup.ts to snapshot the map-registry
+// length before each test. Any maps created during the test are above this
+// baseline; `beforeAll`-owned shared maps sit below it and are preserved.
+export function markTestBaseline() {
+    _testBaseline = _createdMaps.length;
+}
+
+// Called from `afterEach` to remove maps created during the just-finished test.
+// Triggers `loseContext()` via `Map.remove()` so the GPU-side WebGL context
+// releases promptly instead of waiting on iframe GC. `prewarm()` in setup.ts
+// keeps the shared worker pool alive across tests, so `release()` here is
+// cheap (it only decrements the active-map set, doesn't terminate workers).
+export function cleanupTestMaps() {
+    for (let i = _createdMaps.length - 1; i >= _testBaseline; i--) {
+        _createdMaps[i].remove();
+    }
+    _createdMaps.length = _testBaseline;
+}
+
 export function createMap(options?, callback?: (err: any, map: Map) => void) {
     const container = window.document.createElement('div');
     const defaultOptions = {
@@ -56,6 +78,10 @@ export function createMap(options?, callback?: (err: any, map: Map) => void) {
         interactive: false,
         attributionControl: false,
         performanceMetricsCollection: false,
+        // Unit tests render single frames or none at all — precompile's idle-scheduled work and
+        // sweeps interact poorly with fake timers and don't exercise behavior these tests cover.
+        // Tests that specifically target the precompiler opt in by passing `precompilePrograms: true`.
+        precompilePrograms: false,
         trackResize: true,
         testMode: true,
         style: {
@@ -82,6 +108,7 @@ export function createMap(options?, callback?: (err: any, map: Map) => void) {
     }
 
     map._authenticate = () => {};
+    _createdMaps.push(map);
 
     return map;
 }

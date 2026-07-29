@@ -36,7 +36,7 @@ class Snow extends Evented {
         super();
 
         const snowProperties = getProperties();
-        this._transitionable = new Transitionable(snowProperties, scope, new Map(configOptions));
+        this._transitionable = new Transitionable(snowProperties, scope, configOptions);
         this.set(snowOptions, configOptions);
         this._transitioning = this._transitionable.untransitioned();
         this.properties = new PossiblyEvaluated(snowProperties);
@@ -53,8 +53,8 @@ class Snow extends Evented {
         const direction: vec3 = [Math.cos(heading) * Math.cos(pitch), Math.sin(heading) * Math.cos(pitch), Math.sin(pitch)];
 
         const vignetteIntensity = this.properties.get('vignette');
-        const vignetteColor = this.properties.get('vignette-color');
-        vignetteColor.a = vignetteIntensity;
+        const baseVignetteColor = this.properties.get('vignette-color');
+        const vignetteColor = new Color(baseVignetteColor.r, baseVignetteColor.g, baseVignetteColor.b, vignetteIntensity);
 
         return {
             density: this.properties.get('density'),
@@ -68,7 +68,7 @@ class Snow extends Evented {
     }
 
     get(): SnowSpecification {
-        return this._transitionable.serialize() as SnowSpecification;
+        return this._transitionable.serialize();
     }
 
     set(snow?: SnowSpecification, configOptions?: ConfigOptions | null, options: StyleSetterOptions = {}) {
@@ -76,7 +76,7 @@ class Snow extends Evented {
             return;
         }
 
-        const properties = Object.assign({}, snow);
+        const properties = {...snow};
         const snowSpec = styleSpec.snow as Record<PropertyKey, StylePropertySpecification>;
         for (const name of Object.keys(snowSpec)) {
             // Fallback to use default style specification when the properties wasn't set
@@ -90,7 +90,7 @@ class Snow extends Evented {
     }
 
     updateConfig(configOptions?: ConfigOptions | null) {
-        this._transitionable.setTransitionOrValue(this._options, new Map(configOptions));
+        this._transitionable.setTransitionOrValue(this._options, configOptions);
     }
 
     updateTransitions(parameters: TransitionParameters) {
@@ -116,11 +116,9 @@ class Snow extends Evented {
             return false;
         }
 
-        return emitValidationErrors(this, validate.call(validateStyle, Object.assign({
-            value,
+        return emitValidationErrors(this, validate.call(validateStyle, {value,
             style: {glyphs: true, sprite: true},
-            styleSpec
-        })));
+            styleSpec}));
     }
 }
 

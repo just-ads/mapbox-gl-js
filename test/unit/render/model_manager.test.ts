@@ -254,6 +254,47 @@ describe('ModelManager', () => {
         expect(modelManager.models['basemap']['model2'].numReferences).toBe(1);
     });
 
+    test("does not pollute Object.prototype when scope or id is '__proto__'", () => {
+        const {modelManager, eventedParent} = createModelManager();
+
+        eventedParent.on('error', ({error}) => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
+            expect.unreachable(error.message);
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        modelManager.loadModel = vi.fn((id, url) => Promise.resolve({id, url}));
+
+        // A malicious style with imports[].id === "__proto__" makes scope === "__proto__".
+        // Attacker also controls the model id and URL, so writes of the form
+        // `this.modelUris[scope][id] = url` must not reach Object.prototype.
+        modelManager.addModel('polluted', 'https://attacker.example/payload', '__proto__');
+        modelManager.addModelURLs({'pollutedFromURLs': 'https://attacker.example/payload'}, '__proto__');
+        modelManager.addModelsFromBucket(['https://attacker.example/from-bucket'], '__proto__');
+
+        try {
+            // No global prototype pollution: bare objects must not see attacker keys.
+            expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+            expect(({} as Record<string, unknown>).pollutedFromURLs).toBeUndefined();
+            expect(({} as Record<string, unknown>)['https://attacker.example/from-bucket']).toBeUndefined();
+
+            // The maps themselves must not have inherited Object.prototype either.
+            expect(Object.getPrototypeOf(modelManager.modelUris)).toBeNull();
+            expect(Object.getPrototypeOf(modelManager.models)).toBeNull();
+            expect(Object.getPrototypeOf(modelManager.modelByURL)).toBeNull();
+            expect(Object.getPrototypeOf(modelManager.numModelsLoading)).toBeNull();
+            // eslint-disable-next-line no-proto
+            expect(Object.getPrototypeOf(modelManager.modelUris['__proto__'])).toBeNull();
+            // eslint-disable-next-line no-proto
+            expect(Object.getPrototypeOf(modelManager.models['__proto__'])).toBeNull();
+        } finally {
+            // Defensive cleanup so a regression cannot leak into sibling tests.
+            delete (Object.prototype as Record<string, unknown>).polluted;
+            delete (Object.prototype as Record<string, unknown>).pollutedFromURLs;
+            delete (Object.prototype as Record<string, unknown>)['https://attacker.example/from-bucket'];
+        }
+    });
+
     test('#destroy', () => {
         const {modelManager, eventedParent} = createModelManager();
 

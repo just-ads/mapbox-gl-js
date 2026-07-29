@@ -2,10 +2,10 @@ import loadGeometry from './load_geometry';
 import toEvaluationFeature from './evaluation_feature';
 import EvaluationParameters from '../style/evaluation_parameters';
 import EXTENT from '../style-spec/data/extent';
-import Grid from 'grid-index';
+import Grid from '../symbol/grid_index';
 import DictionaryCoder from '../util/dictionary_coder';
 import {VectorTile} from '@mapbox/vector-tile';
-import Protobuf from 'pbf';
+import {PbfReader} from 'pbf';
 import Feature from '../util/vectortile_to_geojson';
 import {arraysIntersect, mapObject, warnOnce} from '../util/util';
 import {register} from '../util/web_worker_transfer';
@@ -27,7 +27,6 @@ import type {TilespaceQueryGeometry} from '../style/query_geometry';
 import type {FeatureIndex as FeatureIndexStruct} from './array_types';
 import type {TileTransform} from '../geo/projection/tile_transform';
 import type {VectorTileLayer, VectorTileFeature} from '@mapbox/vector-tile';
-import type {GridIndex} from '../types/grid-index';
 import type {FeatureState, StyleExpression} from '../style-spec/expression/index';
 import type {FeatureVariant} from '../util/vectortile_to_geojson';
 import type {ImageId} from '../style-spec/expression/types/image_id';
@@ -41,6 +40,7 @@ type QueryParameters = {
     availableImages: ImageId[];
     worldview: string | undefined;
     queryRadius?: number;
+    scope?: string | undefined
 };
 
 type FeatureIndices = FeatureIndexStruct | {
@@ -50,14 +50,14 @@ type FeatureIndices = FeatureIndexStruct | {
     layoutVertexArrayOffset: number;
 };
 
-type IntersectionTest = (feature: VectorTileFeature, styleLayer: TypedStyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number) => boolean | number;
+type IntersectionTest = (feature: VectorTileFeature, styleLayer: TypedStyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number) => boolean | number | undefined;
 
 class FeatureIndex {
     tileID: OverscaledTileID;
     x: number;
     y: number;
     z: number;
-    grid: GridIndex;
+    grid: Grid;
     featureIndexArray: FeatureIndexArray;
     promoteId?: PromoteIdSpecification;
     promoteIdExpression?: StyleExpression;
@@ -78,8 +78,7 @@ class FeatureIndex {
         this.x = tileID.canonical.x;
         this.y = tileID.canonical.y;
         this.z = tileID.canonical.z;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
-        this.grid = new Grid(EXTENT, 16, 0);
+        this.grid = new Grid(EXTENT, EXTENT, EXTENT / 16);
         this.featureIndexArray = new FeatureIndexArray();
         this.promoteId = promoteId;
         this.is3DTile = false;
@@ -124,7 +123,7 @@ class FeatureIndex {
     loadVTLayers(): Record<string, VectorTileLayer> {
         if (!this.vtLayers) {
             // @ts-ignore
-            this.vtLayers = new VectorTile(new Protobuf(this.rawTileData), undefined, this.vtOptions).layers;
+            this.vtLayers = new VectorTile(new PbfReader(this.rawTileData), undefined, this.vtOptions).layers;
             this.sourceLayerCoder = new DictionaryCoder(this.vtLayers ? Object.keys(this.vtLayers).sort() : ['_geojsonTileLayer']);
             this.vtFeatures = {};
             for (const layer in this.vtLayers) {
@@ -149,7 +148,7 @@ class FeatureIndex {
             return isects;
         };
 
-        const matching = this.grid.query(bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y, queryPredicate);
+        const matching = this.grid.queryKeys(bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y, queryPredicate);
         matching.sort(topDownFeatureComparator);
 
         let elevationHelper = null;
@@ -158,7 +157,7 @@ class FeatureIndex {
         }
 
         const result: QueryResult = {};
-        let previousIndex;
+        let previousIndex: number | undefined;
         for (let k = 0; k < matching.length; k++) {
             const index = matching[k];
 
@@ -180,7 +179,7 @@ class FeatureIndex {
                 }
 
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                return styleLayer.queryIntersectsFeature(tilespaceGeometry, feature, featureState, featureGeometry, this.z, transform, pixelPosMatrix, elevationHelper, layoutVertexArrayOffset);
+                return styleLayer.queryIntersectsFeature(tilespaceGeometry, feature, featureState, featureGeometry, this.z, transform, pixelPosMatrix, elevationHelper, layoutVertexArrayOffset, params.scope);
             };
 
             this.loadMatchingFeature(
@@ -251,11 +250,12 @@ class FeatureIndex {
             geojsonFeature.source = serializedLayer.source;
             geojsonFeature.sourceLayer = serializedLayer['source-layer'];
 
-            geojsonFeature.layer = Object.assign({}, serializedLayer);
+            geojsonFeature.layer = {...serializedLayer};
             geojsonFeature.layer.paint = evaluateProperties(serializedLayer.paint, styleLayer.paint, feature, featureState, availableImages);
             geojsonFeature.layer.layout = evaluateProperties(serializedLayer.layout, styleLayer.layout, feature, featureState, availableImages);
 
             // Iterate over all targets to check if the feature should be included and add feature variants if necessary
+            const evaluationParameters = new EvaluationParameters(this.tileID.overscaledZ, {worldview});
             let shouldInclude = false;
             for (const target of targets) {
                 this.updateFeatureProperties(geojsonFeature, target);
@@ -264,10 +264,10 @@ class FeatureIndex {
                     feature.properties = geojsonFeature.properties;
                     if (filter.needGeometry) {
                         const evaluationFeature = toEvaluationFeature(feature, true);
-                        if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), evaluationFeature, this.tileID.canonical)) {
+                        if (!filter.filter(evaluationParameters, evaluationFeature, this.tileID.canonical)) {
                             continue;
                         }
-                    } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), feature)) {
+                    } else if (!filter.filter(evaluationParameters, feature)) {
                         continue;
                     }
                 }
@@ -345,9 +345,10 @@ class FeatureIndex {
             geojsonFeature.source = serializedLayer.source;
             geojsonFeature.sourceLayer = serializedLayer['source-layer'];
 
-            geojsonFeature.layer = Object.assign({}, serializedLayer);
+            geojsonFeature.layer = {...serializedLayer};
 
             // Iterate over all targets to check if the feature should be included and add feature variants if necessary
+            const evaluationParameters = new EvaluationParameters(this.tileID.overscaledZ, {worldview});
             let shouldInclude = false;
             for (const target of targets) {
                 this.updateFeatureProperties(geojsonFeature, target);
@@ -355,10 +356,10 @@ class FeatureIndex {
                 if (filter) {
                     feature.properties = geojsonFeature.properties;
                     if (filter.needGeometry) {
-                        if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), feature, this.tileID.canonical)) {
+                        if (!filter.filter(evaluationParameters, feature, this.tileID.canonical)) {
                             continue;
                         }
-                    } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), feature)) {
+                    } else if (!filter.filter(evaluationParameters, feature)) {
                         continue;
                     }
                 }

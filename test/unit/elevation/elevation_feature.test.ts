@@ -1,8 +1,9 @@
 
 import {describe, test, expect} from '../../util/vitest';
-import Protobuf from 'pbf';
+import {PbfReader} from 'pbf';
 import {VectorTile} from '@mapbox/vector-tile';
 import {EdgeIterator, ElevationFeature, ElevationFeatures, type Edge, type Range, type Vertex} from '../../../3d-style/elevation/elevation_feature';
+import {getElevationFeature} from '../../../3d-style/elevation/get_elevation_feature';
 // @ts-expect-error: Cannot find module
 import vectorTileStubZ14 from '../../fixtures/elevation/14-8717-5683.mvt?arraybuffer';
 // @ts-expect-error: Cannot find module
@@ -176,7 +177,7 @@ describe('ElevationFeature', () => {
     test('#parseTileZ14', () => {
         // Load a fill feature from fixture tile.
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-        const vt = new VectorTile(new Protobuf(vectorTileStubZ14));
+        const vt = new VectorTile(new PbfReader(vectorTileStubZ14));
         const layer = vt.layers[HD_ELEVATION_SOURCE_LAYER];
 
         expect(layer).toBeDefined();
@@ -242,7 +243,7 @@ describe('ElevationFeature', () => {
     test('#parseTileZ17', () => {
         // Load a fill feature from fixture tile.
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-        const vt = new VectorTile(new Protobuf(vectorTileStubZ17));
+        const vt = new VectorTile(new PbfReader(vectorTileStubZ17));
         const layer = vt.layers[HD_ELEVATION_SOURCE_LAYER];
 
         expect(layer).toBeDefined();
@@ -358,26 +359,26 @@ describe('ElevationFeature', () => {
         const ids = [{id: 1}, {id: 2}, {id: 3}];
 
         {
-            const actual = ElevationFeatures.getElevationFeature(feature as BucketFeature, []);
+            const actual = getElevationFeature(feature as BucketFeature, []);
             expect(actual).toBeUndefined();
         }
 
         {
-            const actual = ElevationFeatures.getElevationFeature(feature as BucketFeature, ids as ElevationFeature[]);
+            const actual = getElevationFeature(feature as BucketFeature, ids as ElevationFeature[]);
             expect(actual).toBeUndefined();
         }
 
         {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             feature['properties'][PROPERTY_ELEVATION_ID] = 4;
-            const actual = ElevationFeatures.getElevationFeature(feature as BucketFeature, ids as ElevationFeature[]);
+            const actual = getElevationFeature(feature as BucketFeature, ids as ElevationFeature[]);
             expect(actual).toBeUndefined();
         }
 
         {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             feature['properties'][PROPERTY_ELEVATION_ID] = 2;
-            const actual = ElevationFeatures.getElevationFeature(feature as BucketFeature, ids as ElevationFeature[]);
+            const actual = getElevationFeature(feature as BucketFeature, ids as ElevationFeature[]);
             expect(actual).toMatchObject({id: 2});
         }
     });

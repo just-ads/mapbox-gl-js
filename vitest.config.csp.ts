@@ -1,22 +1,15 @@
 import {defineConfig, mergeConfig} from 'vitest/config';
-import baseConfig from './vitest.config.base';
-import {playwright} from '@vitest/browser-playwright';
-
-const isCI = process.env.CI === 'true';
+import baseConfig, {chromiumBrowser} from './vitest.config.base';
+import {serveDistPlugin} from './vitest.config.common';
 
 export default mergeConfig(baseConfig, defineConfig({
     test: {
-        reporters: isCI ? [['verbose', {summary: false}]] : [['default']],
-        browser: {
-            provider: playwright({launchOptions: {channel: isCI ? 'chromium' : 'chrome'}}),
-            instances: [
-                {browser: 'chromium'},
-            ],
-        },
+        browser: chromiumBrowser(),
         include: ['test/integration/csp-tests/**/*.test.ts'],
         testTimeout: 10_000,
     },
     publicDir: 'test/integration/csp-tests/',
+    plugins: [serveDistPlugin()],
     server: {
         headers: {
             'Allow-CSP-From': '*',

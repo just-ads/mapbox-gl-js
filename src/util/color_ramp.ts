@@ -1,9 +1,11 @@
 import {RGBAImage} from './image';
 import {isPowerOfTwo} from './util';
-import assert from 'assert';
+import {lerp} from '../style-spec/util/lerp';
+import assert from '../style-spec/util/assert';
 
 import type {StylePropertyExpression, GlobalProperties} from '../style-spec/expression/index';
 import type {default as Color, PremultipliedRenderColor} from '../style-spec/util/color';
+import type {LUT} from './lut';
 
 export type ColorRampParams = {
     expression: StylePropertyExpression;
@@ -11,6 +13,7 @@ export type ColorRampParams = {
     resolution?: number;
     image?: RGBAImage;
     clips?: Array<{start: number, end: number}>;
+    lut?: LUT | null;
 };
 
 /**
@@ -24,13 +27,14 @@ export function renderColorRamp(params: ColorRampParams): RGBAImage {
     const width = params.resolution || 256;
     const height = params.clips ? params.clips.length : 1;
     const image = params.image || new RGBAImage({width, height});
+    const lut = params.lut || null;
 
     assert(isPowerOfTwo(width));
 
     const renderPixel = (stride: number, index: number, progress: number) => {
         evaluationGlobals[params.evaluationKey] = progress;
         const color: Color = params.expression.evaluate(evaluationGlobals);
-        const pxColor: PremultipliedRenderColor | null | undefined = color ? color.toNonPremultipliedRenderColor(null) : null;
+        const pxColor: PremultipliedRenderColor | null | undefined = color ? color.toNonPremultipliedRenderColor(lut) : null;
         if (!pxColor) return;
 
         image.data[stride + index + 0] = Math.floor(pxColor.r * 255);
@@ -51,7 +55,7 @@ export function renderColorRamp(params: ColorRampParams): RGBAImage {
                 // Remap progress between clips
                 const progress = i / (width - 1);
                 const {start, end} = params.clips[clip];
-                const evaluationProgress = start * (1 - progress) + end * progress;
+                const evaluationProgress = lerp(start, end, progress);
                 renderPixel(stride, j, evaluationProgress);
             }
         }

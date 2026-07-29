@@ -22,6 +22,7 @@ import type {Callback} from '../types/callback';
 import type {MapEvents} from '../ui/events';
 import type {CustomTags, SourceSpecification} from '../style-spec/types';
 import type {CustomSourceInterface} from '../source/custom_source';
+import type {CanvasSourceSpecification} from '../source/canvas_source';
 
 export type {Source};
 
@@ -115,15 +116,7 @@ export interface ISource<T = Source['type']> extends Evented<SourceEvents> {
     readonly _clear?: () => void;
 }
 
-type SourceStatics = {
-    /*
-     * An optional URL to a script which, when run by a Worker, registers a {@link WorkerSource}
-     * implementation for this Source type by calling `self.registerWorkerSource(workerSource: WorkerSource)`.
-     */
-    workerSourceURL?: string;
-};
-
-export type SourceClass = Class<ISource> & SourceStatics;
+export type SourceClass = Class<ISource>;
 
 const sourceTypes: Record<Source['type'], Class<ISource>> = {
     vector,
@@ -153,7 +146,7 @@ export type SourceType = keyof typeof sourceTypes;
  */
 export const create = function (
     id: string,
-    specification: SourceSpecification | CustomSourceInterface<unknown>,
+    specification: SourceSpecification | CanvasSourceSpecification | CustomSourceInterface<unknown>,
     dispatcher: Dispatcher,
     eventedParent: Evented,
 ): Source {

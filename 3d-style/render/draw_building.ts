@@ -7,9 +7,10 @@ import {mat4} from 'gl-matrix';
 import StencilMode from '../../src/gl/stencil_mode';
 import {getMetersPerPixelAtLatitude} from '../../src/geo/mercator_coordinate';
 import {Debug} from '../../src/util/debug';
-import {DevTools} from '../../src/ui/devtools';
-import {drawGroundEffect as fillExtrusionDrawGroundEffect, GroundEffectProperties, frustumCullShadowCaster} from '../../src/render/draw_fill_extrusion';
+import {drawGroundEffect as fillExtrusionDrawGroundEffect} from './draw_ground_effect';
+import {GroundEffectProperties, frustumCullShadowCaster, computeFrontCutoffParams} from '../../src/render/draw_fill_extrusion';
 import Color from '../../src/style-spec/util/color';
+import {lerp} from '../../src/style-spec/util/lerp';
 import ColorMode from '../../src/gl/color_mode';
 import {PerformanceUtils} from '../../src/util/performance';
 
@@ -21,6 +22,10 @@ import type SourceCache from '../../src/source/source_cache';
 import type {DynamicDefinesType} from '../../src/render/program/program_uniforms';
 
 export default draw;
+
+// Reused per-tile; safe to pass directly to uniforms because UniformMatrix4f caches a copy.
+const matrixScratch = new Float32Array(16);
+const normalMatrixScratch = new Float32Array(16);
 
 interface DrawParams {
     painter: Painter;
@@ -55,6 +60,14 @@ function drawTiles(params: DrawParams) {
         defines = defines.concat('RENDER_CUTOFF');
     }
 
+    const frontCutoffArray = layer.paint.get('building-front-cutoff');
+    const frontCutoffEnabled = frontCutoffArray[2] < 1.0 && !painter.terrain;
+    const frontCutoffParams = computeFrontCutoffParams(painter.transform.pitch, frontCutoffArray, !!painter.terrain);
+    if (frontCutoffEnabled) {
+        defines = defines.concat('RENDER_FRONT_CUTOFF');
+        painter.maxFrontCutoffRawStart = Math.max(painter.maxFrontCutoffRawStart, frontCutoffArray[0]);
+    }
+
     if (params.floodLightIntensity > 0.0) {
         defines = defines.concat('FLOOD_LIGHT');
     }
@@ -77,13 +90,14 @@ function drawTiles(params: DrawParams) {
         let programWithFacades;
         let programWithoutFacades;
 
-        let matrix = painter.translatePosMatrix(
+        const translated = painter.translatePosMatrix(
             coord.expandedProjMatrix,
             tile,
             [0, 0],
             'map');
 
-        matrix = mat4.scale(mat4.create(), matrix, [1.0, 1.0, params.verticalScale]);
+        mat4.scale(matrixScratch, translated, [1.0, 1.0, params.verticalScale]);
+        const matrix = matrixScratch;
 
         let uniformValues;
 
@@ -92,8 +106,8 @@ function drawTiles(params: DrawParams) {
             if (frustumCullShadowCaster(tile.tileID, bucketMaxHeight, painter)) {
                 continue;
             }
-            let tileShadowPassMatrix = shadowRenderer.calculateShadowPassMatrixFromTile(tile.tileID.toUnwrapped());
-            tileShadowPassMatrix = mat4.scale(mat4.create(), tileShadowPassMatrix, [1.0, 1.0, params.verticalScale]);
+            const tileShadowPassMatrix = shadowRenderer.calculateShadowPassMatrixFromTile(tile.tileID.toUnwrapped());
+            mat4.scale(tileShadowPassMatrix, tileShadowPassMatrix, [1.0, 1.0, params.verticalScale]);
 
             uniformValues = buildingDepthUniformValues(tileShadowPassMatrix);
 
@@ -104,12 +118,12 @@ function drawTiles(params: DrawParams) {
             const tileMatrix = painter.transform.calculatePosMatrix(coord.toUnwrapped(), painter.transform.worldSize);
             mat4.scale(tileMatrix, tileMatrix, [1, 1, params.verticalScale]);
 
-            const normalMatrix = mat4.create();
             // For tilespace XY, normals are ZUp. Flip Y to follow tile coordinate system orientation.
             // Take vertical scale into account and convert Z to meters.
-            mat4.scale(normalMatrix, tileMatrix, [1, -1, 1.0 / metersPerPixel]);
-            mat4.invert(normalMatrix, normalMatrix);
-            mat4.transpose(normalMatrix, normalMatrix);
+            mat4.scale(normalMatrixScratch, tileMatrix, [1, -1, 1.0 / metersPerPixel]);
+            mat4.invert(normalMatrixScratch, normalMatrixScratch);
+            mat4.transpose(normalMatrixScratch, normalMatrixScratch);
+            const normalMatrix = normalMatrixScratch;
 
             // camera position in the tile coordinates
             const mercCameraPos = painter.transform.getFreeCameraOptions().position;
@@ -120,7 +134,7 @@ function drawTiles(params: DrawParams) {
                 mercCameraPos.z * tiles * EXTENT
             ];
 
-            uniformValues = buildingUniformValues(matrix, normalMatrix, params.opacity, params.facadeAOIntensity, cameraPos, bucket.tileToMeter, params.facadeEmissiveChance, params.floodLightColor, params.floodLightIntensity);
+            uniformValues = buildingUniformValues(matrix, normalMatrix, params.opacity, params.facadeAOIntensity, cameraPos, bucket.tileToMeter, params.facadeEmissiveChance, params.floodLightColor, params.floodLightIntensity, frontCutoffParams);
 
             programWithoutFacades =  painter.getOrCreateProgram('building',
                 {config: programConfiguration, defines, overrideFog: false});
@@ -140,8 +154,9 @@ function drawTiles(params: DrawParams) {
                 shadowRenderer.setupShadowsFromMatrix(tileMatrix, programWithoutFacades, true);
 
                 if (programWithFacades !== programWithoutFacades) {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-                    shadowRenderer.setupShadowsFromMatrix(tileMatrix, programWithFacades, true);
+                    // Same shadow uniforms for both programs — skip the redundant cascade muls + texture binds.
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                    programWithFacades.setShadowUniformValues(context, shadowRenderer.getShadowUniformValues());
                 }
             }
         } else {
@@ -191,43 +206,7 @@ function drawTiles(params: DrawParams) {
     }
 }
 
-// Debug settings for rendering of buildings
-
-let drawBuildingsDebugParams: DrawBuildingsDebugParams | null = null;
-
-class DrawBuildingsDebugParams {
-    public showNormals: boolean = false;
-    public drawGroundAO: boolean = true;
-    public drawShadowPass: boolean = true;
-    public drawTranslucentPass: boolean = true;
-
-    public static getOrCreateInstance(painter: Painter): DrawBuildingsDebugParams {
-
-        if (!drawBuildingsDebugParams) {
-            drawBuildingsDebugParams = new DrawBuildingsDebugParams(painter);
-        }
-        return drawBuildingsDebugParams;
-    }
-
-    constructor(painter: Painter) {
-        DevTools.addParameter(this, 'drawTranslucentPass', 'Buildings', {label: 'Draw Translucent Pass'}, () => {
-            painter.style.map.triggerRepaint();
-        });
-        DevTools.addParameter(this, 'drawShadowPass', 'Buildings', {label: 'Draw Shadow Pass'}, () => {
-            painter.style.map.triggerRepaint();
-        });
-        DevTools.addParameter(this, 'showNormals', 'Buildings', {label: 'Show normals'}, () => {
-            painter.style.map.triggerRepaint();
-        });
-        DevTools.addParameter(this, 'drawGroundAO', 'Buildings', {label: 'Ground AO'}, () => {
-            painter.style.map.triggerRepaint();
-        });
-    }
-}
-
-function drawGroundEffect(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, coords: Array<OverscaledTileID>, aoPass: boolean, opacity: number, aoIntensity: number, aoRadius: number, floodLightIntensity: number, floodLightColor: [number, number, number], attenuationFactor: number, replacementActive: boolean, renderNeighbors: boolean) {
-    const lerp = (a: number, b: number, t: number) => { return (1 - t) * a + t * b; };
-
+function drawGroundEffect(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, coords: Array<OverscaledTileID>, aoPass: boolean, opacity: number, aoIntensity: number, aoRadius: number, floodLightIntensity: number, floodLightColor: [number, number, number], attenuationFactor: number, replacementActive: boolean, renderNeighbors: boolean, frontCutoffParams?: [number, number, number]) {
     const gl = painter.context.gl;
     const depthMode = painter.depthModeForSublayer(1, DepthMode.ReadOnly, gl.LEQUAL, true);
 
@@ -242,7 +221,7 @@ function drawGroundEffect(painter: Painter, source: SourceCache, layer: Building
         const stencilSdfPass = new StencilMode({func: gl.ALWAYS, mask: 0xFF}, 0xFF, 0xFF, gl.KEEP, gl.KEEP, gl.REPLACE);
         const colorSdfPass = new ColorMode([gl.ONE, gl.ONE, gl.ONE, gl.ONE], Color.transparent, [false, false, false, true], gl.MIN);
 
-        fillExtrusionDrawGroundEffect(groundEffectProps, painter, source, layer, coords, depthMode, stencilSdfPass, colorSdfPass, CullFaceMode.disabled, aoPass, 'sdf', opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, attenuation, conflateLayer, false);
+        fillExtrusionDrawGroundEffect(groundEffectProps, painter, source, layer, coords, depthMode, stencilSdfPass, colorSdfPass, CullFaceMode.disabled, aoPass, 'sdf', opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, attenuation, conflateLayer, false, undefined, frontCutoffParams);
     }
 
     {
@@ -250,7 +229,7 @@ function drawGroundEffect(painter: Painter, source: SourceCache, layer: Building
         const stencilColorPass = showOverdraw ? StencilMode.disabled : new StencilMode({func: gl.EQUAL, mask: 0xFF}, 0xFF, 0xFF, gl.KEEP, gl.DECR, gl.DECR);
         const colorColorPass = showOverdraw ? painter.colorModeForRenderPass() : new ColorMode([gl.ONE_MINUS_DST_ALPHA, gl.DST_ALPHA, gl.ONE, gl.ONE], Color.transparent, [true, true, true, true]);
 
-        fillExtrusionDrawGroundEffect(groundEffectProps, painter, source, layer, coords, depthMode, stencilColorPass, colorColorPass, CullFaceMode.disabled, aoPass, 'color', opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, attenuation, conflateLayer, false);
+        fillExtrusionDrawGroundEffect(groundEffectProps, painter, source, layer, coords, depthMode, stencilColorPass, colorColorPass, CullFaceMode.disabled, aoPass, 'color', opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, attenuation, conflateLayer, false, undefined, frontCutoffParams);
     }
 }
 
@@ -308,10 +287,9 @@ function draw(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, 
     }
 
     Debug.run(() => {
-        const debugParams = DrawBuildingsDebugParams.getOrCreateInstance(painter);
-        aoEnabled = aoEnabled && debugParams.drawGroundAO;
-        castsShadowsEnabled = castsShadowsEnabled && debugParams.drawShadowPass;
-        drawLayer = drawLayer && debugParams.drawTranslucentPass;
+        aoEnabled = aoEnabled && painter._debugParams.buildingsDrawGroundAO;
+        castsShadowsEnabled = castsShadowsEnabled && painter._debugParams.buildingsDrawShadowPass;
+        drawLayer = drawLayer && painter._debugParams.buildingsDrawTranslucentPass;
     });
 
     if (!painter.shadowRenderer) {
@@ -336,7 +314,6 @@ function draw(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, 
         ];
 
         const depthMode = shadowRenderer.getShadowPassDepthMode();
-        const colorMode = shadowRenderer.getShadowPassColorMode();
 
         drawTiles({
             painter,
@@ -344,7 +321,7 @@ function draw(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, 
             layer,
             coords,
             defines: definesForPass,
-            blendMode: colorMode,
+            blendMode: ColorMode.disabled,
             depthMode,
             opacity,
             verticalScale,
@@ -361,16 +338,15 @@ function draw(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, 
         ];
 
         if (receiveShadowsEnabled) {
-            definesForPass = definesForPass.concat("RENDER_SHADOWS", "DEPTH_TEXTURE");
+            definesForPass = definesForPass.concat("RENDER_SHADOWS");
         }
 
         if (painter.shadowRenderer && painter.shadowRenderer.useNormalOffset) {
             definesForPass = definesForPass.concat("NORMAL_OFFSET");
         }
-        // Apply debug settinggs. Stripped out in production.
+
         Debug.run(() => {
-            const debugParams = DrawBuildingsDebugParams.getOrCreateInstance(painter);
-            if (debugParams.showNormals) {
+            if (painter._debugParams.buildingsShowNormals) {
                 definesForPass = definesForPass.concat("DEBUG_SHOW_NORMALS");
             }
         });
@@ -423,11 +399,14 @@ function draw(painter: Painter, source: SourceCache, layer: BuildingStyleLayer, 
             floodLightColor
         });
 
+        const geFrontCutoffArray = layer.paint.get('building-front-cutoff');
+        const geFrontCutoffParams = computeFrontCutoffParams(painter.transform.pitch, geFrontCutoffArray, !!painter.terrain);
+
         if (aoEnabled) {
-            drawGroundEffect(painter, source, layer, coords, true, opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, aoGroundAttenuation, conflateLayer, false);
+            drawGroundEffect(painter, source, layer, coords, true, opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, aoGroundAttenuation, conflateLayer, false, geFrontCutoffParams);
         }
         if (floodLightEnabled) {
-            drawGroundEffect(painter, source, layer, coords, false, opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, floodLightGroundAttenuation, conflateLayer, false);
+            drawGroundEffect(painter, source, layer, coords, false, opacity, aoIntensity, aoRadius, floodLightIntensity, floodLightColor, floodLightGroundAttenuation, conflateLayer, false, geFrontCutoffParams);
         }
     } else if (painter.renderPass === 'light-beam' && drawLayer) {
         const definesForPass: Array<DynamicDefinesType> = [

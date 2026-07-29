@@ -1,5 +1,6 @@
 import {array, ValueType, NumberType} from '../types';
 import RuntimeError from '../runtime_error';
+import {lerp} from '../../util/lerp';
 
 import type {Expression, SerializedExpression} from '../expression';
 import type ParsingContext from '../parsing_context';
@@ -60,7 +61,7 @@ class AtInterpolated implements Expression {
 
         // Linear interpolation
         const fraction = index - lowerIndex;
-        return lowerValue * (1 - fraction) + upperValue * fraction;
+        return lerp(lowerValue, upperValue, fraction);
     }
 
     eachChild(fn: (_: Expression) => void) {

@@ -1,6 +1,7 @@
 import browser from '../../src/util/browser';
 import {Evented, ErrorEvent, Event} from '../../src/util/evented';
-import {ResourceType} from '../../src/util/ajax';
+import {ResourceType, isHttpNotFound} from '../../src/util/ajax';
+import {parseExpiryData} from '../../src/util/util';
 import loadTileJSON from '../../src/source/load_tilejson';
 import TileBounds from '../../src/source/tile_bounds';
 import {postTurnstileEvent} from '../../src/util/mapbox';
@@ -155,16 +156,24 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
             source: this.id,
             scope: this.scope,
             showCollisionBoxes: this.map.showCollisionBoxes,
-            isSymbolTile: tile.isSymbolTile,
+            renderSourceType: tile.renderSourceType,
             brightness: this.map.style ? (this.map.style.getBrightness() || 0.0) : 0.0,
             pixelRatio: browser.devicePixelRatio,
             promoteId: this.promoteId,
         };
 
+        const done = (err?: AJAXError | null, data?: WorkerSourceVectorTileResult | null) => {
+            if (tile.aborted) return callback(null);
+            if (err && !isHttpNotFound(err)) return callback(err);
+            if (this.map._refreshExpiredTiles && data) tile.setExpiryData(parseExpiryData(data.headers));
+            tile.loadModelData(data, this.map.painter);
+            tile.state = 'loaded';
+            callback(null);
+        };
+
         if (!tile.actor || tile.state === 'expired') {
             tile.actor = this.dispatcher.getActor();
-
-            tile.request = tile.actor.send('loadTile', params, done.bind(this), undefined, true);
+            tile.request = tile.actor.sendCancelable('loadTile', params, {}, done);
         } else if (tile.state === 'loading') {
             // schedule tile reloading after it has been loaded
             tile.reloadCallback = callback;
@@ -179,26 +188,12 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
                 return;
             }
 
-            tile.request = tile.actor.send('reloadTile', params, done.bind(this));
-        }
-
-        function done(this: Tiled3DModelSource, err?: AJAXError | null, data?: WorkerSourceVectorTileResult | null) {
-            if (tile.aborted) return callback(null);
-
-            if (err && err.status !== 404) {
-                return callback(err);
-            }
-
-            if (this.map._refreshExpiredTiles && data) tile.setExpiryData(data);
-            tile.loadModelData(data, this.map.painter);
-
-            tile.state = 'loaded';
-            callback(null);
+            tile.request = tile.actor.sendCancelable('reloadTile', params, {}, done);
         }
     }
 
     serialize(): ModelSourceSpecification {
-        return Object.assign({}, this._options);
+        return {...this._options};
     }
 }
 

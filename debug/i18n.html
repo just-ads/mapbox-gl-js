@@ -128,11 +128,10 @@
     </div>
 </div>
 
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
 
-mapboxgl.accessToken = getAccessToken();
 
 const url = new URL(window.location);
 const language = document.getElementById('language');
@@ -144,6 +143,7 @@ const worldviewSearchParam = url.searchParams.get('worldview');
 if (worldviewSearchParam) worldview.value = worldviewSearchParam;
 
 var map = window.map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     zoom: 12.5,
@@ -155,7 +155,7 @@ var map = window.map = new mapboxgl.Map({
 });
 
 map.addControl(new mapboxgl.ScaleControl());
-mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js');
+mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.4.0/mapbox-gl-rtl-text.js');
 
 map.on('style.load', () => {
     map.addSource('mapbox://mapbox.mapbox-streets-v8-i18n', {

@@ -8,7 +8,7 @@ import webpSupported from '../../../src/util/webp_supported';
 import {uuid} from '../../../src/util/util';
 import {SKU_ID} from '../../../src/util/sku_token';
 import {version} from '../../../package.json';
-import assert from 'assert';
+import assert from '../../../src/style-spec/util/assert';
 
 const mapboxTileURLs = [
     'https://a.tiles.mapbox.com/v4/mapbox.mapbox-terrain-v2,mapbox.mapbox-streets-v7/{z}/{x}/{y}.vector.pbf',
@@ -509,10 +509,10 @@ describe("mapbox", () => {
                     this.data[id] = String(val);
                 },
                 getItem(this: {data: Record<string, string>}, id: string) {
-                    return this.data.hasOwnProperty(id) ? this.data[id] : undefined;
+                    return Object.hasOwn(this.data, id) ? this.data[id] : undefined;
                 },
                 removeItem(this: {data: Record<string, string>}, id: string) {
-                    if (this.hasOwnProperty(id)) delete this.data[id];
+                    if (Object.hasOwn(this, id)) delete this.data[id];
                 }
             });
         });
@@ -554,6 +554,81 @@ describe("mapbox", () => {
             expect(event.anonId).not.toEqual(anonId);
             expect(event.anonId).not.toEqual(null);
             expect(event.anonIdTimestamp).not.toEqual(null);
+        });
+    });
+
+    describe('self-hosted telemetry suppression', () => {
+        function makeExpirationToken(expiration: number): string {
+            const header = btoa(JSON.stringify({typ: 'JWT', alg: 'ES256'}));
+            const payload = btoa(JSON.stringify({atlas: expiration}));
+            return `${header}.${payload}.signature`;
+        }
+
+        test('PerformanceEvent does not send telemetry for self-hosted deployment', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            window.useFakeXMLHttpRequest();
+            config.API_URL = 'http://localhost:8080';
+            const event = new mapbox.PerformanceEvent();
+            event.postPerformanceEvent(makeExpirationToken(1774345201000), {
+                width: 100,
+                height: 100,
+                interactionRange: [0, 0],
+                projection: 'mercator'
+            });
+            expect(event.queue.length).toEqual(0);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests.length).toEqual(0);
+        });
+
+        test('StyleLoadEvent does not send telemetry for self-hosted deployment', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            window.useFakeXMLHttpRequest();
+            config.API_URL = 'http://localhost:8080';
+            const event = new mapbox.StyleLoadEvent();
+            event.postStyleLoadEvent(makeExpirationToken(1774345201000), {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                map: {} as any,
+                style: 'mapbox://styles/mapbox/streets-v12',
+                importedStyles: []
+            });
+            expect(event.queue.length).toEqual(0);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests.length).toEqual(0);
+        });
+
+        test('MetricsEvent does not send telemetry for self-hosted deployment', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            window.useFakeXMLHttpRequest();
+            config.API_URL = 'http://localhost:8080';
+            mapbox.postStyleWithAppearanceEvent(makeExpirationToken(1774345201000));
+            expect(mapbox.styleWithAppearanceEvent.queue.length).toEqual(0);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests.length).toEqual(0);
+        });
+
+        test('MapLoadEvent does not send for self-hosted deployment', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            window.useFakeXMLHttpRequest();
+            config.API_URL = 'http://localhost:8080';
+            const event = new mapbox.MapLoadEvent();
+            const callback = vi.fn();
+            event.postMapLoadEvent(1, 'sku', makeExpirationToken(1774345201000), callback);
+            expect(event.queue.length).toEqual(0);
+            expect(callback).not.toHaveBeenCalled();
+        });
+
+        test('telemetry is suppressed for self-hosted deployment with expiration of 0', () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            window.useFakeXMLHttpRequest();
+            config.API_URL = 'http://localhost:8080';
+            const event = new mapbox.PerformanceEvent();
+            event.postPerformanceEvent(makeExpirationToken(0), {
+                width: 100,
+                height: 100,
+                interactionRange: [0, 0],
+                projection: 'mercator'
+            });
+            expect(event.queue.length).toEqual(0);
         });
     });
 
@@ -737,7 +812,7 @@ describe("mapbox", () => {
             await new Promise(resolve => {
                 setTimeout(() => {
                     // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-                    expect(window.server.requests[0].url.indexOf('https://events.mapbox.cn') > -1).toBeTruthy();
+                    expect(window.server.requests[0].url.includes('https://events.mapbox.cn')).toBeTruthy();
                     resolve();
                 }, 0);
             });
@@ -769,10 +844,10 @@ describe("mapbox", () => {
                         this.data[id] = String(val);
                     },
                     getItem(this: {data: Record<string, string>}, id: string) {
-                        return this.data.hasOwnProperty(id) ? this.data[id] : undefined;
+                        return Object.hasOwn(this.data, id) ? this.data[id] : undefined;
                     },
                     removeItem(this: {data: Record<string, string>}, id: string) {
-                        if (this.hasOwnProperty(id)) delete this.data[id];
+                        if (Object.hasOwn(this, id)) delete this.data[id];
                     }
                 });
             });
@@ -1080,6 +1155,7 @@ describe("mapbox", () => {
                 let reqBody = JSON.parse(await reqToday.requestBody)[0];
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
                 equalWithPrecision(new Date(reqBody.created).valueOf(), today, 100);
+                await new Promise(r => { setTimeout(r, 0); });
 
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
                 const reqTomorrow = window.server.requests[1];
@@ -1153,7 +1229,7 @@ describe("mapbox", () => {
             req.respond(200);
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            expect(req.url.indexOf('https://events.mapbox.cn') > -1).toBeTruthy();
+            expect(req.url.includes('https://events.mapbox.cn')).toBeTruthy();
         });
 
         test('POSTs no event when API_URL unavailable', () => {
@@ -1180,10 +1256,10 @@ describe("mapbox", () => {
                         this.data[id] = String(val);
                     },
                     getItem(this: {data: Record<string, string>}, id: string) {
-                        return this.data.hasOwnProperty(id) ? this.data[id] : undefined;
+                        return Object.hasOwn(this.data, id) ? this.data[id] : undefined;
                     },
                     removeItem(this: {data: Record<string, string>}, id: string) {
-                        if (this.hasOwnProperty(id)) delete this.data[id];
+                        if (Object.hasOwn(this, id)) delete this.data[id];
                     }
                 });
             });
@@ -1428,6 +1504,8 @@ describe("mapbox", () => {
                 let reqBody = JSON.parse(await reqOne.requestBody)[0];
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
                 equalWithPrecision(new Date(reqBody.created).valueOf(), now, 100);
+                // allow the Promise chain to settle so the next request is queued
+                await new Promise(r => { setTimeout(r, 0); });
 
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
                 const reqTwo = window.server.requests[1];
@@ -1437,6 +1515,7 @@ describe("mapbox", () => {
                 reqBody = JSON.parse(await reqTwo.requestBody)[0];
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
                 equalWithPrecision(new Date(reqBody.created).valueOf(), now, 100);
+                await new Promise(r => { setTimeout(r, 0); });
 
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
                 const reqThree = window.server.requests[2];
@@ -1480,18 +1559,20 @@ describe("mapbox", () => {
             });
         });
 
-        test('no API is sent when API_URL unavailable', async () => {
+        test('no API is sent when API_URL unavailable', () => {
             config.API_URL = null;
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             sessionAPI.getSession(1, skuToken, () => {});
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests.length).toEqual(0);
+        });
 
-            await new Promise((resolve) => {
-                setTimeout(() => {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                    expect(window.server.requests.length).toEqual(0);
-                    resolve();
-                }, 0);
-            });
+        test('no session request is sent when API_URL is not a Mapbox host', () => {
+            config.API_URL = 'http://localhost:8080';
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            sessionAPI.getSessionAPI(1, skuToken, config.ACCESS_TOKEN, () => {});
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests.length).toEqual(0);
         });
 
         test('send a new request when access token changes', async () => {
@@ -1500,16 +1581,60 @@ describe("mapbox", () => {
             sessionAPI.getSession(1, skuToken, () => {});
 
             await new Promise(resolve => {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-                const req = window.server.requests[0];
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                expect(req.url).toEqual(
-                    `${config.API_URL + config.SESSION_PATH}?sku=${skuToken}&access_token=pk.new.*`
-                );
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                expect(req.method).toEqual('GET');
-                resolve();
+                setTimeout(() => {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+                    const req = window.server.requests[0];
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    expect(req.url).toEqual(
+                        `${config.API_URL + config.SESSION_PATH}?sku=${skuToken}&access_token=pk.new.*`
+                    );
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                    expect(req.method).toEqual('GET');
+                    resolve();
+                }, 0);
             });
+        });
+    });
+
+    describe('parseAccessToken', () => {
+        test('parses a token with expiration field', () => {
+            const header = btoa(JSON.stringify({typ: 'JWT', alg: 'ES256'}));
+            const payload = btoa(JSON.stringify({atlas: 1774345201000}));
+            const token = `${header}.${payload}.signature`;
+            const result = mapbox.parseAccessToken(token);
+            if (!result) throw new Error('expected non-null result');
+            expect(result.atlas).toEqual(1774345201000);
+            expect(result.u).toBeUndefined();
+        });
+
+        test('parses a token with user field', () => {
+            const header = btoa(JSON.stringify({typ: 'JWT', alg: 'ES256'}));
+            const payload = btoa(JSON.stringify({u: 'user123'}));
+            const token = `${header}.${payload}.signature`;
+            const result = mapbox.parseAccessToken(token);
+            if (!result) throw new Error('expected non-null result');
+            expect(result.u).toEqual('user123');
+            expect(result.atlas).toBeUndefined();
+        });
+
+        test('returns null for null input', () => {
+            expect(mapbox.parseAccessToken(null)).toBeNull();
+        });
+
+        test('returns null for empty string', () => {
+            expect(mapbox.parseAccessToken('')).toBeNull();
+        });
+
+        test('returns null for non-JWT string', () => {
+            expect(mapbox.parseAccessToken('not-a-jwt')).toBeNull();
+        });
+
+        test('returns null for two-part token', () => {
+            expect(mapbox.parseAccessToken('a.b')).toBeNull();
+        });
+
+        test('returns null for invalid base64 payload', () => {
+            expect(mapbox.parseAccessToken('a.!!!.c')).toBeNull();
         });
     });
 });

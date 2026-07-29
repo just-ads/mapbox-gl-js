@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {mat4, vec3} from 'gl-matrix';
 import {aabbForTileOnGlobe} from '../geo/projection/globe_util';
 
@@ -24,12 +24,13 @@ export const Debug: {
     _drawLine: (...args: unknown[]) => void;
     _drawQuad: (...args: unknown[]) => void;
     _initializeCanvas: (tr: Transform) => HTMLCanvasElement;
-} =
-{
+} = {
     extend(dest: object, ...sources: Array<object | null | undefined>): object {
         return Object.assign(dest, ...sources) as object;
     },
 
+    // Production stripping: @rollup/plugin-strip removes all Debug.* call sites
+    // (see build/rollup_plugins.js). This is pattern-matched removal, not tree-shaking.
     run(fn: () => unknown) {
         fn();
     },

@@ -2,7 +2,6 @@
 import esbuild from 'rollup-plugin-esbuild';
 import resolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
-import unassert from 'rollup-plugin-unassert';
 import json from '@rollup/plugin-json';
 import terser from '@rollup/plugin-terser';
 import strip from '@rollup/plugin-strip';
@@ -15,23 +14,24 @@ import {fileURLToPath} from "url";
 
 /**
  * Common set of plugins/transformations shared across different rollup
- * builds (umd and esm mapboxgl bundles, style-spec package, benchmarks bundle)
+ * builds (umd and esm mapboxgl bundles, style-spec package bundle)
  *
  * @param {Object} options
- * @param {string | 'dev' | 'bench' | 'production'} [options.mode] - build mode
+ * @param {string | 'dev' | 'production'} [options.mode] - build mode
  * @param {string | 'esm' | 'umd'} [options.format] - output format
  * @param {boolean} [options.minified] - whether to minify the output
  * @param {boolean} [options.production] - whether this is a production build
  * @param {boolean} [options.test] - whether this is a test build
- * @param {boolean} [options.bench] - whether this is a benchmark build
  * @param {boolean} [options.keepClassNames] - whether to keep class names during minification
+ * @returns {import('rollup').InputPluginOption[]}
  */
-export const plugins = ({mode, format, minified, production, test, bench, keepClassNames}) => [
+export const plugins = ({mode, format, minified, production, test, keepClassNames}) => [
     minifyStyleSpec(),
     esbuild({
         target: browserslistToEsbuild(),
         minify: false,
         sourceMap: true,
+        tsconfig: './tsconfig.browser.json',
         define: {
             'import.meta.env': JSON.stringify({mode}),
         }
@@ -48,20 +48,18 @@ export const plugins = ({mode, format, minified, production, test, bench, keepCl
             replacement: fileURLToPath(new URL('../lib/tiny-sdf/index.js', import.meta.url))
         }]
     }),
-    (production && !bench) ? strip({
+    production ? strip({
         sourceMap: true,
-        functions: ['PerformanceUtils.*', 'WorkerPerformanceUtils.*', 'Debug.*', 'DevTools.*'],
+        functions: ['assert', 'assert.*', 'PerformanceUtils.*', 'Debug.*', 'DevTools.*', 'StyleBOMUtils.*'],
         include: ['**/*.ts']
-    }) : false,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    production || bench ? unassert({include: ['*.js', '**/*.js', '*.ts', '**/*.ts']}) : false,
+    }) : null,
     test ? replace({
         preventAssignment: true,
         values: {
             'process.env.CI': JSON.stringify(process.env.CI),
             'process.env.UPDATE': JSON.stringify(process.env.UPDATE)
         }
-    }) : false,
+    }) : null,
     glsl(['./src/shaders/*.glsl', './3d-style/shaders/*.glsl']),
     minified ? terser({
         ecma: 2020,
@@ -71,7 +69,10 @@ export const plugins = ({mode, format, minified, production, test, bench, keepCl
             pure_getters: true,
             passes: 3
         },
-    }) : false,
+        format: {
+            comments: (node, comment) => comment.value.includes('webpackIgnore') || comment.value.includes('vite-ignore'),
+        },
+    }) : null,
     resolve({
         browser: true,
         preferBuiltins: false
@@ -81,7 +82,7 @@ export const plugins = ({mode, format, minified, production, test, bench, keepCl
         // https://github.com/mapbox/mapbox-gl-js/pull/6956
         ignoreGlobal: true
     }),
-].filter(Boolean);
+];
 
 /**
  * GLSL Shader Transform Plugin
@@ -113,7 +114,7 @@ function glsl(include) {
 
             return {
                 code: `export default ${JSON.stringify(code)};`,
-                map: {mappings: ''}
+                map: null
             };
         }
     };

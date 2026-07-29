@@ -57,7 +57,7 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
             }
         });
 
-        let parent;
+        let parent: LayerSpecification | undefined;
 
         style.layers.forEach((layer) => {
             if (unbundle(layer.id) === ref) parent = layer;
@@ -66,11 +66,9 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
         if (!parent) {
             if (typeof ref === 'string')
                 errors.push(new ValidationError(key, layer.ref, `ref layer "${ref}" not found`));
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        } else if (parent.ref) {
+        } else if ((parent as LayerSpecification & {ref?: unknown}).ref) {
             errors.push(new ValidationError(key, layer.ref, 'ref cannot reference another ref layer'));
         } else {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             type = unbundle(parent.type) as string;
         }
     } else if (!(type === 'background' || type === 'sky' || type === 'slot')) {
@@ -79,7 +77,10 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
         } else if (!isString(layer.source)) {
             errors.push(new ValidationError(`${key}.source`, layer.source, '"source" must be a string'));
         } else {
-            const source = style.sources && style.sources[layer.source];
+            // Object.hasOwn: a bare lookup like `style.sources[layer.source]` would
+            // find inherited keys from Object.prototype (e.g. "constructor", "toString")
+            // and treat them as valid sources.
+            const source = style.sources && Object.hasOwn(style.sources, layer.source) ? style.sources[layer.source] : undefined;
             const sourceType = source && unbundle(source.type);
             if (!source) {
                 errors.push(new ValidationError(key, layer.source, `source "${layer.source}" not found`));
@@ -93,9 +94,12 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
                 errors.push(new ValidationError(key, layer.source, 'raster-dem source can only be used with layer type \'hillshade\'.'));
             } else if (sourceType === 'raster-array' && !['raster', 'raster-particle'].includes(type)) {
                 errors.push(new ValidationError(key, layer.source, `raster-array source can only be used with layer type \'raster\'.`));
-            } else if (type === 'line' && layer.paint && (layer.paint['line-gradient'] || layer.paint['line-trim-offset']) &&
+            } else if (type === 'line' && layer.paint && layer.paint['line-gradient'] &&
                     (sourceType === 'geojson' && !(source as GeoJSONSourceSpecification).lineMetrics)) {
                 errors.push(new ValidationError(key, layer, `layer "${layer.id as string}" specifies a line-gradient, which requires the GeoJSON source to have \`lineMetrics\` enabled.`));
+            } else if (type === 'line' && layer.paint && layer.paint['line-trim-offset'] &&
+                    (sourceType === 'geojson' && !(source as GeoJSONSourceSpecification).lineMetrics)) {
+                errors.push(new ValidationError(key, layer, `layer "${layer.id as string}" specifies a line-trim-offset, which requires the GeoJSON source to have \`lineMetrics\` enabled.`));
             } else if (type === 'raster-particle' && sourceType !== 'raster-array') {
                 errors.push(new ValidationError(key, layer.source, `layer "${layer.id as string}" requires a \'raster-array\' source.`));
             }
@@ -128,7 +132,7 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
                 });
             },
             filter(options) {
-                return validateFilter(Object.assign({layerType: type}, options));
+                return validateFilter({layerType: type, ...options});
             },
             layout(options) {
                 return validateObject({
@@ -140,7 +144,7 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
                     styleSpec: options.styleSpec,
                     objectElementValidators: {
                         '*'(options: PropertyValidatorOptions) {
-                            return validateLayoutProperty(Object.assign({layerType: type}, options));
+                            return validateLayoutProperty({layerType: type, ...options});
                         }
                     }
                 });
@@ -155,7 +159,7 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
                     styleSpec: options.styleSpec,
                     objectElementValidators: {
                         '*'(options: PropertyValidatorOptions) {
-                            return validatePaintProperty(Object.assign({layerType: type, layer}, options));
+                            return validatePaintProperty({layerType: type, layer, ...options});
                         }
                     }
                 });
@@ -168,7 +172,7 @@ export default function validateLayer(options: LayerValidatorOptions): Validatio
                     valueSpec: options.valueSpec,
                     style: options.style,
                     styleSpec: options.styleSpec,
-                    arrayElementValidator: (options) => validateAppearance(Object.assign({layerType: type, layer}, options) as AppearanceValidatorOptions)
+                    arrayElementValidator: (options) => validateAppearance(({layerType: type, layer, ...(options as object)}) as AppearanceValidatorOptions)
                 });
                 // Check non-repeated names on a given layer
                 const appearances = Array.isArray(options.value) ? options.value : [];

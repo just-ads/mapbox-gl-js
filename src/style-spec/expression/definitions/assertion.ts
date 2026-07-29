@@ -1,4 +1,4 @@
-import assert from 'assert';
+import assert from '../../util/assert';
 import {
     ObjectType,
     ValueType,
@@ -38,11 +38,11 @@ class Assertion implements Expression {
             return context.error(`Expected at least one argument.`);
 
         let i = 1;
-        let type;
+        let type: Type;
 
         const name = args[0] as string;
         if (name === 'array') {
-            let itemType;
+            let itemType: Type;
             if (args.length > 2) {
                 const type = args[1];
                 if (typeof type !== 'string' || !(type in types) || type === 'object')
@@ -67,7 +67,6 @@ class Assertion implements Expression {
                 i++;
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             type = array(itemType, N);
         } else {
             assert(types[name], name);
@@ -115,7 +114,7 @@ class Assertion implements Expression {
 
     serialize(): SerializedExpression {
         const type = this.type;
-        const serialized = [type.kind];
+        const serialized: Array<SerializedExpression> = [type.kind];
         if (type.kind === 'array') {
             const itemType = type.itemType;
             if (itemType.kind === 'string' ||
@@ -124,12 +123,10 @@ class Assertion implements Expression {
                 serialized.push(itemType.kind);
                 const N = type.N;
                 if (typeof N === 'number' || this.args.length > 1) {
-                    // @ts-expect-error - TS2345 - Argument of type 'number' is not assignable to parameter of type '"string" | "number" | "boolean" | "object" | "error" | "color" | "value" | "null" | "collator" | "formatted" | "resolvedImage" | "array"'.
                     serialized.push(N);
                 }
             }
         }
-        // @ts-expect-error - TS2769 - No overload matches this call.
         return serialized.concat(this.args.map(arg => arg.serialize()));
     }
 }

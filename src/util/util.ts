@@ -1,15 +1,18 @@
 import {mat4} from 'gl-matrix';
-import UnitBezier from '@mapbox/unitbezier';
+import bezier from '@mapbox/unitbezier';
 import Point from '@mapbox/point-geometry';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import deepEqual from '../style-spec/util/deep_equal';
 
 import type {vec4} from 'gl-matrix';
 import type {Range} from '../../3d-style/elevation/elevation_feature';
 import type {Callback} from '../types/callback';
+import type {ExpiryData} from '../source/tile';
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
+
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[4][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Converts an angle in degrees to radians
@@ -174,24 +177,7 @@ export function bufferConvexPolygon(ring: Point[], buffer: number): Point[] {
     return output;
 }
 
-type EaseFunction = (t: number) => number;
-
-/**
- * Given given (x, y), (x1, y1) control points for a bezier curve,
- * return a function that interpolates along that curve.
- *
- * @param p1x control point 1 x coordinate
- * @param p1y control point 1 y coordinate
- * @param p2x control point 2 x coordinate
- * @param p2y control point 2 y coordinate
- * @private
- */
-export function bezier(p1x: number, p1y: number, p2x: number, p2y: number): EaseFunction {
-    const bezier = new UnitBezier(p1x, p1y, p2x, p2y);
-    return function (t: number) {
-        return bezier.solve(t);
-    };
-}
+export {bezier};
 
 /**
  * A default bezier-curve powered easing function with
@@ -199,7 +185,7 @@ export function bezier(p1x: number, p1y: number, p2x: number, p2y: number): Ease
  *
  * @private
  */
-export const ease: EaseFunction = bezier(0.25, 0.1, 0.25, 1);
+export const ease = bezier(0.25, 0.1, 0.25, 1);
 
 /**
  * constrain n to the given range via min + max
@@ -351,9 +337,8 @@ export function uuid(): string {
     function b(a?: undefined): string {
         return a ?
             (a ^ Math.random() * (16 >> a / 4)).toString(16) :
-            // @ts-expect-error - TS2365 - Operator '+' cannot be applied to types 'number[]' and 'number'.
-            // eslint-disable-next-line @typescript-eslint/restrict-plus-operands, @typescript-eslint/no-unsafe-unary-minus, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            ([1e7] + -[1e3] + -4e3 + -8e3 + -1e11).replace(/[018]/g, b) as string;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-unary-minus
+            (([1e7] as unknown as string) + -[1e3] + -4e3 + -8e3 + -1e11).replace(/[018]/g, b);
     }
     return b();
 }
@@ -391,7 +376,7 @@ export function prevPowerOfTwo(value: number): number {
  * @private
  */
 export function validateUuid(str?: string | null): boolean {
-    return str ? /^[0-9a-f]{8}-[0-9a-f]{4}-[4][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str) : false;
+    return str ? UUID_V4_RE.test(str) : false;
 }
 
 /**
@@ -463,21 +448,6 @@ export function filterObject<T extends Record<PropertyKey, unknown>>(
 }
 
 /**
- * Deeply clones two objects.
- *
- * @private
- */
-export function clone<T>(input: T): T {
-    if (Array.isArray(input)) {
-        return input.map(clone) as T;
-    } else if (typeof input === 'object' && input) {
-        return mapObject(input as Record<PropertyKey, unknown>, clone) as T;
-    } else {
-        return input;
-    }
-}
-
-/**
  * Maps a value from a range between [min, max] to the range [outMin, outMax]
  *
  * @private
@@ -493,7 +463,7 @@ export function mapValue(value: number, min: number, max: number, outMin: number
  */
 export function arraysIntersect<T>(a: Array<T>, b: Array<T>): boolean {
     for (let l = 0; l < a.length; l++) {
-        if (b.indexOf(a[l]) >= 0) return true;
+        if (b.includes(a[l])) return true;
     }
     return false;
 }
@@ -527,24 +497,7 @@ export function isCounterClockwise(a: Point, b: Point, c: Point): boolean {
     return (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x);
 }
 
-/**
- * Returns the signed area for the polygon ring.  Postive areas are exterior rings and
- * have a clockwise winding.  Negative areas are interior rings and have a counter clockwise
- * ordering.
- *
- * @private
- * @param ring Exterior or interior ring
- */
-export function calculateSignedArea(ring: Array<Point>): number {
-    let sum = 0;
-    for (let i = 0, len = ring.length, j = len - 1, p1, p2; i < len; j = i++) {
-        p1 = ring[i];
-        p2 = ring[j];
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        sum += (p2.x - p1.x) * (p1.y + p2.y);
-    }
-    return sum;
-}
+export {calculateSignedArea} from '../style-spec/util/geometry_util';
 
 export type Position = {
     x: number;
@@ -616,6 +569,9 @@ export function cartesianPositionToSpherical(x: number, y: number, z: number): [
  * @private
  * @returns {boolean}
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const WorkerGlobalScope: (new (...args: any[]) => any) | undefined;
+
 export function isWorker(scope?: unknown): scope is Worker {
     if (typeof self === 'undefined' && scope === undefined) {
         return false;
@@ -623,7 +579,6 @@ export function isWorker(scope?: unknown): scope is Worker {
 
     // Check if WorkerGlobalScope isn't available
     // This is a global that's only present in browser worker environments
-    // @ts-expect-error - TS2304: Cannot find name 'WorkerGlobalScope'
     if (typeof WorkerGlobalScope === 'undefined') {
         return false;
     }
@@ -632,7 +587,6 @@ export function isWorker(scope?: unknown): scope is Worker {
     const contextToCheck = scope !== undefined ? scope : self;
 
     // Final check if context is a WorkerGlobalScope
-    // @ts-expect-error - TS2304: Cannot find name 'WorkerGlobalScope'
     return contextToCheck instanceof WorkerGlobalScope;
 }
 
@@ -666,47 +620,11 @@ export function parseCacheControl(cacheControl: string): Record<string, number> 
     return header as Record<string, number>;
 }
 
-export function getExpiryDataFromHeaders(responseHeaders: Headers | Map<string, string> | undefined) {
+export function parseExpiryData(responseHeaders: Headers | undefined): ExpiryData {
     if (!responseHeaders) return {cacheControl: undefined, expires: undefined};
-    const cacheControl = responseHeaders.get('Cache-Control');
-    const expires = responseHeaders.get('Expires');
+    const cacheControl = responseHeaders.get('cache-control');
+    const expires = responseHeaders.get('expires');
     return {cacheControl, expires};
-}
-
-let _isSafari: boolean | null = null;
-
-export function _resetSafariCheckForTest() {
-    _isSafari = null;
-}
-
-/**
- * Returns true when run in WebKit derived browsers.
- * This is used as a workaround for a memory leak in Safari caused by using Transferable objects to
- * transfer data between WebWorkers and the main thread.
- * https://github.com/mapbox/mapbox-gl-js/issues/8771
- *
- * This should be removed once the underlying Safari issue is fixed.
- *
- * @private
- * @param scope {WindowOrWorkerGlobalScope} Since this function is used both on the main thread and WebWorker context,
- *      let the calling scope pass in the global scope object.
- * @returns {boolean}
- */
-export function isSafari(scope: WindowOrWorkerGlobalScope): boolean {
-    if (_isSafari == null) {
-        const userAgent = (scope as Window).navigator ? (scope as Window).navigator.userAgent : null;
-        _isSafari = !!(scope as {safari?: boolean}).safari ||
-        !!(userAgent && (/\b(iPad|iPhone|iPod)\b/.test(userAgent) || (!!userAgent.match('Safari') && !userAgent.match('Chrome'))));
-    }
-    return _isSafari;
-}
-
-export function isSafariWithAntialiasingBug(scope: WindowOrWorkerGlobalScope): boolean | null | undefined {
-    const userAgent: Navigator['userAgent'] = (scope as Window).navigator ? (scope as Window).navigator.userAgent : null;
-    if (!isSafari(scope)) return false;
-    // 15.4 is known to be buggy.
-    // 15.5 may or may not include the fix. Mark it as buggy to be on the safe side.
-    return !!(userAgent && (userAgent.match('Version/15.4') || userAgent.match('Version/15.5') || userAgent.match(/CPU (OS|iPhone OS) (15_4|15_5) like Mac OS X/)));
 }
 
 export function isFullscreen(): boolean {
@@ -896,6 +814,18 @@ export function mapRange(range: Range, from: Range, to: Range): Range {
 
 export function easeIn(x: number) {
     return x * x * x * x * x;
+}
+
+/**
+ * Hash function from https://www.shadertoy.com/view/XlGcRh
+ * Matches gl-native's esgtsaHash in mbgl/util/random.hpp
+ */
+export function esgtsaHash(s: number): number {
+    s = s >>> 0; // Ensure unsigned 32-bit integer
+    s = Math.imul(s ^ 2747636419, 2654435769) >>> 0;
+    s = Math.imul(s ^ (s >>> 16), 2654435769) >>> 0;
+    s = Math.imul(s ^ (s >>> 16), 2654435769) >>> 0;
+    return s / 4294967296;
 }
 
 export {deepEqual};

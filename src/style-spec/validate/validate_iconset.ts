@@ -45,7 +45,7 @@ export default function validateIconset(options: IconsetValidatorOptions): Valid
     }));
 
     if (isSourceIconset(type, iconset)) {
-        const source = style.sources && style.sources[iconset.source];
+        const source = style.sources && Object.hasOwn(style.sources, iconset.source) ? style.sources[iconset.source] : undefined;
         const sourceType = source && unbundle(source.type) as string;
         if (!source) {
             errors.push(new ValidationError(key, iconset.source, `source "${iconset.source}" not found`));

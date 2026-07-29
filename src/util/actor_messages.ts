@@ -1,17 +1,14 @@
-import type {ActorCallback} from './actor';
 import type {ConfigOptions} from '../style-spec/types/config_options';
 import type {GlyphMap, FontStacks} from '../render/glyph_manager';
 import type {ImageId, StringifiedImageId} from '../style-spec/expression/types/image_id';
-import type {ImageRasterizationTasks, ImageRasterizationWorkerTasks, RasterizedImageMap} from '../render/image_manager';
-import type {LayerSpecification, ProjectionSpecification} from '../style-spec/types';
+import type {ImageRasterizationTasks, RasterizedImageMap} from '../render/image_manager';
+import type {LayerSpecification, ProjectionSpecification, SourceSpecification} from '../style-spec/types';
 import type {LoadGeoJSONRequest} from '../source/geojson_source';
 import type {LoadGeoJSONResult} from '../source/geojson_worker_source';
 import type {OverscaledTileID} from '../source/tile_id';
 import type {PluginState} from '../source/rtl_text_plugin';
-import type {RequestParameters} from './ajax';
 import type {StyleImageMap} from '../style/style_image';
 import type {TDecodingResult, TProcessingBatch} from '../data/mrt/types';
-import type {WorkerPerformanceMetrics} from './performance';
 import type {
     WorkerCoverTilesRequest,
     WorkerCoverTilesResult,
@@ -21,185 +18,185 @@ import type {
 } from '../source/worker_source';
 import type {StyleModelMap} from '../style/style_mode';
 import type {IndoorData} from '../style/indoor_data';
+import type {AtlasContentDescriptor} from '../render/atlas_content_descriptor';
+import type {ImagePositionMap} from '../render/image_atlas';
+import type {TileJSON} from '../types/tilejson';
+import type {RequestParameters} from './ajax';
+
+type RenderParameters = {
+    brightness?: number;
+    worldview?: string;
+};
+
+type GlobalParams = {
+    referrer?: string;
+    config: {
+        API_URL?: string;
+        DRACO_URL?: string;
+        MESHOPT_URL?: string;
+        MESHOPT_SIMD_URL?: string;
+        BUILDING_GEN_URL?: string;
+    },
+    contextOptions?: {
+        maxBindingPoints: number;
+        maxUniformBlockSizeDwords: number;
+    }
+};
 
 /**
- * Message registry maps message types to their data and result types.
+ * Messages a {@link MapWorker} receives from the main thread.
  */
-export type ActorMessages = {
+export type WorkerInbox = {
     'abortTile': {
         params: WorkerSourceTileRequest;
-        callback: ActorCallback<void>;
+        result: void;
     };
 
     'checkIfReady': {
         params: void;
-        callback: ActorCallback<void>;
+        result: void;
     };
 
     'clearCaches': {
         params: void;
-        callback: ActorCallback<void>;
+        result: void;
     };
 
     'decodeRasterArray': {
         params: WorkerSourceTileRequest & { buffer: ArrayBuffer; task: TProcessingBatch };
-        callback: ActorCallback<TDecodingResult[]>;
+        result: TDecodingResult[];
     };
 
     'enforceCacheSizeLimit': {
         params: number;
-        callback: void;
+        result: void;
     };
 
     'geojson.getClusterChildren': {
         params: { clusterId: number; source: string; scope: string; };
-        callback: ActorCallback<GeoJSON.Feature[]>;
+        result: GeoJSON.Feature[];
     };
 
     'geojson.getClusterExpansionZoom': {
         params: { clusterId: number; source: string; scope: string; };
-        callback: ActorCallback<number>;
+        result: number;
     };
 
     'geojson.getClusterLeaves': {
         params: { source: string; scope: string; clusterId: number; limit: number; offset: number; };
-        callback: ActorCallback<GeoJSON.Feature[]>;
+        result: GeoJSON.Feature[];
     };
 
     'geojson.loadData': {
         params: LoadGeoJSONRequest;
-        callback: ActorCallback<LoadGeoJSONResult>;
-    };
-
-    'getGlyphs': {
-        params: {  stacks: FontStacks; uid?: number };
-        callback: ActorCallback<GlyphMap>;
-    };
-
-    'getImages': {
-        params: {
-            images: ImageId[];
-            scope: string;
-            source: string;
-            tileID: OverscaledTileID;
-            type: 'icons' | 'patterns'
-        };
-        callback: ActorCallback<StyleImageMap<StringifiedImageId>>;
-    };
-
-    'getResource': {
-        params: RequestParameters;
-        callback: ActorCallback<unknown>;
-    };
-
-    'getWorkerPerformanceMetrics': {
-        params: void;
-        callback: ActorCallback<WorkerPerformanceMetrics>;
+        result: LoadGeoJSONResult;
     };
 
     'loadTile': {
         params: WorkerSourceTileRequest;
-        callback: ActorCallback<unknown>;
+        result: unknown;
     };
 
-    'loadWorkerSource': {
-        params: { name: string; url: string; };
-        callback: ActorCallback<void>;
-    };
-
-    'rasterizeImages': {
-        params: { scope: string; tasks: ImageRasterizationTasks };
-        callback: ActorCallback<RasterizedImageMap>;
-    };
-
-    'rasterizeImagesWorker': {
-        params: { scope: string; tasks: ImageRasterizationWorkerTasks };
-        callback: ActorCallback<RasterizedImageMap>;
+    'loadTileProvider': {
+        params: {
+            name: string;
+            url: string;
+            source: string;
+             scope: string; type: string;
+            options: Partial<SourceSpecification>;
+            request?: RequestParameters;
+        };
+        result: Partial<TileJSON> | null;
     };
 
     'reloadTile': {
         params: WorkerSourceTileRequest;
-        callback: ActorCallback<unknown>;
-    };
-
-    'removeRasterizedImages': {
-        params: { scope: string; imageIds: ImageId[] };
-        callback: ActorCallback<void>;
+        result: unknown;
     };
 
     'removeSource': {
         params: WorkerSourceRequest;
-        callback: ActorCallback<void>;
+        result: void;
     };
 
     'removeTile': {
         params: WorkerSourceTileRequest;
-        callback: ActorCallback<void>;
+        result: void;
     };
 
-    'setBrightness': {
-        params: number;
-        callback: ActorCallback<void>;
+    'upsertRenderParams': {
+        params: RenderParameters;
+        result: void;
     };
 
-    'setWorldview': {
-        params: string;
-        callback: ActorCallback<void>;
-    };
-
-    'setDracoUrl': {
-        params: string;
-        callback: ActorCallback<void>;
+    'setGlobalParams': {
+        params: GlobalParams;
+        result: void;
     };
 
     'setImages': {
-        params: { images: ImageId[]; scope: string; };
-        callback: ActorCallback<void>;
+        params: { images: ImageId[]; scope: string; isSpriteLoaded?: boolean};
+        result: void;
+    };
+
+    'spriteLoaded': {
+        params: {scope: string;};
+        result: void;
     };
 
     'setLayers': {
         params: { layers: LayerSpecification[]; scope: string; options: ConfigOptions };
-        callback: ActorCallback<void>;
+        result: void;
     };
 
     'setModels': {
         params: { models: StyleModelMap; scope: string; };
-        callback: ActorCallback<void>;
-    };
-
-    'setMeshoptUrl': {
-        params: string;
-        callback: ActorCallback<void>;
+        result: void;
     };
 
     'setProjection': {
         params: ProjectionSpecification;
-        callback: void;
-    };
-
-    'setReferrer': {
-        params: string;
-        callback: void;
-    };
-
-    'setIndoorData': {
-        params: IndoorData;
-        callback: void;
-    };
-
-    'spriteLoaded': {
-        params: { scope: string; isLoaded: boolean };
-        callback: void;
+        result: void;
     };
 
     'syncRTLPluginState': {
         params: PluginState;
-        callback: ActorCallback<boolean>;
+        result: boolean;
     };
 
     'updateLayers': {
         params: { layers: LayerSpecification[]; removedIds: string[]; scope: string; options: ConfigOptions };
-        callback: ActorCallback<void>;
+        result: void;
+    };
+};
+
+/**
+ * Messages {@link Style} receives back from a worker.
+ */
+export type MainInbox = {
+    'getGlyphs': {
+        params: {stacks: FontStacks; uid?: number};
+        result: GlyphMap;
+    };
+
+    'getImages': {
+        params: {icons: ImageId[]; patterns: ImageId[]; scope: string; source: string; tileID: OverscaledTileID};
+        result: {images: StyleImageMap<StringifiedImageId>; versions: Map<string, number>};
+    };
+
+    'checkAtlasCache': {
+        params: {descriptor: AtlasContentDescriptor; scope: string};
+        result: {iconPositions: ImagePositionMap; patternPositions: ImagePositionMap; sourceHash: number} | null;
+    };
+
+    'rasterizeImages': {
+        params: {scope: string; iconTasks: ImageRasterizationTasks; patternTasks: ImageRasterizationTasks};
+        result: RasterizedImageMap;
+    };
+
+    'setIndoorData': {
+        params: IndoorData;
+        result: void;
     };
 
     'raster.getCoverTiles': {
@@ -213,4 +210,12 @@ export type ActorMessages = {
     }
 };
 
-export type ActorMessage = keyof ActorMessages;
+/**
+ * The union of all messages that can be sent between the main thread and a worker.
+ */
+export type ActorInbox = WorkerInbox & MainInbox;
+
+/**
+ * Every message name across both directions.
+ */
+export type ActorMessage = keyof WorkerInbox | keyof MainInbox;

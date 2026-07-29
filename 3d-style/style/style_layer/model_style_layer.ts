@@ -1,5 +1,4 @@
 import StyleLayer from '../../../src/style/style_layer';
-import ModelBucket from '../../data/bucket/model_bucket';
 import {getLayoutProperties, getPaintProperties} from './model_style_layer_properties';
 import {ZoomDependentExpression} from '../../../src/style-spec/expression/index';
 import {mat4} from 'gl-matrix';
@@ -8,7 +7,7 @@ import LngLat from '../../../src/geo/lng_lat';
 import {latFromMercatorY, lngFromMercatorX} from '../../../src/geo/mercator_coordinate';
 import EXTENT from '../../../src/style-spec/data/extent';
 import {convertModelMatrixForGlobe, queryGeometryIntersectsProjectedAabb} from '../../util/model_util';
-import Tiled3dModelBucket from '../../data/bucket/tiled_3d_model_bucket';
+import {ModelBucket, Tiled3dModelBucket, prepareStandard} from '../../../modules/standard_worker';
 import Feature from '../../../src/util/vectortile_to_geojson';
 import {type Feature as ExpressionEvalFeature, type FeatureState} from '../../../src/style-spec/expression/index';
 import ModelSource from '../../source/model_source';
@@ -23,12 +22,14 @@ import type Transform from '../../../src/geo/transform';
 import type ModelManager from '../../render/model_manager';
 import type {ModelNode} from '../../data/model';
 import type {VectorTileFeature} from '@mapbox/vector-tile';
+import type {RuntimeModuleType} from '../../../src/style/style_layer';
 import type {CanonicalTileID} from '../../../src/source/tile_id';
 import type {LUT} from "../../../src/util/lut";
 import type {EvaluationFeature} from '../../../src/data/evaluation_feature';
 import type {ProgramName} from '../../../src/render/program';
 import type {QueryResult} from '../../../src/source/query_features';
 import type SourceCache from '../../../src/source/source_cache';
+import type {DEMSampler} from '../../../src/terrain/elevation';
 
 class ModelStyleLayer extends StyleLayer {
     override type: 'model';
@@ -53,7 +54,15 @@ class ModelStyleLayer extends StyleLayer {
         this._stats = {numRenderedVerticesInShadowPass: 0, numRenderedVerticesInTransparentPass: 0};
     }
 
-    createBucket(parameters: BucketParameters<ModelStyleLayer>): ModelBucket {
+    override mayUse(type: RuntimeModuleType): boolean {
+        return type === 'Standard';
+    }
+
+    override prepare(): Promise<void> {
+        return prepareStandard();
+    }
+
+    override createBucket(parameters: BucketParameters<this>): ModelBucket {
         return new ModelBucket(parameters);
     }
 
@@ -167,6 +176,10 @@ class ModelStyleLayer extends StyleLayer {
         geometry: Array<Array<Point>>,
         zoom: number,
         transform: Transform,
+        pixelPosMatrix: Float32Array,
+        elevationHelper: DEMSampler | null | undefined,
+        layoutVertexArrayOffset: number,
+        scope: string | undefined
     ): number | boolean {
         if (!this.modelManager) return false;
         const modelManager = this.modelManager;
@@ -176,10 +189,10 @@ class ModelStyleLayer extends StyleLayer {
         for (const modelId in bucket.instancesPerModel) {
             const instances = bucket.instancesPerModel[modelId];
             const featureId = feature.id !== undefined ? feature.id :
-                (feature.properties && feature.properties.hasOwnProperty("id")) ? (feature.properties["id"] as string | number) : undefined;
-            if (instances.idToFeaturesIndex.hasOwnProperty(featureId)) {
+                (feature.properties && Object.hasOwn(feature.properties, "id")) ? (feature.properties["id"] as string | number) : undefined;
+            if (Object.hasOwn(instances.idToFeaturesIndex, featureId)) {
                 const modelFeature = instances.features[instances.idToFeaturesIndex[featureId]];
-                const model = modelManager.getModel(modelId, this.scope);
+                const model = modelManager.getModel(modelId, scope || this.scope);
                 if (!model) return false;
 
                 let matrix: mat4 = [];
@@ -289,7 +302,7 @@ export function loadMatchingModelFeature(bucket: Tiled3dModelBucket, featureInde
     const projectedQueryGeometry = screenQuery.isPointQuery() ? screenQuery.screenBounds : screenQuery.screenGeometry;
 
     const checkNode = function (n: ModelNode) {
-        const worldViewProjectionForNode = mat4.multiply([] as unknown as mat4, modelMatrix, n.globalMatrix);
+        const worldViewProjectionForNode = mat4.multiply([], modelMatrix, n.globalMatrix);
         mat4.multiply(worldViewProjectionForNode, transform.expandedFarZProjMatrix, worldViewProjectionForNode);
         for (let i = 0; i < n.meshes.length; ++i) {
             const mesh = n.meshes[i];

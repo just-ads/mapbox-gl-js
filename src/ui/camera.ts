@@ -18,7 +18,7 @@ import {
 } from '../geo/projection/globe_constants';
 import Point from '@mapbox/point-geometry';
 import {Event, Evented} from '../util/evented';
-import assert from 'assert';
+import assert from '../style-spec/util/assert';
 import {Debug} from '../util/debug';
 import MercatorCoordinate, {
     mercatorZfromAltitude,
@@ -31,7 +31,6 @@ import {getZoomAdjustment} from '../geo/projection/adjustments';
 import type Tile from '../source/tile';
 import type Transform from '../geo/transform';
 import type HandlerManager from './handler_manager';
-import type BoxZoomHandler from './handler/box_zoom';
 import type {TaskID} from '../util/task_queue';
 import type {Callback} from '../types/callback';
 import type {MapEvents} from './events';
@@ -226,7 +225,12 @@ class Camera extends Evented<MapEvents> {
         //addAssertions(this);
     }
 
-    /** @section Camera */
+    /**
+     * @section {Camera}
+     * @method
+     * @instance
+     * @memberof Map
+     */
 
     /**
      * Returns the map's geographical centerpoint.
@@ -277,7 +281,7 @@ class Camera extends Evented<MapEvents> {
      */
     panBy(offset: PointLike, options?: AnimationOptions, eventData?: EventData): this {
         offset = Point.convert(offset).mult(-1);
-        return this.panTo(this.transform.center, Object.assign({offset}, options), eventData);
+        return this.panTo(this.transform.center, {offset, ...options}, eventData);
     }
 
     /**
@@ -298,9 +302,7 @@ class Camera extends Evented<MapEvents> {
      * @see [Example: Update a feature in realtime](https://docs.mapbox.com/mapbox-gl-js/example/live-update-feature/)
      */
     panTo(lnglat: LngLatLike, options?: AnimationOptions, eventData?: EventData): this {
-        return this.easeTo(Object.assign({
-            center: lnglat
-        }, options), eventData);
+        return this.easeTo({center: lnglat, ...options}, eventData);
     }
 
     /**
@@ -359,9 +361,7 @@ class Camera extends Evented<MapEvents> {
      * });
      */
     zoomTo(zoom: number, options?: AnimationOptions | null, eventData?: EventData): this {
-        return this.easeTo(Object.assign({
-            zoom
-        }, options), eventData);
+        return this.easeTo({zoom, ...options}, eventData);
     }
 
     /**
@@ -492,9 +492,7 @@ class Camera extends Evented<MapEvents> {
      * map.rotateTo(30, {duration: 2000});
      */
     rotateTo(bearing: number, options?: EasingOptions, eventData?: EventData): this {
-        return this.easeTo(Object.assign({
-            bearing
-        }, options), eventData);
+        return this.easeTo({bearing, ...options}, eventData);
     }
 
     /**
@@ -512,7 +510,7 @@ class Camera extends Evented<MapEvents> {
      * map.resetNorth({duration: 2000});
      */
     resetNorth(options?: EasingOptions, eventData?: EventData): this {
-        this.rotateTo(0, Object.assign({duration: 1000}, options), eventData);
+        this.rotateTo(0, {duration: 1000, ...options}, eventData);
         return this;
     }
 
@@ -531,11 +529,9 @@ class Camera extends Evented<MapEvents> {
      * map.resetNorthPitch({duration: 2000});
      */
     resetNorthPitch(options?: EasingOptions, eventData?: EventData): this {
-        this.easeTo(Object.assign({
-            bearing: 0,
+        this.easeTo({bearing: 0,
             pitch: 0,
-            duration: 1000
-        }, options), eventData);
+            duration: 1000, ...options}, eventData);
         return this;
     }
 
@@ -624,20 +620,18 @@ class Camera extends Evented<MapEvents> {
 
     _extendPadding(padding: PaddingOptions | null | undefined | number): Required<PaddingOptions> {
         const defaultPadding = {top: 0, right: 0, bottom: 0, left: 0};
-        if (padding == null) return Object.assign({}, defaultPadding, this.transform.padding);
+        if (padding == null) return {...defaultPadding, ...this.transform.padding};
 
         if (typeof padding === 'number') {
             return {top: padding, bottom: padding, right: padding, left: padding};
         }
 
-        return Object.assign({}, defaultPadding, padding);
+        return {...defaultPadding, ...padding};
     }
 
     _extendCameraOptions(options?: CameraOptions): FullCameraOptions {
-        options = Object.assign({
-            offset: [0, 0],
-            maxZoom: this.transform.maxZoom
-        }, options);
+        options = {offset: [0, 0],
+            maxZoom: this.transform.maxZoom, ...options} as FullCameraOptions;
 
         options.padding = this._extendPadding(options.padding);
 
@@ -820,7 +814,12 @@ class Camera extends Evented<MapEvents> {
         return extendedAABB;
     }
 
-    /** @section Querying features */
+    /**
+     * @section {Querying features}
+     * @method
+     * @instance
+     * @memberof Map
+     */
 
     /**
      * Queries the currently loaded data for elevation at a geographical location. The elevation is returned in `meters` relative to mean sea-level.
@@ -842,7 +841,7 @@ class Camera extends Evented<MapEvents> {
     queryTerrainElevation(lnglat: LngLatLike, options?: ElevationQueryOptions | null): number | null | undefined {
         const elevation = this.transform.elevation;
         if (elevation) {
-            options = Object.assign({}, {exaggerated: true}, options);
+            options = {exaggerated: true, ...options};
             return elevation.getAtPoint(MercatorCoordinate.fromLngLat(lnglat), null, options.exaggerated);
         }
         return null;
@@ -1328,11 +1327,9 @@ class Camera extends Evented<MapEvents> {
     ): this {
         this._stop(false, options.easeId);
 
-        options = Object.assign({
-            offset: [0, 0],
+        options = {offset: [0, 0],
             duration: 500,
-            easing: defaultEasing
-        }, options);
+            easing: defaultEasing, ...options};
 
         if (options.animate === false || this._prefersReducedMotion(options)) options.duration = 0;
 
@@ -1601,12 +1598,10 @@ class Camera extends Evented<MapEvents> {
 
         this.stop();
 
-        options = Object.assign({
-            offset: [0, 0],
+        options = {offset: [0, 0],
             speed: 1.2,
             curve: 1.42,
-            easing: defaultEasing
-        }, options);
+            easing: defaultEasing, ...options};
 
         const tr = this.transform,
             startZoom = this.getZoom(),
@@ -1776,8 +1771,8 @@ class Camera extends Evented<MapEvents> {
         return this._stop();
     }
 
-    // @ts-expect-error - No-op in the Camera class, implemented by the Map class
-    _requestRenderFrame(_callback: () => void): TaskID {}
+    // No-op in the Camera class, implemented by the Map class
+    _requestRenderFrame(_callback: () => void): TaskID | undefined { return undefined; }
 
     // No-op in the Camera class, implemented by the Map class
     _cancelRenderFrame(_: TaskID): void {}
@@ -1914,6 +1909,6 @@ function addAssertions(camera: Camera) { //eslint-disable-line
     });
 }
 
-let canary; //eslint-disable-line
+let canary: string; //eslint-disable-line
 
 export default Camera;

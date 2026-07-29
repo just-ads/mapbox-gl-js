@@ -4,9 +4,15 @@
 
 uniform float u_opacity;
 
+#ifdef DITHERED_DISCARD
+uniform float u_dithered_discard_threshold;
+#endif
+
+#ifndef LIGHTING_3D_MODE
 uniform vec3 u_lightcolor;
 uniform vec3 u_lightpos;
 uniform float u_lightintensity;
+#endif
 
 uniform vec4 u_baseColorFactor;
 uniform vec4 u_emissiveFactor;
@@ -66,6 +72,10 @@ uniform sampler2D u_emissionTexture;
 #endif
 #ifdef APPLY_LUT_ON_GPU
 uniform highp sampler3D u_lutTexture;
+#endif
+
+#ifdef FEATURE_CUTOUT_VERTEX
+in highp float v_cutout_factor;
 #endif
 
 #ifdef TERRAIN_FRAGMENT_OCCLUSION
@@ -174,10 +184,7 @@ vec4 getBaseColor() {
 
 #ifdef UNPREMULT_TEXTURE_IN_SHADER
     // Unpremultiply alpha for decals and opaque materials.
-    if(texColor.w > 0.0) {
-        texColor.rgb /= texColor.w;
-    }
-    texColor.w = 1.0;
+    texColor = vec4(unpremultiplyColor(texColor), 1.0);
 #endif
 
     if(u_baseTextureIsAlpha) {
@@ -282,7 +289,7 @@ Material getPBRMaterial() {
     mat.metallic = v_roughness_metallic_emissive_alpha.y;
     mat.baseColor.w *= v_roughness_metallic_emissive_alpha.w;
 #endif
-#if defined(HAS_TEXTURE_u_metallicRoughnessTexture) && defined(HAS_ATTRIBUTE_a_uv_2f) 
+#if defined(HAS_TEXTURE_u_metallicRoughnessTexture) && defined(HAS_ATTRIBUTE_a_uv_2f)
     vec4 mrSample = texture(u_metallicRoughnessTexture, uv_2f);
     mat.perceptualRoughness *= mrSample.g;
     mat.metallic *= mrSample.b;
@@ -462,8 +469,8 @@ void main() {
     }
 #endif
 
-    vec3 lightDir = u_lightpos;
-    vec3 lightColor = u_lightcolor;
+    vec3 lightDir;
+    vec3 lightColor;
 
 #ifdef LIGHTING_3D_MODE
     lightDir = u_lighting_directional_dir;
@@ -471,6 +478,9 @@ void main() {
     // as a new citizen, better to not change legacy code convention.
     lightDir.xy = -lightDir.xy;
     lightColor = u_lighting_directional_color;
+#else
+    lightDir = u_lightpos;
+    lightColor = u_lightcolor;
 #endif
 
 vec4 finalColor;
@@ -546,6 +556,27 @@ vec4 finalColor;
     finalColor = vec4(color, opacity);
 #endif // !DIFFUSE_SHADED
 
+#ifdef DITHERED_DISCARD
+    // fade in/out using discard and 4x4 Bayer matrix for dithering
+    // creates a smooth transition without alpha blending
+    // if u_dithered_discard_threshold == 1 or -1, the model gets fully rendered, at 0 it is fully discarded
+    // values between 0 and +1/-1 get partically discarded, using the ditherValue or the negated dither value as the threshold
+    // this allows to cross-fade between two models
+    if (abs(u_dithered_discard_threshold) < 1.0) {
+
+        // Get dither value for pixel at coordinate using "Interleaved gradient noise"
+        float ditherValue = fract(52.9829189 * fract(0.06711056 * gl_FragCoord.x + 0.00583715 * gl_FragCoord.y));
+
+        // Fade in: discard if threshold < ditherValue
+        // Fade out: discard if -threshold < 1.0 - ditherValue
+        // Use mix to select values without branching
+        float compareValue = mix(1.0 - ditherValue, ditherValue, step(0.0, u_dithered_discard_threshold));
+        if (abs(u_dithered_discard_threshold) < compareValue) {
+            discard;
+        }
+    }
+#endif
+
 #ifdef FOG
     finalColor = fog_dither(fog_apply_premultiplied(finalColor, v_fog_pos, v_position_height.w));
 #endif
@@ -558,8 +589,13 @@ vec4 finalColor;
     finalColor = applyCutout(finalColor, v_position_height.w);
 #endif
 
+#ifdef FEATURE_CUTOUT_VERTEX
+    // Apply pre-calculated cutout factor
+    apply_feature_cutout_dither(gl_FragCoord, v_cutout_factor);
+#else
 #ifdef FEATURE_CUTOUT
-    finalColor = apply_feature_cutout(finalColor, gl_FragCoord);
+    finalColor = apply_feature_cutout(finalColor, gl_FragCoord, get_cutout_factors(gl_FragCoord).x);
+#endif
 #endif
 
     glFragColor = finalColor;

@@ -67,9 +67,7 @@ export function parseOptions(currentFixture, style) {
     }
 
     if (options.spriteFormat === 'icon_set') {
-        if (style.sprite && !style.sprite.endsWith('.pbf')) {
-            style.sprite += '.pbf';
-        }
+        addSpriteIconSetExtension(style);
 
         if (options.operations && options.operations.length) {
             options.operations.forEach(op => {
@@ -80,17 +78,22 @@ export function parseOptions(currentFixture, style) {
                 }
             });
         }
-
-        if (currentFixture.style.imports && currentFixture.style.imports.length) {
-            currentFixture.style.imports.forEach(imp => {
-                if (!imp.data) return;
-                if (imp.data.sprite && !imp.data.sprite.endsWith('.pbf')) {
-                    imp.data.sprite += '.pbf';
-                }
-            });
-        }
     }
     return options;
+}
+
+function addSpriteIconSetExtension(style) {
+    if (style.sprite && !style.sprite.endsWith('.pbf')) {
+        style.sprite += '.pbf';
+    }
+
+    if (style.imports && style.imports.length) {
+        style.imports.forEach(imp => {
+            if (!imp.data) return;
+            addSpriteIconSetExtension(imp.data);
+        });
+    }
+    
 }
 
 async function setupLayout(options) {
@@ -144,10 +147,10 @@ export async function renderMap(style, options, currentTestName) {
         interactive: false,
         attributionControl: false,
         preserveDrawingBuffer: true,
-        spriteFormat: options.spriteFormat,
         scaleFactor: options.scaleFactor || 1,
         fadeDuration: options.fadeDuration || 0,
         localIdeographFontFamily: options.localIdeographFontFamily || false,
+        fontstackCompositing: options.fontstackCompositing,
         projection: options.projection,
         precompilePrograms: false,
         crossSourceCollisions: typeof options.crossSourceCollisions === "undefined" ? true : options.crossSourceCollisions,
@@ -162,9 +165,15 @@ export async function renderMap(style, options, currentTestName) {
             forceManualRenderingForInstanceIDShaders: options.forceManualRenderingForInstanceIDShaders,
         },
         worldview: options.worldview,
+        maxZoom: options.maxZoom,
+        placementAlgorithm: options.placementAlgorithm || 'default',
         transformRequest,
         testMode: true
     });
+
+    if (options.spriteFormat && mapRef.current) {
+        mapRef.current._spriteFormat = options.spriteFormat;
+    }
 
     if (options.forceEmissiveFallback && mapRef.current) {
         mapRef.current.painter._forceEmissiveMode = true;
@@ -197,6 +206,7 @@ export async function renderMap(style, options, currentTestName) {
     if (options.showTerrainWireframe) mapRef.current.showTerrainWireframe = true;
     if (options.showLayers2DWireframe) mapRef.current.showLayers2DWireframe = true;
     if (options.showLayers3DWireframe) mapRef.current.showLayers3DWireframe = true;
+    if (options.showElevationIdDebug) mapRef.current.showElevationIdDebug = true;
     if (options.showPadding) mapRef.current.showPadding = true;
     if (options.collisionDebug) mapRef.current.showCollisionBoxes = true;
     if (options.fadeDuration) mapRef.current._isInitialLoad = false;
@@ -271,7 +281,11 @@ export function calculateDiff(actualImageData, expectedImages, {w, h}, threshold
 
         // 4. Use pixelmatch to compare actual and expected images and write diff
         // all inputs must be Uint8Array or Uint8ClampedArray
-        const currentDiff = pixelmatch(actualImageData, expectedImages[i].data, diffImage, w, h, {threshold}) / (w * h);
+        const options = {
+            threshold,
+            checkerboard: false
+        };
+        const currentDiff = pixelmatch(actualImageData, expectedImages[i].data, diffImage, w, h, options) / (w * h);
         if (currentDiff < minDiff) {
             minDiff = currentDiff;
             minDiffImage = diffImage;

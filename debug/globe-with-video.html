@@ -32,11 +32,9 @@
 <div id="map"></div>
 <div button id="playback">Pause</div>
 
-<script src="../dist/mapbox-gl-dev.js"></script>
 <script type="module">
+import * as mapboxgl from '../dist/esm-dev/mapbox-gl.js';
 import {getAccessToken} from './access_token_generated.js';
-
-mapboxgl.accessToken = getAccessToken();
 
 var videoStyle = {
     "version": 8,
@@ -85,6 +83,7 @@ var videoStyle = {
 };
 
 const map = new mapboxgl.Map({
+    accessToken: getAccessToken(),
     container: 'map',
     devtools: true,
     zoom: 0,
