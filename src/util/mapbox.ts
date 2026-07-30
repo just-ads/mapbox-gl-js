@@ -13,7 +13,6 @@
 
 import assert from '../style-spec/util/assert';
 import config from './config';
-import webpSupported from './webp_supported';
 import {isMapboxHTTPURL, isMapboxURL} from './mapbox_url';
 import {createSkuToken, SKU_ID} from './sku_token';
 import {version as sdkVersion} from '../../package.json';
@@ -21,13 +20,14 @@ import {uuid, validateUuid, storageAvailable, b64DecodeUnicode, b64EncodeUnicode
 import {postData, getData} from './ajax';
 import {getLivePerformanceMetrics} from '../util/live_performance';
 
-import type {ResourceType as ResourceTypeEnum, RequestParameters} from './ajax';
+import type {ResourceType, RequestParameters, RequestTransformFunction} from './ajax';
 import type {LivePerformanceData} from '../util/live_performance';
 import type {TileJSON} from '../types/tilejson';
 import type {Map as MapboxMap} from "../ui/map";
 import type {CanonicalTileID} from "../source/tile_id";
 import type {CustomTags} from "../style-spec/types";
 
+// eslint-disable-next-line import-x/extensions -- Rollup resolves .d.ts by the ".d" part; renaming would break resolution
 import '../types/import-meta.d';
 
 const IMAGE_EXTENSION_RE = /(\.(png|jpg)\d*)(?=$)/;
@@ -35,9 +35,6 @@ const TILE_V4_PREFIX_RE = /^.+\/v4\//;
 const EXTENSION_RE = /\.[\w]+$/;
 const TILE_PATH_RE = /^(\/v4\/|\/(raster|rasterarrays)\/v1\/)/;
 const ACCESS_TOKEN_PARAM_RE = /^access_token=(.*)$/;
-
-export type ResourceType = keyof typeof ResourceTypeEnum;
-export type RequestTransformFunction = (url: string, resourceTypeEnum?: ResourceType) => RequestParameters;
 
 type UrlObject = {
     protocol: string;
@@ -74,7 +71,7 @@ export class RequestManager {
         return Date.now() > this._skuTokenExpiresAt;
     }
 
-    transformRequest(url: string, type: ResourceType, tags?: CustomTags, tileID?: CanonicalTileID): RequestParameters {
+    async transformRequest(url: string, type: ResourceType, abortSignal?: AbortSignal, tags?: CustomTags, tileID?: CanonicalTileID): Promise<RequestParameters> {
         let request: RequestParameters = {url};
         if (typeof tags === 'object') {
             request.url = request.url.replace(/\{ *([\w_]+) *}/g, (str, key) => {
@@ -93,7 +90,8 @@ export class RequestManager {
             });
         }
         if (this._transformRequestFn) {
-            request = this._transformRequestFn(request.url, type) || request;
+            const options = abortSignal ? {signal: abortSignal} : {};
+            request = this._transformRequestFn(request.url, type, options) || request;
         }
         return request;
     }
@@ -101,9 +99,7 @@ export class RequestManager {
     normalizeStyleURL(url: string, accessToken?: string): string {
         if (!isMapboxURL(url)) return url;
         const urlObject = parseUrl(url);
-        if (import.meta.env.mode !== 'dev') {
-            urlObject.params.push(`sdk=js-${sdkVersion}`);
-        }
+        urlObject.params.push(`sdk=js-${sdkVersion}`);
         urlObject.path = `/styles/v1${urlObject.path}`;
         return this._makeAPIURL(urlObject, this._customAccessToken || accessToken);
     }
@@ -170,7 +166,8 @@ export class RequestManager {
         if (tileURL && !isMapboxURL(tileURL)) return tileURL;
 
         const urlObject = parseUrl(tileURL);
-        const extension = webpSupported.supported ? '.webp' : '$1';
+        // WebP is supported in all browsers that can run GL JS (which requires WebGL2)
+        const extension = '.webp';
 
         // The v4 mapbox tile API supports 512x512 image tiles but they must be requested as '@2x' tiles.
         const use2xAs512 = rasterTileSize && urlObject.authority !== 'raster' && rasterTileSize === 512;
@@ -339,15 +336,54 @@ function isTelemetryEnabled(customAccessToken?: string | null): boolean {
     return true;
 }
 
+let sdkInfo: string | undefined;
+
+const SDK_INFO_RE = /^[\w.+-]+(\/[\w.+-]+)?$/;
+
+const EVENT_SCHEMA_VERSION = '2.2';
+
+/**
+ * Internal API used by Mapbox wrapper SDKs (e.g. the Flutter or React Native bridges) to
+ * self-identify in telemetry. Not part of the public API and subject to change. Pass a
+ * `Name/version` string (e.g. `'FlutterPlugin/3.0.0'`); call once at startup before any maps
+ * are created, as events from earlier maps won't carry it.
+ *
+ * @private
+ */
+export function setSdkInfo(info: string) {
+    if (typeof info !== 'string' || info.length > 64 || !SDK_INFO_RE.test(info)) {
+        warnOnce(`Invalid SDK info "${info}"; expected a "Name/version" string. Ignoring.`);
+        return;
+    }
+    sdkInfo = info;
+}
+
+// Whether the running bundle was served from the Mapbox CDN (vs. self-hosted or bundled into
+// the consumer's app), reported as the `bundleDistribution` telemetry field. The entry files
+// (index.ts / index.esm.ts) inspect their own script URL locally and pass only the resulting
+// enum here at import time — no URL is ever retained or transmitted.
+let bundleDistribution: 'cdn' | 'other' = 'other';
+
+export function setBundleDistribution(distribution: 'cdn' | 'other') {
+    bundleDistribution = distribution;
+}
+
 type TelemetryEventType = 'appUserTurnstile' | 'map.load' | 'map.auth' | 'gljs.performance' | 'style.load' | 'metrics';
+
+type QueueItem = {
+    id?: number;
+    timestamp: number;
+    performanceData?: LivePerformanceData;
+    payload?: StyleLoadEventPayload | MetricsEventPayload;
+    customAccessToken?: string | null;
+};
 
 export class TelemetryEvent {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     eventData: any;
     anonId: string | null | undefined;
     anonIdTimestamp: number | null | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    queue: Array<any>;
+    queue: Array<QueueItem>;
     type: TelemetryEventType;
     pendingRequest: boolean;
     _customAccessToken: string | null | undefined;
@@ -440,7 +476,7 @@ export class TelemetryEvent {
 
     }
 
-    processRequests(_?: string | null) {
+    processRequests() {
     }
 
     /*
@@ -473,19 +509,19 @@ export class TelemetryEvent {
                 this.pendingRequest = false;
                 callback(null);
                 this.saveEventData();
-                this.processRequests(customAccessToken);
+                this.processRequests();
             })
             .catch((err: Error) => {
                 this.pendingRequest = false;
                 callback(err);
                 this.saveEventData();
-                this.processRequests(customAccessToken);
+                this.processRequests();
             });
     }
 
-    queueRequest(event: unknown, customAccessToken?: string | null) {
-        this.queue.push(event);
-        this.processRequests(customAccessToken);
+    queueRequest(event: Omit<QueueItem, 'customAccessToken'>, customAccessToken?: string | null) {
+        this.queue.push({...event, customAccessToken});
+        this.processRequests();
     }
 }
 
@@ -499,15 +535,13 @@ export class PerformanceEvent extends TelemetryEvent {
         this.queueRequest({timestamp: Date.now(), performanceData}, customAccessToken);
     }
 
-    override processRequests(customAccessToken?: string | null) {
+    override processRequests() {
         if (this.pendingRequest || this.queue.length === 0) {
             return;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const {timestamp, performanceData} = this.queue.shift();
+        const {timestamp, performanceData, customAccessToken} = this.queue.shift();
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         const additionalPayload = getLivePerformanceMetrics(performanceData);
 
         // Server will only process string for these entries
@@ -521,7 +555,6 @@ export class PerformanceEvent extends TelemetryEvent {
             assert(typeof attribute.value === 'string');
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this.postEvent(timestamp, additionalPayload, () => {
         }, customAccessToken);
     }
@@ -553,13 +586,11 @@ export class MapLoadEvent extends TelemetryEvent {
         }
     }
 
-    override processRequests(customAccessToken?: string | null) {
+    override processRequests() {
         if (this.pendingRequest || this.queue.length === 0) return;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const {id, timestamp} = this.queue.shift();
+        const {id, timestamp, customAccessToken} = this.queue.shift();
 
         // Only one load event should fire per map
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (id && this.success[id]) return;
 
         if (!this.anonId || !this.anonIdTimestamp) {
@@ -570,23 +601,25 @@ export class MapLoadEvent extends TelemetryEvent {
             this.refreshUUID();
         }
 
-        const additionalPayload = {
+        const additionalPayload: Record<string, unknown> = {
+            version: EVENT_SCHEMA_VERSION,
             sdkIdentifier: 'mapbox-gl-js',
             sdkVersion,
             skuId: SKU_ID,
             skuToken: this.skuToken,
-            userId: this.anonId
+            userId: this.anonId,
+            bundleFormat: import.meta.env.format || 'unknown',
+            bundleDistribution
         };
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        if (sdkInfo) additionalPayload.sdkInfo = sdkInfo;
+
         this.postEvent(timestamp, additionalPayload, (err) => {
             if (err) {
                 this.errorCb(err);
             } else {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 if (id) this.success[id] = true;
             }
-
         }, customAccessToken);
     }
 
@@ -661,15 +694,13 @@ export class StyleLoadEvent extends TelemetryEvent {
         }, customAccessToken);
     }
 
-    override processRequests(customAccessToken?: string | null) {
+    override processRequests() {
         if (this.pendingRequest || this.queue.length === 0) {
             return;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const {timestamp, payload} = this.queue.shift();
+        const {timestamp, payload, customAccessToken} = this.queue.shift();
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this.postEvent(timestamp, payload, () => {}, customAccessToken);
     }
 }
@@ -714,16 +745,14 @@ class MetricsEvent extends TelemetryEvent {
         }, customAccessToken);
     }
 
-    override processRequests(customAccessToken?: string | null) {
+    override processRequests() {
         // Override processRequests to allow multiple events sent per map
         if (this.pendingRequest || this.queue.length === 0) {
             return;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const {timestamp, payload} = this.queue.shift();
+        const {timestamp, payload, customAccessToken} = this.queue.shift();
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this.postEvent(timestamp, payload, () => {
         }, customAccessToken);
     }
@@ -761,13 +790,13 @@ export class MapSessionAPI extends TelemetryEvent {
                 this.pendingRequest = false;
                 callback(null);
                 this.saveEventData();
-                this.processRequests(customAccessToken);
+                this.processRequests();
             })
             .catch((err: Error) => {
                 this.pendingRequest = false;
                 callback(err);
                 this.saveEventData();
-                this.processRequests(customAccessToken);
+                this.processRequests();
             });
     }
 
@@ -784,21 +813,17 @@ export class MapSessionAPI extends TelemetryEvent {
         }
     }
 
-    override processRequests(customAccessToken?: string | null) {
+    override processRequests() {
         if (this.pendingRequest || this.queue.length === 0) return;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const {id, timestamp} = this.queue.shift();
+        const {id, timestamp, customAccessToken} = this.queue.shift();
 
         // Only one load event should fire per map
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (id && this.success[id]) return;
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         this.getSession(timestamp, this.skuToken, (err) => {
             if (err) {
                 this.errorCb(err);
             } else {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 if (id) this.success[id] = true;
             }
         }, customAccessToken);
@@ -821,11 +846,11 @@ export class TurnstileEvent extends TelemetryEvent {
         // mapbox tiles.
         if (Array.isArray(tileUrls) &&
             tileUrls.some(url => isMapboxURL(url) || isMapboxHTTPURL(url))) {
-            this.queueRequest(Date.now(), customAccessToken);
+            this.queueRequest({timestamp: Date.now()}, customAccessToken);
         }
     }
 
-    override processRequests(customAccessToken?: string | null) {
+    override processRequests() {
         if (this.pendingRequest || this.queue.length === 0) {
             return;
         }
@@ -847,14 +872,12 @@ export class TurnstileEvent extends TelemetryEvent {
             dueForEvent = true;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const nextUpdate = this.queue.shift();
+        const {timestamp: nextUpdate, customAccessToken} = this.queue.shift();
         // Record turnstile event once per calendar day.
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (this.eventData.lastSuccess) {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
             const lastUpdate = new Date(this.eventData.lastSuccess);
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             const nextDate = new Date(nextUpdate);
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             const daysElapsed = (nextUpdate - this.eventData.lastSuccess) / (24 * 60 * 60 * 1000);
@@ -868,18 +891,22 @@ export class TurnstileEvent extends TelemetryEvent {
             return;
         }
 
-        const additionalPayload = {
+        const additionalPayload: Record<string, unknown> = {
+            version: EVENT_SCHEMA_VERSION,
             sdkIdentifier: 'mapbox-gl-js',
             sdkVersion,
             skuId: SKU_ID,
             "enabled.telemetry": false,
-            userId: this.anonId
+            userId: this.anonId,
+            bundleFormat: import.meta.env.format || 'unknown',
+            bundleDistribution
         };
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        if (sdkInfo) additionalPayload.sdkInfo = sdkInfo;
+
         this.postEvent(nextUpdate, additionalPayload, (err) => {
             if (!err) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 this.eventData.lastSuccess = nextUpdate;
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                 this.eventData.tokenU = tokenU;

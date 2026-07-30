@@ -21,6 +21,7 @@ export type LineUniformsType = {
     ['u_units_to_pixels']: Uniform2f;
     ['u_dash_image']: Uniform1i;
     ['u_gradient_image']: Uniform1i;
+    ['u_border_gradient_image']: Uniform1i;
     ['u_image_height']: Uniform1f;
     ['u_texsize']: Uniform2f;
     ['u_tile_units_to_pixels']: Uniform1f;
@@ -30,6 +31,8 @@ export type LineUniformsType = {
     ['u_trim_gradient_mix_range']: Uniform2f;
     ['u_trim_color']: Uniform4f;
     ['u_zbias_factor']: Uniform1f;
+    ['u_road_view_depth_bias']: Uniform1f;
+    ['u_road_clip_to_view']: Uniform4f;
     ['u_tile_to_meter']: Uniform1f;
     ['u_ground_shadow_factor']: Uniform3f;
     ['u_opacity_multiplier']: Uniform1f;
@@ -57,7 +60,7 @@ export type LinePatternUniformsType = {
     ['u_opacity_multiplier']: Uniform1f;
 };
 
-export type LineDefinesType = 'RENDER_LINE_GRADIENT' | 'RENDER_LINE_DASH' | 'RENDER_LINE_TRIM_OFFSET' | 'RENDER_LINE_BORDER' | 'LINE_JOIN_NONE' | 'ELEVATED' | 'ELEVATED_ROADS' | 'VARIABLE_LINE_WIDTH' | 'VARIABLE_LINE_EMISSIVE_STRENGTH' | 'CROSS_SLOPE_VERTICAL' | 'CROSS_SLOPE_HORIZONTAL' | 'ELEVATION_REFERENCE_SEA' | 'ELEVATION_GROUND_SCALE' | 'LINE_PATTERN_TRANSITION' | 'USE_MRT1' | 'DUAL_SOURCE_BLENDING' | 'LINE_BLEND_MULTIPLY' | 'LINE_BLEND_ADDITIVE' | 'DEBUG_ELEVATION_ID';
+export type LineDefinesType = 'RENDER_LINE_GRADIENT' | 'RENDER_LINE_BORDER_GRADIENT' | 'RENDER_LINE_DASH' | 'RENDER_LINE_TRIM_OFFSET' | 'RENDER_LINE_BORDER' | 'LINE_JOIN_NONE' | 'ELEVATED' | 'ELEVATED_ROADS' | 'VARIABLE_LINE_WIDTH' | 'VARIABLE_LINE_EMISSIVE_STRENGTH' | 'CROSS_SLOPE_VERTICAL' | 'CROSS_SLOPE_HORIZONTAL' | 'ELEVATION_REFERENCE_SEA' | 'ELEVATION_GROUND_SCALE' | 'LINE_PATTERN_TRANSITION' | 'USE_MRT1' | 'DUAL_SOURCE_BLENDING' | 'LINE_BLEND_MULTIPLY' | 'LINE_BLEND_ADDITIVE' | 'DEBUG_ELEVATION_ID';
 
 const lineUniforms = (context: Context): LineUniformsType => ({
     'u_matrix': new UniformMatrix4f(context),
@@ -68,6 +71,7 @@ const lineUniforms = (context: Context): LineUniformsType => ({
     'u_units_to_pixels': new Uniform2f(context),
     'u_dash_image': new Uniform1i(context),
     'u_gradient_image': new Uniform1i(context),
+    'u_border_gradient_image': new Uniform1i(context),
     'u_image_height': new Uniform1f(context),
     'u_texsize': new Uniform2f(context),
     'u_tile_units_to_pixels': new Uniform1f(context),
@@ -77,6 +81,8 @@ const lineUniforms = (context: Context): LineUniformsType => ({
     'u_trim_gradient_mix_range': new Uniform2f(context),
     'u_trim_color': new Uniform4f(context),
     'u_zbias_factor': new Uniform1f(context),
+    'u_road_view_depth_bias': new Uniform1f(context),
+    'u_road_clip_to_view': new Uniform4f(context),
     'u_tile_to_meter': new Uniform1f(context),
     'u_ground_shadow_factor': new Uniform3f(context),
     'u_opacity_multiplier': new Uniform1f(context),
@@ -135,6 +141,7 @@ const lineUniformValues = (
         ],
         'u_dash_image': 0,
         'u_gradient_image': 1,
+        'u_border_gradient_image': 2,
         'u_image_height': imageHeight,
         'u_texsize': hasDash(layer) && tile.lineAtlasTexture ? tile.lineAtlasTexture.size : [0, 0],
         'u_tile_units_to_pixels': calculateTileRatio(tile, painter.transform),
@@ -144,6 +151,8 @@ const lineUniformValues = (
         'u_trim_gradient_mix_range': [1.0, 1.0],
         'u_trim_color': layer.paint.get('line-trim-color').toPremultipliedRenderColor(ignoreLut ? null : layer.lut).toArray01(),
         'u_zbias_factor': zbiasFactor,
+        'u_road_view_depth_bias': 0,
+        'u_road_clip_to_view': [0, 0, 0, 0],
         'u_tile_to_meter': tileToMeter(tile.tileID.canonical, 0.0),
         'u_ground_shadow_factor': groundShadowFactor,
         'u_opacity_multiplier': 1,
@@ -223,6 +232,7 @@ const lineDefinesValues = (layer: LineStyleLayer): LineDefinesType[] => {
 
     const hasBorder = layer.paint.get('line-border-width').constantOr(1.0) !== 0.0;
     if (hasBorder) values.push('RENDER_LINE_BORDER');
+    if (hasBorder && layer.paint.get('line-border-gradient')) values.push('RENDER_LINE_BORDER_GRADIENT');
 
     const hasJoinNone = layer.layout.get('line-join').constantOr('miter') === 'none';
 

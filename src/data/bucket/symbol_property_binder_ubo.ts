@@ -1,4 +1,4 @@
-import {SymbolPropertiesUBO, HEADER_DATA_DRIVEN_MASK, HEADER_ZOOM_DEPENDENT_MASK, HEADER_BLOCK_SIZE_VEC4, HEADER_OFFSETS} from './symbol_properties_ubo';
+import {SymbolPropertiesUBO, HEADER_DATA_DRIVEN_MASK, HEADER_DZR_MASK, HEADER_BLOCK_SIZE_VEC4, HEADER_OFFSETS, HEADER_SHARED_ZOOM, floatToBits} from './symbol_properties_ubo';
 import Color from '../../style-spec/util/color';
 import EvaluationParameters from '../../style/evaluation_parameters';
 import {PossiblyEvaluatedPropertyValue} from '../../style/properties';
@@ -9,7 +9,7 @@ import {warnOnce} from '../../util/util';
 import type {PossiblyEvaluatedValue} from '../../style/properties';
 import type SymbolStyleLayer from '../../style/style_layer/symbol_style_layer';
 import type {LUT} from '../../util/lut';
-import type {Feature, FeatureState} from '../../style-spec/expression';
+import type {Feature, FeatureState, CameraExpression, CompositeExpression, StylePropertyExpression} from '../../style-spec/expression';
 import type {CanonicalTileID} from '../../source/tile_id';
 import type {ImageId} from '../../style-spec/expression/types/image_id';
 import type Context from '../../gl/context';
@@ -89,21 +89,29 @@ const PROP_NAMES = ['icon', 'text'].map((p) => [
     `${p}-translate`
 ]);
 
-const PROP_COUNT = 9; // paint properties, indexed by bit position
+const PROP_COUNT = 9; // paint properties, indexed by bit position. Must be less than 16 to coexist
+// with the appearance-zoom-stops mask
 
 // Flat scratch buffer for evaluateAllProperties — reused per call, eliminates per-feature inner array allocations.
 const evalFlatScratch = new Float32Array(SymbolPropertiesUBO.EVAL_FLAT_TOTAL);
 
 // Shared read-only translate default; passed to constantOr to avoid a per-feature [0, 0] allocation.
 const ZERO_VEC2: [number, number] = [0, 0];
+const cameraWrapCache = new WeakMap<object, PossiblyEvaluatedPropertyValue<unknown>>();
+
+type ZoomExpression = CameraExpression | CompositeExpression;
+
+// Per-property zoom classification (mirrors GL Native's ZoomDependency enum). CPU-side bookkeeping
+// that decides which zoom range the evaluator computes; the shader only receives the DZR bit via
+// the header (HEADER_DZR_MASK). Stored on the binder (SymbolPropertyBinderUBO.zoomDependency) and
+// serialized, so the main-thread instance — which omits `layer` — can read it after worker transfer
+// instead of recomputing from the (absent) layer.
+const ZOOM_INDEPENDENT = 0;      // not zoom-dependent
+const ZOOM_SAME_RANGE = 1;       // zoom-dependent; one [zm, zM] shared by every appearance
+const ZOOM_DIFFERENT_RANGES = 2; // appearances disagree on stops → per-feature [zm, zM] (DZR)
 
 /**
  * Constant property values ready to be set as u_spp_* uniforms.
- *
- * `zoomFactors` carries one precomputed interpolation factor per property — the same role
- * `u_opacity_t` etc. played in the pre-UBO pragma-mapbox approach. Each factor is the
- * `t` in `mix(min, max, t)` for that property at the current render zoom. 9 floats total,
- * indexed by property bit position; entries for non-zoom-dep properties are unused.
  */
 export type ConstantUniformValues = {
     fill_np_color: [number, number, number, number];
@@ -114,13 +122,12 @@ export type ConstantUniformValues = {
     emissive_strength: number;
     occlusion_opacity: number;
     z_offset: number;
-    zoomFactors: Float32Array;
 };
 
 /**
  * Manages UBO-based symbol paint properties.
  *
- * Uses the GL Native-aligned layout: header (3 uvec4) + per-feature data-driven blocks.
+ * Uses the GL Native-aligned layout: header (4 uvec4) + per-feature data-driven blocks.
  * Constant properties are NOT stored in the UBO — they are passed as u_spp_* uniforms
  * at draw time via getConstantUniformValues().
  */
@@ -151,7 +158,7 @@ export class SymbolPropertyBinderUBO {
     featureCount: number;       // Total across all batches
 
     // Header (built once in the constructor, describes layout of each UBO batch). A flat Uint32Array
-    // of 12 dwords (3 uvec4) shared with every batch's headerData; index it with the HEADER_* constants.
+    // of 16 dwords (4 uvec4) shared with every batch's headerData; index it with the HEADER_* constants.
     header: Uint32Array;
     maxFeaturesPerBatch: number; // computed from header
 
@@ -166,6 +173,11 @@ export class SymbolPropertyBinderUBO {
     cachedConstantUniforms: ConstantUniformValues | null;
     cachedConstantRenderZoom: number | null;
     cachedConstantBrightness: number | null | undefined;
+    // Identity of the layer.paint object the cache was computed from. layer.recalculate() produces a
+    // fresh paint object on every Style.update() a paint/config change triggers, so an identity change
+    // means constant paint values may have changed. Guards against a stale cached color when a paint
+    // update does not come with a live transition (e.g. root transition {duration: 0}); see #13702.
+    cachedConstantPaint: object | null;
 
     // Tracks current active appearance per vtFeatureIndex (main-thread only, excluded from serialization).
     activeAppearanceByVtIndex?: Map<number, SymbolAppearance | null>;
@@ -181,10 +193,18 @@ export class SymbolPropertyBinderUBO {
     // not the GPU UBO, so this is not part of the header.
     cameraMask: number;
 
+    // Per-property zoom classification (ZOOM_* enum), one byte per property, computed in
+    // updateHeader. CPU-side bookkeeping that decides which zoom range the evaluator computes; the
+    // shader only gets the DZR bit through the header. Serialized (see register() below) so the
+    // main-thread instance can read it after worker transfer, since `layer` is omitted there.
+    zoomDependency: Uint8Array;
+
     // [zm, zM] pairs per zoom-dep property (9 pairs = 18 floats), computed in updateHeader.
-    // Each draw call, getConstantUniformValues turns these into a single u_spp_*_zoom_factor
-    // per property using the current render zoom.
+    // evaluateAllProperties copies the shared pair into every feature's zoom-ready block slot;
+    // appearance-zoom-stops properties compute their [zm, zM] per feature instead.
     sharedZoomRanges: Float32Array;
+    _zoomRangeScratch: Float32Array;
+    _floorZoom: number;
 
     constructor(layer: SymbolStyleLayer, zoom: number, lut: LUT | null, isText: boolean, worldview: string = '', maxUniformBufferBindings?: number | null, uboSizeDwords?: number | null) {
         this.layer = layer;
@@ -206,10 +226,14 @@ export class SymbolPropertyBinderUBO {
         this.cachedConstantUniforms = null;
         this.cachedConstantRenderZoom = null;
         this.cachedConstantBrightness = undefined;
+        this.cachedConstantPaint = null;
 
         this.activeAppearanceByVtIndex = null;
 
+        this.zoomDependency = new Uint8Array(PROP_COUNT);
         this.sharedZoomRanges = new Float32Array(PROP_COUNT * 2);
+        this._zoomRangeScratch = new Float32Array(2);
+        this._floorZoom = Math.floor(this.zoom);
         this.header = new Uint32Array(SymbolPropertiesUBO.HEADER_DWORDS);
         this.updateHeader();
         this.isAllConstant = this.header[HEADER_DATA_DRIVEN_MASK] === 0;
@@ -230,16 +254,16 @@ export class SymbolPropertyBinderUBO {
         const paint = this.layer.paint;
 
         let dataDrivenMask = 0;
-        let zoomDependentMask = 0;
+        let dzrMask = 0;
         let cameraMask = 0;
-        let dataDrivenOffset = 0;
+        let dataDrivenOffsetVec4 = 0;
         let allDataDrivenLightConstant = true;
 
+        const floorZoom = this._floorZoom;
         const names = PROP_NAMES[+this.isText];
         for (let i = 0; i < PROP_COUNT; i++) {
             const name = names[i];
             const isColor = i < 2;
-            const isVec2 = i === 8;
             const prop = paint.get(name as keyof typeof paint._values) as PossiblyEvaluatedPropertyValue<unknown> | undefined;
 
             // DataConstantProperty returns a plain value (no isConstant method) — treat as constant.
@@ -247,54 +271,155 @@ export class SymbolPropertyBinderUBO {
             // If any appearance defines this property, it must be in the UBO so per-feature values can differ.
             const appearanceForceDataDriven = this._appearancesHavePaintProperties(name as keyof AppearancePaintProps);
             const isDataDriven = layerIsDataDriven || appearanceForceDataDriven;
-            const isZoomDep = !!(prop && prop.value && (prop.value as {kind?: string}).kind === 'composite');
 
             // Constant properties use u_spp_* uniforms — they get no data-driven block (offset 0).
             if (!isDataDriven) {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-                const transVal: any = (this.layer._transitionablePaint._values as any)[name];
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                const origKind = (transVal && transVal.value && transVal.value.expression && transVal.value.expression.kind) as string | undefined;
-                if (origKind === 'camera') cameraMask |= (1 << i);
+                const unevaluated = this._layerUnevaluated(name);
+                if (unevaluated && unevaluated.expression && unevaluated.expression.kind === 'camera') cameraMask |= (1 << i);
                 continue;
             }
 
             dataDrivenMask |= (1 << i);
-            if (isZoomDep) zoomDependentMask |= (1 << i);
+
+            // Examine the zoom ranges that can drive this property across the layer paint and every
+            // appearance overriding it. This is internal bookkeeping only (decides what
+            // evaluateAllProperties computes) — it no longer affects block sizing/offsets, since
+            // every data-driven property occupies a fixed, zoom-ready slot (see
+            // symbol_properties_ubo.ts):
+            //   not zoom-dependent → block stores [min, min] and [zm, zM] = [0, 0].
+            //   one shared range   → block stores the layer's shared [zm, zM] on every feature.
+            //   ranges disagree    → appearances disagree on the stops → store [zm, zM] per feature.
+            const zoom = this._collectZoomSignatures(name as keyof AppearancePaintProps, floorZoom);
+            const isZoomDep = zoom.hasZoom;
+            const hasAppearanceZoomStops = zoom.differs;
+            const isTranslate = i === 8;
+
+            this.zoomDependency[i] = hasAppearanceZoomStops ? ZOOM_DIFFERENT_RANGES : isZoomDep ? ZOOM_SAME_RANGE : ZOOM_INDEPENDENT;
+            // Colors get a per-feature zoom slot only for DifferentZoomRanges (SameZoomRange reads
+            // the header's shared range instead). Translate has no header slot to share its zoom
+            // range in, so it needs its own per-feature [zm, zM] whenever it's zoom-dependent at all.
+            const needsBlockZoom = hasAppearanceZoomStops || (isTranslate && isZoomDep);
+            if (needsBlockZoom) dzrMask |= (1 << i);
+
             // Check if this data-driven expression depends on light/brightness.
             // Same pattern as program_configuration.ts:313-314.
             const expr = prop && prop.value as {isLightConstant?: boolean} | undefined;
             if (expr && expr.isLightConstant === false) allDataDrivenLightConstant = false;
 
-            // Block size in dwords, and how it must align within the vec4-packed block:
-            //   color / zoom-dep translate → 4 dwords (a full vec4), vec4-aligned
-            //   non-zoom translate         → 2 dwords [tx, ty] kept within one vec4 (no straddle)
-            //   scalar                     → 2 dwords if zoom-dep ([min, max]) else 1, unaligned
-            const vec4 = isColor || (isVec2 && isZoomDep);
-            const size = vec4 ? 4 : (isVec2 || isZoomDep) ? 2 : 1;
+            // Fixed, vec4-aligned slot size: scalars always take 1 vec4; colors and translate take
+            // 1 vec4 (Independent/SameZoomRange, zoom range read from the header — translate never
+            // needs this since it has no shared-zoom header slot) or 2 vec4 (DifferentZoomRanges,
+            // zoom range stored per feature — for translate, whenever it's zoom-dependent at all) —
+            // see HEADER_DZR_MASK.
+            this.header[HEADER_OFFSETS + i] = dataDrivenOffsetVec4;
+            dataDrivenOffsetVec4 += needsBlockZoom ? 2 : 1;
 
-            if (vec4 && dataDrivenOffset % 4 !== 0) {
-                dataDrivenOffset = (dataDrivenOffset + 3) & ~3;
-            } else if (isVec2 && dataDrivenOffset % 4 === 3) {
-                dataDrivenOffset++;
-            }
-            this.header[HEADER_OFFSETS + i] = dataDrivenOffset;
-            dataDrivenOffset += size;
-
-            if (isZoomDep && prop) {
-                this._computeZoomRange(prop, Math.floor(this.zoom), i * 2);
+            // Single-signature properties get their shared [zm, zM] now;
+            // appearance-zoom-stops properties compute it per feature.
+            if (isZoomDep && !hasAppearanceZoomStops && zoom.representative) {
+                this._computeZoomRange(zoom.representative, floorZoom, this.sharedZoomRanges, i * 2);
+                // Colors additionally get their shared range written into the header, since their
+                // block (when not DifferentZoomRanges) carries no per-feature zoom slot at all.
+                if (isColor) {
+                    this.header[HEADER_SHARED_ZOOM + i * 2] = floatToBits(this.sharedZoomRanges[i * 2]);
+                    this.header[HEADER_SHARED_ZOOM + i * 2 + 1] = floatToBits(this.sharedZoomRanges[i * 2 + 1]);
+                }
             }
         }
 
-        // Round up data-driven block size to vec4 boundary, then express in vec4 units.
-        const dataDrivenBlockSizeDwords = dataDrivenOffset === 0 ? 0 : (dataDrivenOffset + 3) & ~3;
-
         this.header[HEADER_DATA_DRIVEN_MASK] = dataDrivenMask;
-        this.header[HEADER_ZOOM_DEPENDENT_MASK] = zoomDependentMask;
-        this.header[HEADER_BLOCK_SIZE_VEC4] = dataDrivenBlockSizeDwords / 4;
+        this.header[HEADER_DZR_MASK] = dzrMask;
+        this.header[HEADER_BLOCK_SIZE_VEC4] = dataDrivenOffsetVec4;
 
         this.isLightConstant = allDataDrivenLightConstant;
         this.cameraMask = cameraMask;
+    }
+
+    /**
+     * Refresh sharedZoomRanges and cameraMask from the current layer's unevaluated expressions.
+     * Called after a runtime property change
+     */
+    private _recomputeSharedRanges(): void {
+        const floorZoom = this._floorZoom;
+        const names = PROP_NAMES[+this.isText];
+        let cameraMask = 0;
+        let colorHeaderChanged = false;
+
+        for (let i = 0; i < PROP_COUNT; i++) {
+            const name = names[i];
+            const isDataDriven = (this.header[HEADER_DATA_DRIVEN_MASK] & (1 << i)) !== 0;
+            const dep = this.zoomDependency[i];
+            const isZoomDep = dep !== ZOOM_INDEPENDENT;
+            const hasAppearanceZoomStops = dep === ZOOM_DIFFERENT_RANGES;
+
+            if (!isDataDriven) {
+                const unevaluated = this._layerUnevaluated(name);
+                if (unevaluated && unevaluated.expression && unevaluated.expression.kind === 'camera') cameraMask |= (1 << i);
+            } else if (isZoomDep && !hasAppearanceZoomStops) {
+                // Appearance-zoom-stops properties skip this because their per-feature
+                // [zm, zM] is recomputed in evaluateAllProperties._writeZoomRange.
+                const zoom = this._collectZoomSignatures(name as keyof AppearancePaintProps, floorZoom);
+                if (zoom.representative) {
+                    this._computeZoomRange(zoom.representative, floorZoom, this.sharedZoomRanges, i * 2);
+                    if (i < 2) {
+                        // Colors: also refresh the header's shared-zoom slot (see updateHeader) —
+                        // it's their only copy of the zoom range, unlike scalars/translate whose
+                        // per-feature block slot gets rewritten via evaluateAllProperties instead.
+                        this.header[HEADER_SHARED_ZOOM + i * 2] = floatToBits(this.sharedZoomRanges[i * 2]);
+                        this.header[HEADER_SHARED_ZOOM + i * 2 + 1] = floatToBits(this.sharedZoomRanges[i * 2 + 1]);
+                        colorHeaderChanged = true;
+                    }
+                }
+            }
+        }
+
+        this.cameraMask = cameraMask;
+        // The header buffer is shared by reference across every batch's UBO, so a color's shared-
+        // zoom slot changing here must be re-uploaded on the next upload() for every batch.
+        if (colorHeaderChanged) {
+            for (const ubo of this.ubos) ubo.markHeaderDirty();
+        }
+    }
+
+    /**
+     * Examine the zoom ranges that can drive property `name` across the layer paint and every appearance
+     * that overrides it:
+     *   hasZoom:  the property uses zoom interpolation
+     *   differs:  ≥2 sources bake DIFFERENT [zm, zM] ranges
+     *   representative: one zoom-dependent expression used to source the shared
+     *             uniform's range in the single-range case
+     */
+    private _collectZoomSignatures(
+        name: keyof AppearancePaintProps,
+        floorZoom: number
+    ): {hasZoom: boolean; differs: boolean; representative: ZoomExpression | null} {
+        let hasZoom = false;
+        let differs = false;
+        let representative: ZoomExpression | null = null;
+        let firstZm = 0;
+        let firstZM = 0;
+
+        const consider = (expr: ZoomExpression | null) => {
+            if (!expr) return;
+            this._computeZoomRange(expr, floorZoom, this._zoomRangeScratch, 0);
+            const zm = this._zoomRangeScratch[0];
+            const zM = this._zoomRangeScratch[1];
+            if (!hasZoom) {
+                hasZoom = true;
+                firstZm = zm;
+                firstZM = zM;
+                representative = expr;
+            } else if (zm !== firstZm || zM !== firstZM) {
+                differs = true;
+            }
+        };
+
+        consider(this._zoomExprOf(this._layerUnevaluated(name)));
+        for (const appearance of this.layer.getAppearances() || []) {
+            if (!appearance.hasPaintProperty(name)) continue;
+            consider(this._zoomExprOf(appearance.getUnevaluatedPaintProperty(name)));
+        }
+        return {hasZoom, differs, representative};
     }
 
     /**
@@ -320,22 +445,26 @@ export class SymbolPropertyBinderUBO {
         const params = new EvaluationParameters(this.zoom, options);
         const paramsNext = new EvaluationParameters(this.zoom + 1, options);
         const ctx: EvaluationContext = {feature, featureState, canonical, availableImages, params, paramsNext, formattedSection, activeAppearance};
-        const header = this.header;
 
         const names = PROP_NAMES[+this.isText];
         for (let i = 0; i < PROP_COUNT; i++) {
             const name = names[i];
             const isColor = i < 2;
             const isVec2 = i === 8;
-            const isZoomDep = (header[HEADER_ZOOM_DEPENDENT_MASK] & (1 << i)) !== 0;
+            const dep = this.zoomDependency[i];
+            const isZoomDep = dep !== ZOOM_INDEPENDENT;
+            const hasAppearanceZoomStops = dep === ZOOM_DIFFERENT_RANGES;
             const flatOffset = SymbolPropertiesUBO.EVAL_FLAT_OFFSETS[i];
+            // The [zm, zM] pair immediately follows the value within the property's slot
+            // (4 floats for colors/translate, 2 for scalars) — see the flat-layout doc above.
+            const zoomFlatOffset = flatOffset + (isColor || isVec2 ? 4 : 2);
 
             if (isColor) {
-                this._evaluateColorValue(name, isZoomDep, ctx, flatOffset);
+                this._evaluateColorValue(name, i, isZoomDep, hasAppearanceZoomStops, zoomFlatOffset, ctx, flatOffset);
             } else if (isVec2) {
-                this._evaluateTranslateValue(name, isZoomDep, ctx, flatOffset);
+                this._evaluateTranslateValue(name, i, isZoomDep, hasAppearanceZoomStops, zoomFlatOffset, ctx, flatOffset);
             } else {
-                this._evaluateFloatValue(name, isZoomDep, ctx, flatOffset);
+                this._evaluateFloatValue(name, i, isZoomDep, hasAppearanceZoomStops, zoomFlatOffset, ctx, flatOffset);
             }
         }
 
@@ -344,25 +473,54 @@ export class SymbolPropertyBinderUBO {
 
     /**
      * Resolve a paint property by name, preferring the active appearance's override when it
-     * defines that property, otherwise the layer's paint. Shared by all three evaluate paths.
-     *
-     * When formattedSection is provided and the layer's property has a section override for it
-     * (e.g. per-section text-color in a formatted text-field), the section's explicit value
-     * takes precedence over the appearance. Return the layer's prop so its FormatSectionOverride
-     * correctly returns the section color.
+     * defines that property, otherwise the layer's paint
      */
-    private _resolveProp<T>(propName: string, activeAppearance: SymbolAppearance | null | undefined,
-        formattedSection?: FormattedSection): PossiblyEvaluatedPropertyValue<T> | undefined {
+    private _resolveProp<T>(propName: string, activeAppearance: SymbolAppearance | null | undefined, isUseTheme: boolean = false, formattedSection?: FormattedSection): PossiblyEvaluatedPropertyValue<T> | undefined {
         const paint = this.layer.paint;
         const layerProp = paint.get(propName as keyof typeof paint._values) as unknown as PossiblyEvaluatedPropertyValue<T>;
         const appearanceName = propName as keyof AppearancePaintProps;
-        if (activeAppearance && activeAppearance.hasPaintProperty(appearanceName)) {
-            if (formattedSection && layerProp && layerProp.property.overrides && layerProp.property.overrides.hasOverride(formattedSection)) {
-                return layerProp;
-            }
-            return activeAppearance.paintProperties.get(appearanceName) as unknown as PossiblyEvaluatedPropertyValue<T> | undefined;
+        const fromAppearance = !!(activeAppearance && activeAppearance.hasPaintProperty(appearanceName));
+        const pe = (fromAppearance ?
+            (formattedSection && layerProp && layerProp.property.overrides && layerProp.property.overrides.hasOverride(formattedSection) ?
+                layerProp :
+                activeAppearance.paintProperties.get(appearanceName)) :
+            paint.get(propName as keyof typeof paint._values)) as unknown as PossiblyEvaluatedPropertyValue<T> | undefined;
+
+        // Only a zoom-only expression that possiblyEvaluate collapsed to a constant needs
+        // un-baking
+        if (isUseTheme || !pe || typeof pe.isConstant !== 'function' || !pe.isConstant()) return pe;
+        const source = fromAppearance ?
+            activeAppearance.getUnevaluatedPaintProperty(appearanceName) :
+            this._layerUnevaluated(propName);
+        return this._unbakeCamera(pe, source);
+    }
+
+    /**
+     * If `source` is a zoom-only expression, return a PossiblyEvaluatedPropertyValue wrapping
+     * the live expression so it interpolates across zoom like a composite     */
+    private _unbakeCamera<T>(pe: PossiblyEvaluatedPropertyValue<T>, source: unknown): PossiblyEvaluatedPropertyValue<T> {
+        const expr = source && (source as {expression?: {kind?: string}}).expression;
+        if (!expr || expr.kind !== 'camera') return pe;
+        let wrapped = cameraWrapCache.get(source as object) as PossiblyEvaluatedPropertyValue<T> | undefined;
+        if (!wrapped) {
+            wrapped = new PossiblyEvaluatedPropertyValue<T>(pe.property, expr as unknown as PossiblyEvaluatedValue<T>, pe.parameters, pe.iconImageUseTheme);
+            cameraWrapCache.set(source as object, wrapped);
         }
-        return layerProp;
+        return wrapped;
+    }
+
+    private _layerUnevaluated(propName: string): {expression?: StylePropertyExpression} | undefined {
+        const tv = (this.layer._transitionablePaint._values as Record<string, {value?: {expression?: StylePropertyExpression}}>)[propName];
+        return tv && tv.value;
+    }
+
+    /**
+     * The zoom-dependent expression behind an unevaluated PropertyValue or null if it isn't zoom-dependent
+     */
+    private _zoomExprOf(source: {expression?: StylePropertyExpression} | undefined): ZoomExpression | null {
+        const expr = source && source.expression;
+        if (!expr) return null;
+        return (expr.kind === 'composite' || expr.kind === 'camera') ? expr : null;
     }
 
     /** Evaluate a property at the given zoom params, with the verbose shared argument list filled in. */
@@ -374,17 +532,22 @@ export class SymbolPropertyBinderUBO {
     }
 
     /**
-     * Evaluate a color property and write it into the flat buffer in UBO-ready format (non-premultiplied, packed).
-     *   non-zoom → flat[offset..offset+3] = [packed0, packed1, 0, 0]
-     *   zoom-dep → flat[offset..offset+3] = [packMin0, packMin1, packMax0, packMax1]
+     * Evaluate a color property and write it into the flat buffer in UBO-ready, zoom-ready format
+     * (non-premultiplied, packed): flat[offset..offset+3] = [packMin0, packMin1, packMax0, packMax1].
+     * Non-zoom properties duplicate min into max so the shader's branchless mix degenerates to it.
      */
     private _evaluateColorValue(
         propName: string,
+        i: number,
         isZoomDep: boolean,
+        hasAppearanceZoomStops: boolean,
+        zoomFlatOffset: number,
         ctx: EvaluationContext,
         flatOffset: number
     ): void {
-        const prop = this._resolveProp<Color>(propName, ctx.activeAppearance, ctx.formattedSection);
+        const prop = this._resolveProp<Color>(propName, ctx.activeAppearance, false, ctx.formattedSection);
+
+        this._writePropertyZoomRange(i, isZoomDep, hasAppearanceZoomStops, prop, zoomFlatOffset);
 
         if (!prop) {
             evalFlatScratch[flatOffset] = 0;
@@ -395,7 +558,7 @@ export class SymbolPropertyBinderUBO {
         }
 
         // Use-theme: prefer appearance's value when it defines the color, fall back to layer's.
-        const useThemeProp = this._resolveProp<string>(`${propName}-use-theme`, ctx.activeAppearance);
+        const useThemeProp = this._resolveProp<string>(`${propName}-use-theme`, ctx.activeAppearance, true);
         const useThemeValue = useThemeProp && typeof useThemeProp !== 'string' ? useThemeProp.value : undefined;
         const ignoreLut = shouldIgnoreLut(
             useThemeValue,
@@ -418,14 +581,18 @@ export class SymbolPropertyBinderUBO {
             evalFlatScratch[flatOffset + 2] = packUint8ToFloat(255 * maxNP.r, 255 * maxNP.g);
             evalFlatScratch[flatOffset + 3] = packUint8ToFloat(255 * maxNP.b, 255 * maxNP.a);
         } else {
-            evalFlatScratch[flatOffset + 2] = 0;
-            evalFlatScratch[flatOffset + 3] = 0;
+            evalFlatScratch[flatOffset + 2] = evalFlatScratch[flatOffset];
+            evalFlatScratch[flatOffset + 3] = evalFlatScratch[flatOffset + 1];
         }
     }
 
     /**
      * Compute [zm, zM] for the zoom-interpolation range that contains floorZoom and write
      * it into `out[outOffset..outOffset+1]`
+     *
+     * The shader (and getConstantUniformValues) mixes LINEARLY between the min/max sampled at the
+     * surrounding integer zooms, so the interpolation curve shape (exponential base, cubic-bezier) is
+     * approximated as linear within each integer zoom step
      *
      * For step expressions (interpolationType == null):
      *   If a boundary falls in (floorZoom, floorZoom+1], write [t, t] where t = boundary - floorZoom.
@@ -436,18 +603,21 @@ export class SymbolPropertyBinderUBO {
      *   If a stop falls in (floorZoom, floorZoom+1), use zm = stop - floorZoom to delay the
      *   transition start.
      *   zM is always 1.0 (transition ends at the next integer zoom).
+     *
+     * Writes the pair into `out[outOffset..outOffset+1]`. `expr` is a live composite/camera
+     * expression (or anything else, which yields the default [0, 1]).
      */
-    private _computeZoomRange(prop: PossiblyEvaluatedPropertyValue<unknown>, floorZoom: number, outOffset: number): void {
+    private _computeZoomRange(expr: unknown, floorZoom: number, out: Float32Array, outOffset: number): void {
         // Default mix range: interpolate across the whole integer zoom step.
         let zm = 0.0;
         let zM = 1.0;
 
-        const expr = prop && prop.value as {kind?: string; interpolationType?: {name: string} | null; zoomStops?: number[]};
-        const stops = expr && expr.kind === 'composite' ? expr.zoomStops : null;
+        const e = expr as ZoomExpression | undefined;
+        const stops = e && (e.kind === 'composite' || e.kind === 'camera') ? e.zoomStops : null;
 
         // zoomStops are validated to be in strictly ascending order, so stops[0] is the lowest.
         if (stops && stops.length > 0) {
-            if (expr.interpolationType == null) {
+            if (e.interpolationType == null) {
                 // Step expression: the value holds constant across the step (zm == zM == 1.0)
                 // unless a boundary falls strictly inside it, where it jumps at that normalized
                 // position (zm == zM == stop - floorZoom).
@@ -468,74 +638,114 @@ export class SymbolPropertyBinderUBO {
             }
         }
 
-        this.sharedZoomRanges[outOffset] = zm;
-        this.sharedZoomRanges[outOffset + 1] = zM;
+        out[outOffset] = zm;
+        out[outOffset + 1] = zM;
     }
 
     /**
-     * Evaluate a float property and write it into the flat buffer in UBO-ready format.
-     *   non-zoom → flat[offset] = val, flat[offset+1] = 0
-     *   zoom-dep → flat[offset] = min, flat[offset+1] = max
+     * Compute the per-feature zoom range [zm, zM] for the resolved property and write it as two
+     * floats into the flat buffer at zoomFlatOffset/+1. The shader derives the interpolation factor
+     * from these and the current render-zoom fraction
+     */
+    private _writeZoomRange(prop: unknown, zoomFlatOffset: number): void {
+        const expr = prop && (prop as {value?: unknown}).value;
+        this._computeZoomRange(expr, this._floorZoom, evalFlatScratch, zoomFlatOffset);
+    }
+
+    /**
+     * Write a data-driven property's [zm, zM] range into the flat buffer:
+     *   appearance-zoom-stops → per-feature range, derived from this feature's resolved expression.
+     *   shared-stop zoom-dep  → the layer's shared range (computed once in updateHeader), so every
+     *                           feature's block carries the same [zm, zM] the shader mixes against.
+     *   non-zoom              → [0, 0] (irrelevant — the value slot duplicates min into max).
+     */
+    private _writePropertyZoomRange(i: number, isZoomDep: boolean, hasAppearanceZoomStops: boolean, prop: unknown, zoomFlatOffset: number): void {
+        if (hasAppearanceZoomStops) {
+            this._writeZoomRange(prop, zoomFlatOffset);
+        } else if (isZoomDep) {
+            evalFlatScratch[zoomFlatOffset] = this.sharedZoomRanges[i * 2];
+            evalFlatScratch[zoomFlatOffset + 1] = this.sharedZoomRanges[i * 2 + 1];
+        } else {
+            evalFlatScratch[zoomFlatOffset] = 0;
+            evalFlatScratch[zoomFlatOffset + 1] = 0;
+        }
+    }
+
+    /**
+     * Evaluate a float property and write it into the flat buffer in UBO-ready, zoom-ready format:
+     * flat[offset..offset+1] = [min, max]. Non-zoom properties duplicate min into max so the
+     * shader's branchless mix degenerates to it.
      */
     private _evaluateFloatValue(
         propName: string,
+        i: number,
         isZoomDep: boolean,
+        hasAppearanceZoomStops: boolean,
+        zoomFlatOffset: number,
         ctx: EvaluationContext,
         flatOffset: number
     ): void {
         const defaultVal = propName.endsWith('opacity') ? 1.0 : 0.0;
         const prop = this._resolveProp<number>(propName, ctx.activeAppearance);
 
+        this._writePropertyZoomRange(i, isZoomDep, hasAppearanceZoomStops, prop, zoomFlatOffset);
+
         // Constants (no prop / constant DataDrivenProperty) are never zoom-dependent, so they
-        // feed min and the max slot below stays 0.
+        // feed min and the max slot below duplicates it.
         const min =
             !prop ? defaultVal :
             prop.isConstant() ? prop.constantOr(defaultVal) :
             this._evalAt(prop, ctx.params, ctx);
 
-        evalFlatScratch[flatOffset] = min != null ? min : defaultVal;
+        const minVal = min ?? defaultVal;
+        evalFlatScratch[flatOffset] = minVal;
 
         if (isZoomDep) {
             const max = this._evalAt(prop, ctx.paramsNext, ctx);
-            evalFlatScratch[flatOffset + 1] = max != null ? max : defaultVal;
+            evalFlatScratch[flatOffset + 1] = max ?? defaultVal;
         } else {
-            evalFlatScratch[flatOffset + 1] = 0;
+            evalFlatScratch[flatOffset + 1] = minVal;
         }
     }
 
     /**
-     * Evaluate a translate property and write it into the flat buffer in UBO-ready format.
-     *   non-zoom → flat[offset..offset+3] = [tx, ty, 0, 0]
-     *   zoom-dep → flat[offset..offset+3] = [tx_min, ty_min, tx_max, ty_max]
+     * Evaluate a translate property and write it into the flat buffer in UBO-ready, zoom-ready
+     * format: flat[offset..offset+3] = [tx_min, ty_min, tx_max, ty_max]. Non-zoom properties
+     * duplicate min into max so the shader's branchless mix degenerates to it.
      */
     private _evaluateTranslateValue(
         propName: string,
+        i: number,
         isZoomDep: boolean,
+        hasAppearanceZoomStops: boolean,
+        zoomFlatOffset: number,
         ctx: EvaluationContext,
         flatOffset: number
     ): void {
         const prop = this._resolveProp<[number, number]>(propName, ctx.activeAppearance);
 
+        this._writePropertyZoomRange(i, isZoomDep, hasAppearanceZoomStops, prop, zoomFlatOffset);
+
         // translate is a DataConstantProperty at the layer level, so paint.get() returns the raw
         // [number, number] with no isConstant() wrapper; the appearance path is a DataDrivenProperty
-        // (constant or not). Constants are never zoom-dependent, so the max half below stays 0.
-        // A missing/null value falls back to 0 at the write below, avoiding a per-feature allocation.
+        // (constant or not). A missing/null value falls back to 0 at the write below
+        const evaluatable = !!prop && typeof prop.isConstant === 'function' && !prop.isConstant();
         const min =
             !prop ? undefined :
             typeof prop.isConstant !== 'function' ? (prop as unknown as [number, number]) :
-            prop.isConstant() ? prop.constantOr(ZERO_VEC2) :
-            this._evalAt(prop, ctx.params, ctx);
+            evaluatable ? this._evalAt(prop, ctx.params, ctx) :
+            prop.constantOr(ZERO_VEC2);
 
         evalFlatScratch[flatOffset] = min ? min[0] : 0;
         evalFlatScratch[flatOffset + 1] = min ? min[1] : 0;
 
         if (isZoomDep) {
-            const max = this._evalAt(prop, ctx.paramsNext, ctx);
+            const max = evaluatable ? this._evalAt(prop, ctx.paramsNext, ctx) : min;
             evalFlatScratch[flatOffset + 2] = max ? max[0] : 0;
             evalFlatScratch[flatOffset + 3] = max ? max[1] : 0;
         } else {
-            evalFlatScratch[flatOffset + 2] = 0;
-            evalFlatScratch[flatOffset + 3] = 0;
+            evalFlatScratch[flatOffset + 2] = evalFlatScratch[flatOffset];
+            evalFlatScratch[flatOffset + 3] = evalFlatScratch[flatOffset + 1];
         }
     }
 
@@ -782,8 +992,10 @@ export class SymbolPropertyBinderUBO {
         brightness?: number | null
     ): void {
         this.layer = styleLayer;
-        // Layer changed — constant uniform values may have new paint property values.
+        // Layer changed — constant uniform values may have new property values, and zoom
+        // stop values may have changed
         this.cachedConstantUniforms = null;
+        this._recomputeSharedRanges();
         // Skip per-feature re-evaluation when no data-driven properties: constant properties
         // are read from this.layer at draw time via getConstantUniformValues(), which was
         // already invalidated above.
@@ -843,17 +1055,19 @@ export class SymbolPropertyBinderUBO {
      * or brightness change.
      */
     getConstantUniformValues(renderZoom: number, brightness?: number | null): ConstantUniformValues {
-        const header = this.header;
         const hasCameraExpr = !!this.cameraMask;
-        const hasZoomDep = !!header[HEADER_ZOOM_DEPENDENT_MASK];
 
-        // Cache hit: zoom factors depend on renderZoom too, so we must also invalidate on
-        // renderZoom change when any property is zoom-dependent.
+        // Cache hit: camera (zoom-only) expressions must be re-evaluated at the current render
+        // zoom, so invalidate on renderZoom change when one is present.
+        // cachedConstantPaint guards against stale constant colors when a paint update arrives without
+        // a live transition (e.g. root transition {duration: 0}); layer.recalculate() produces a fresh
+        // layer.paint object whenever a paint/config change is applied.
         // Truthy check (not !== null) because the field may be undefined after worker→main
         // transfer (constructor is not called during deserialization, omitted fields stay undefined).
         if (this.cachedConstantUniforms &&
+                this.cachedConstantPaint === this.layer.paint &&
                 this.cachedConstantBrightness === brightness &&
-                ((!hasCameraExpr && !hasZoomDep) || this.cachedConstantRenderZoom === renderZoom)) {
+                (!hasCameraExpr || this.cachedConstantRenderZoom === renderZoom)) {
             return this.cachedConstantUniforms;
         }
 
@@ -890,25 +1104,10 @@ export class SymbolPropertyBinderUBO {
             const isCamera = !!(this.cameraMask & (1 << propIdx));
             if (isCamera && renderParams) {
                 const evaluated = prop.property.evaluate(prop.value, renderParams, emptyFeature, {}, undefined, []);
-                return evaluated != null ? evaluated : defaultVal;
+                return evaluated ?? defaultVal;
             }
             return prop.constantOr(defaultVal);
         };
-
-        // Precompute the zoom-interpolation factor for every zoom-dep property.
-        // Step expressions encode the snap as zm == zM.
-        const zoomFactors = new Float32Array(PROP_COUNT);
-        if (hasZoomDep) {
-            const uZoom = renderZoom - Math.floor(renderZoom);
-            for (let i = 0; i < PROP_COUNT; i++) {
-                if ((header[HEADER_ZOOM_DEPENDENT_MASK] & (1 << i)) === 0) continue;
-                const zm = this.sharedZoomRanges[i * 2];
-                const zM = this.sharedZoomRanges[i * 2 + 1];
-                zoomFactors[i] = zm === zM ?
-                    (uZoom >= zm ? 1.0 : 0.0) :
-                    Math.max(0, Math.min(1, (uZoom - zm) / (zM - zm)));
-            }
-        }
 
         const result: ConstantUniformValues = {
             'fill_np_color': getColor(0),
@@ -919,12 +1118,12 @@ export class SymbolPropertyBinderUBO {
             'emissive_strength': getFloat(5, 0.0),
             'occlusion_opacity': getFloat(6, 1.0),
             'z_offset': getFloat(7, 0.0),
-            zoomFactors,
         };
 
         this.cachedConstantUniforms = result;
         this.cachedConstantRenderZoom = renderZoom;
         this.cachedConstantBrightness = brightness;
+        this.cachedConstantPaint = this.layer.paint;
         return result;
     }
 
@@ -977,4 +1176,4 @@ export class SymbolPropertyBinderUBO {
 // 'layer' is omitted because SymbolStyleLayer is not serializable. It must be re-assigned on
 // the main thread before any main-thread method (getConstantUniformValues, bind, etc.) is called.
 // See draw_symbol.ts: `buffers.uboBinder.layer = layer` before drawSymbolElements().
-register(SymbolPropertyBinderUBO, 'SymbolPropertyBinderUBO', {omit: ['layer', 'cachedConstantUniforms', 'cachedConstantRenderZoom', 'cachedConstantBrightness', 'activeAppearanceByVtIndex', 'featureVertexRangesFromId', 'featureVertexRangesFromVtIndex']});
+register(SymbolPropertyBinderUBO, 'SymbolPropertyBinderUBO', {omit: ['layer', 'cachedConstantUniforms', 'cachedConstantRenderZoom', 'cachedConstantBrightness', 'cachedConstantPaint', 'activeAppearanceByVtIndex', 'featureVertexRangesFromId', 'featureVertexRangesFromVtIndex']});

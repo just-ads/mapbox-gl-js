@@ -188,7 +188,7 @@ export const operationHandlers = {
         doneCb();
     },
     setFov(map, params, doneCb) {
-        map.transform.fov = params[0];
+        map.setVerticalFieldOfView(params[0]);
         waitForRender(map, () => true, doneCb);
     },
     updateImage(map, params, doneCb) {
@@ -271,7 +271,7 @@ export const operationHandlers = {
         waitForRender(map, () => true, doneCb);
     },
     pinBooleanTransitionProgress(map, params, doneCb) {
-        throw new Error('pinBooleanTransitionProgress is driven natively in the SDK and is not supported in gl-js render tests. Add this test to test/ignores/all.js.');
+        throw new Error('pinBooleanTransitionProgress is driven natively in the SDK and is not supported in gl-js render tests. Add a skip-test rule to style.json.');
     }
 };
 

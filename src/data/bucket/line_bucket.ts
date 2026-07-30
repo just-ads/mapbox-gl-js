@@ -32,6 +32,7 @@ import {type ElevationType} from '../../../3d-style/elevation/elevation_constant
 
 import type Point from "@mapbox/point-geometry";
 import type {ElevationFeature, Range} from '../../../3d-style/elevation/elevation_feature';
+import type {ElevationParams} from '../../source/elevation_coverage_snapshot';
 import type {LineHDExtension} from '../../../3d-style/data/bucket/line_hd_extension';
 import type {ProjectionSpecification} from '../../style-spec/types';
 import type {CanonicalTileID, UnwrappedTileID} from '../../source/tile_id';
@@ -98,7 +99,7 @@ type LineClips = {
     end: number;
 };
 
-type GradientTexture = {
+export type GradientTexture = {
     texture: Texture;
     gradient: RGBAImage | null | undefined;
     version: number;
@@ -153,6 +154,9 @@ class LineBucket implements Bucket {
     gradients: {
         [key: string]: GradientTexture;
     };
+    borderGradients: {
+        [key: string]: GradientTexture;
+    };
     stateDependentLayers: Array<LineStyleLayer>;
     stateDependentLayerIds: Array<string>;
     patternFeatures: Array<BucketFeature>;
@@ -193,6 +197,7 @@ class LineBucket implements Bucket {
     elevationType: ElevationType = 'none';
     isSeaLevelReference: boolean = false;
     showElevationIdDebug: boolean = false;
+    terrainEnabled: boolean = false;
 
     // Optional HD augmentation, populated by maybeAttachLineHDExt
     // (3d-style/data/bucket/line_hd_extension.ts) when the layer declares
@@ -217,8 +222,10 @@ class LineBucket implements Bucket {
         this.patternFeatures = [];
         this.lineClipsArray = [];
         this.gradients = {};
+        this.borderGradients = {};
         this.layers.forEach(layer => {
             this.gradients[layer.id] = {} as GradientTexture;
+            this.borderGradients[layer.id] = {} as GradientTexture;
         });
 
         this.layoutVertexArray = new LineLayoutArray();
@@ -254,6 +261,7 @@ class LineBucket implements Bucket {
 
     populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID, tileTransform: TileTransform) {
         this.showElevationIdDebug = options.showElevationIdDebug;
+        this.terrainEnabled = options.terrainEnabled;
         this.hasPattern = hasPattern('line', this.layers, this.pixelRatio, options);
         const lineSortKey = this.layers[0].layout.get('line-sort-key');
 
@@ -330,7 +338,7 @@ class LineBucket implements Bucket {
                 this.patternFeatures.push(patternBucketFeature);
 
             } else {
-                this.addFeature(bucketFeature, geometry, index, canonical, lineAtlas.positions, options.availableImages, options.brightness, options.elevationFeatures);
+                this.addFeature(bucketFeature, geometry, index, canonical, lineAtlas.positions, options.availableImages, options.brightness, options.elevationFeatures, options.elevationParams, options.crossSourceElevationEnabled);
             }
 
             const feature = features[index].feature;
@@ -343,6 +351,7 @@ class LineBucket implements Bucket {
         if (!this.hasPattern && this.hdExt) {
             this.hdExt.buildFrcSegments(this);
         }
+        if (this.hdExt) this.hdExt.endPopulate();
     }
 
     addConstantDashes(lineAtlas: LineAtlas): boolean {
@@ -416,10 +425,11 @@ class LineBucket implements Bucket {
 
     addFeatures(options: PopulateParameters, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: ImageId[], _: TileTransform, brightness?: number | null) {
         for (const feature of this.patternFeatures) {
-            this.addFeature(feature, feature.geometry, feature.index, canonical, imagePositions, availableImages, brightness, options.elevationFeatures);
+            this.addFeature(feature, feature.geometry, feature.index, canonical, imagePositions, availableImages, brightness, options.elevationFeatures, options.elevationParams, options.crossSourceElevationEnabled);
         }
         if (this.hdExt) {
             this.hdExt.buildFrcSegments(this);
+            this.hdExt.endPopulate();
         }
     }
 
@@ -495,7 +505,7 @@ class LineBucket implements Bucket {
         }
     }
 
-    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: ImageId[], brightness?: number | null, elevationFeatures?: ElevationFeature[]) {
+    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, availableImages: ImageId[], brightness?: number | null, elevationFeatures?: ElevationFeature[], elevationParams?: ElevationParams | null, crossSourceElevationEnabled?: boolean) {
         const layout = this.layers[0].layout;
 
         const frc = this.hdExt ? this.hdExt.trackFeatureFrc(feature.properties) : null;
@@ -531,7 +541,7 @@ class LineBucket implements Bucket {
             }
         }
 
-        const handledByElevation = this.hdExt != null && this.hdExt.handleFeature(feature, geometry, canonical, elevationFeatures, join, cap, miterLimit, roundLimit, this);
+        const handledByElevation = this.hdExt != null && this.hdExt.handleFeature(feature, geometry, canonical, elevationFeatures, elevationParams, !!crossSourceElevationEnabled, join, cap, miterLimit, roundLimit, this);
         if (!handledByElevation) {
             for (let i = 0; i < geometry.length; i++) {
                 const line = geometry[i];
@@ -551,7 +561,8 @@ class LineBucket implements Bucket {
      * @private
      */
     fillNonElevatedRoadSegment(vertexOffset: number) {
-        for (let i = vertexOffset; i < this.layoutVertexArray.length; i++) {
+        const firstMissingZOffset = Math.max(vertexOffset, this.zOffsetVertexArray.length);
+        for (let i = firstMissingZOffset; i < this.layoutVertexArray.length; i++) {
             this.zOffsetVertexArray.emplaceBack(0, 0, 0, 0);
             if (this.showElevationIdDebug) {
                 this.elevationIdColVertexArray.emplaceBack(0, 0, 0);

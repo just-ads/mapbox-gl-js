@@ -1336,6 +1336,24 @@
          "doc": "Override the orientation of the model node in euler angles [x, y, z]."
        }
   },
+   "modelLightOverrides": {
+    "light-ambient-color": {
+      "type": "color",
+      "doc": "Override the color of ambient lights."
+    },
+    "light-ambient-intensity": {
+      "type": "number",
+      "doc": "Override the intensity of light-ambient-color (on a scale from 0 to 1)."
+    },
+     "light-directional-color": {
+      "type": "color",
+      "doc": "Override the color of directional lights."
+    },
+    "light-directional-intensity": {
+      "type": "number",
+      "doc": "Override the intensity of light-directional-color (on a scale from 0 to 1)."
+    }
+  },
   "modelNodeOverrides": {
     "*": {
        "type": "modelNodeOverride",
@@ -1392,6 +1410,11 @@
         "period": 360,
         "units": "degrees",
         "doc": "Orientation of the model in euler angles [x, y, z]."
+      },
+      "lightOverrides": {
+        "type": "modelLightOverrides",
+        "required": false,
+        "doc": "A collection of light overrides."
       },
       "nodeOverrides": {
         "type": "modelNodeOverrides",
@@ -1679,8 +1702,7 @@
       "type": "array",
       "value": "appearance",
       "supported-layer-types": ["symbol"],
-      "experimental": true,
-      "doc": "Conditional styling applied to symbol layer features based on dynamic conditions. If multiple conditions are true, only the first matching appearance will be applied. Only properties marked with 'Works with appearances' are supported."
+      "doc": "Conditional styling applied to symbol layer features based on dynamic conditions. If multiple conditions are true, only the first matching appearance will be applied. Only properties marked with 'Works with appearances' are supported. Known issue: at the moment having both `appearances` and `text-variable-anchor` in the same layer doesn't work correctly."
     }
   },
   "appearance": {
@@ -3991,7 +4013,7 @@
           ]
         }
       ],
-      "doc": "To increase the chance of placing high-priority labels on the map, you can provide an array of `text-anchor` locations: the renderer will attempt to place the label at each location, in order, before moving onto the next label. Use `text-justify: auto` to choose justification based on anchor position. To apply an offset, use the `text-radial-offset` or the two-dimensional `text-offset`.",
+      "doc": "To increase the chance of placing high-priority labels on the map, you can provide an array of `text-anchor` locations: the renderer will attempt to place the label at each location, in order, before moving onto the next label. Use `text-justify: auto` to choose justification based on anchor position. To apply an offset, use the `text-radial-offset` or the two-dimensional `text-offset`. Known issue: at the moment having both `appearances` and `text-variable-anchor` in the same layer doesn't work correctly.",
       "sdk-support": {
         "basic functionality": {
           "js": "0.54.0",
@@ -8908,7 +8930,6 @@
     },
     "line-border-width": {
       "type": "number",
-      "private": true,
       "doc": "The width of the line border. A value of zero means no border.",
       "default": 0.0,
       "minimum": 0.0,
@@ -8937,7 +8958,6 @@
     },
     "line-border-color": {
       "type": "color",
-      "private": true,
       "doc": "The color of the line border. If line-border-width is greater than zero and the alpha value of this color is 0 (default), the color for the border will be selected automatically based on the line color.",
       "default": "rgba(0, 0, 0, 0)",
       "use-theme": true,
@@ -8963,6 +8983,48 @@
         ]
       },
       "property-type": "data-driven"
+    },
+    "line-border-gradient": {
+      "type": "color",
+      "experimental": true,
+      "doc": "A gradient used to color the border of a line feature at various distances along its length. Defined using a `step` or `interpolate` expression which outputs a color for each corresponding `line-progress` input value. `line-progress` is a percentage of the line feature's total length as measured on the webmercator projected coordinate plane (a `number` between `0` and `1`). Takes precedence over `line-border-color`. Has no effect unless `line-border-width` is greater than zero. Can only be used with GeoJSON sources that specify `\"lineMetrics\": true`.",
+      "example": [
+        "step",
+        [
+          "line-progress"
+        ],
+        "blue",
+        0.5,
+        "gray"
+      ],
+      "use-theme": true,
+      "transition": false,
+      "requires": [
+        {
+          "!": "line-pattern"
+        },
+        {
+          "source": "geojson",
+          "has": {
+            "lineMetrics": true
+          }
+        }
+      ],
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.28.0",
+          "android": "11.28.0",
+          "ios": "11.28.0"
+        },
+        "data-driven styling": {}
+      },
+      "expression": {
+        "interpolated": true,
+        "parameters": [
+          "line-progress"
+        ]
+      },
+      "property-type": "color-ramp"
     },
     "line-occlusion-opacity": {
       "type": "number",
@@ -10612,6 +10674,21 @@
         "interpolated": false
       },
       "property-type": "data-constant"
+    },
+    "raster-allow-draping": {
+      "type": "boolean",
+      "default": true,
+      "experimental": true,
+      "doc": "Whether the raster layer is allowed to drape over terrain and globe. When disabled, the layer is rendered after all draped layers, which can change its position in the layer order. Disabling draping has a performance cost, since the terrain/globe geometry must be rendered again for each such layer.",
+      "transition": false,
+      "property-type": "data-constant",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "3.28.0",
+          "android": "11.28.0",
+          "ios": "11.28.0"
+        }
+      }
     }
   },
   "paint_raster-particle": {

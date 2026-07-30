@@ -1,15 +1,13 @@
 import Anchor from './anchor';
 import {getAnchors, getCenterAnchor} from './get_anchors';
 import {
-    shapeText,
+    shapeText} from './shaping';
+import {
     shapeIcon,
     WritingMode,
-    fitIconToText,
-    isPositionedIcon,
-    getPositionedIconSize,
-    isFullyStretchableX,
-    isFullyStretchableY
-} from './shaping';
+    fitIconToText
+} from './shaping_shared';
+import {evaluateVariableOffset, getAppearanceIconValues, getAppearanceTextValues, getScaledImageVariant, getAnchorJustification, computeFontScale, packSizeForVertex} from './symbol_layout_shared';
 import {getGlyphQuads, getIconQuads, getIconQuadsNumber, type SymbolQuad} from './quads';
 import {warnOnce, degToRad, clamp} from '../util/util';
 import {
@@ -20,7 +18,7 @@ import findPoleOfInaccessibility from '../util/find_pole_of_inaccessibility';
 import classifyRings from '../util/classify_rings';
 import EXTENT from '../style-spec/data/extent';
 import EvaluationParameters from '../style/evaluation_parameters';
-import {getRasterizedIconSize, getSizeData, SIZE_PACK_FACTOR, type SizeData} from './symbol_size';
+import {getSizeData} from './symbol_size';
 import ONE_EM from './one_em';
 import Point from '@mapbox/point-geometry';
 import murmur3 from '../util/murmur3';
@@ -33,21 +31,44 @@ import type {FrcCoveragePolygons} from '../source/frc_coverage_snapshot';
 import type {SymbolFeature} from '../data/bucket/symbol_bucket';
 import type SymbolBucket from '../data/bucket/symbol_bucket';
 import type {CanonicalTileID} from '../source/tile_id';
-import type {Shaping, PositionedIcon, TextJustify, SymbolAnchor} from './shaping';
+import type {Shaping, PositionedIcon, TextJustify, SymbolAnchor} from './shaping_shared';
 import type {GlyphMap} from '../render/glyph_manager';
 import type {CollisionBoxArray} from '../data/array_types';
 import type {StyleImage, StyleImageMap} from '../style/style_image';
 import type SymbolStyleLayer from '../style/style_layer/symbol_style_layer';
 import type {GlyphPositions} from '../render/glyph_atlas';
-import type {Layout, PossiblyEvaluated, PossiblyEvaluatedPropertyValue, PropertyValue} from '../style/properties';
+import type {PossiblyEvaluated, PossiblyEvaluatedPropertyValue, PropertyValue} from '../style/properties';
 import type Projection from '../geo/projection/projection';
 import type {vec3} from 'gl-matrix';
 import type {LayoutProps} from '../style/style_layer/symbol_style_layer_properties';
-import type ResolvedImage from '../style-spec/expression/types/resolved_image';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {ImageVariant, StringifiedImageVariant} from '../style-spec/expression/types/image_variant';
 import type {ImageRasterizationTasks} from '../render/image_manager';
 import type SymbolAppearance from '../style/appearance';
+
+function isPositionedIcon(icon: unknown): icon is PositionedIcon {
+    return icon["imagePrimary"] !== undefined &&
+        icon["top"] !== undefined &&
+        icon["bottom"] !== undefined &&
+        icon["left"] !== undefined &&
+        icon["right"] !== undefined;
+}
+
+function isFullyStretchableX(icon: PositionedIcon) {
+    const imagePrimary = icon.imagePrimary;
+    return !imagePrimary.stretchX;
+}
+
+function isFullyStretchableY(icon: PositionedIcon) {
+    const imagePrimary = icon.imagePrimary;
+    return !imagePrimary.stretchY;
+}
+
+function getPositionedIconSize(icon: PositionedIcon) {
+    const width = icon.right - icon.left;
+    const height = icon.bottom - icon.top;
+    return {width, height};
+}
 
 // The symbol layout process needs `text-size` evaluated at up to five different zoom levels, and
 // `icon-size` at up to three:
@@ -77,25 +98,8 @@ export type Sizes = {
 };
 
 type ImageTextAnchor = 'image-top' | 'image-bottom' | 'image-right' | 'image-left'
-export type TextAnchor =
-    'center'
-    | 'left'
-    | 'right'
-    | 'top'
-    | 'bottom'
-    | 'top-left'
-    | 'top-right'
-    | 'bottom-left'
-    | 'bottom-right';
 
-// The radial offset is to the edge of the text box
-// In the horizontal direction, the edge of the text box is where glyphs start
-// But in the vertical direction, the glyphs appear to "start" at the baseline
-// We don't actually load baseline data, but we assume an offset of ONE_EM - 17
-// (see "yOffset" in shaping.js)
-const baselineOffset = 7;
 const INVALID_TEXT_OFFSET = Number.POSITIVE_INFINITY;
-const sqrt2 = Math.sqrt(2);
 
 export const SymbolBucketConstants = {
     // this constant is based on the size of StructArray indexes used in a symbol
@@ -235,82 +239,6 @@ function getUpdateSymbolBoundingBox(
     }
 }
 
-export function evaluateVariableOffset(anchor: TextAnchor, [offsetX, offsetY]: [number, number]): [number, number] {
-    let x = 0, y = 0;
-
-    if (offsetY === INVALID_TEXT_OFFSET) { // radial offset
-        if (offsetX < 0) offsetX = 0; // Ignore negative offset.
-        // solve for r where r^2 + r^2 = offsetX^2
-        const hypotenuse = offsetX / sqrt2;
-        switch (anchor) {
-        case 'top-right':
-        case 'top-left':
-            y = hypotenuse - baselineOffset;
-            break;
-        case 'bottom-right':
-        case 'bottom-left':
-            y = -hypotenuse + baselineOffset;
-            break;
-        case 'bottom':
-            y = -offsetX + baselineOffset;
-            break;
-        case 'top':
-            y = offsetX - baselineOffset;
-            break;
-        }
-
-        switch (anchor) {
-        case 'top-right':
-        case 'bottom-right':
-            x = -hypotenuse;
-            break;
-        case 'top-left':
-        case 'bottom-left':
-            x = hypotenuse;
-            break;
-        case 'left':
-            x = offsetX;
-            break;
-        case 'right':
-            x = -offsetX;
-            break;
-        }
-
-    } else { // text offset
-        // Use absolute offset values.
-        offsetX = Math.abs(offsetX);
-        offsetY = Math.abs(offsetY);
-
-        switch (anchor) {
-        case 'top-right':
-        case 'top-left':
-        case 'top':
-            y = offsetY - baselineOffset;
-            break;
-        case 'bottom-right':
-        case 'bottom-left':
-        case 'bottom':
-            y = -offsetY + baselineOffset;
-            break;
-        }
-
-        switch (anchor) {
-        case 'top-right':
-        case 'bottom-right':
-        case 'right':
-            x = -offsetX;
-            break;
-        case 'top-left':
-        case 'bottom-left':
-        case 'left':
-            x = offsetX;
-            break;
-        }
-    }
-
-    return [x, y];
-}
-
 type ShapedTextOrientations = { horizontal: Partial<Record<PlacementTypes, Shaping>>, vertical?: Shaping };
 export type SymbolFeatureData = {
     feature: SymbolFeature,
@@ -326,10 +254,12 @@ export type SymbolFeatureData = {
     isSDFIcon: boolean,
     iconTextFit: "none" | "width" | "height" | "both",
     iconOffset: [number, number],
+    iconAnchor: SymbolAnchor,
     iconCollisionBounds?: SymbolBoundingBox | null,
     iconVerticalCollisionBounds?: SymbolBoundingBox | null,
     textCollisionBounds?: SymbolBoundingBox | null,
-    textVerticalCollisionBounds?: SymbolBoundingBox | null
+    textVerticalCollisionBounds?: SymbolBoundingBox | null,
+    elevationFeatureIndex?: number,
 };
 
 export type SymbolBucketData = {
@@ -417,15 +347,28 @@ export function performSymbolLayout(bucket: SymbolBucket,
     const textSize = layout.get('text-size');
 
     let hasAnySecondaryIcon = false;
-    const featureData = [];
+    const featureData: SymbolFeatureData[] = [];
 
     const checkFrcCoverage = coverageFrcMask != null && coverageFrcMask !== 0;
     for (const feature of bucket.features) {
 
-        // Skip features covered by FRC mask (symbol-level filtering from fadeRange[0])
+        // Skip features covered by FRC mask (symbol-level filtering from fadeRange[0]).
+        // Only buckets whose source/source-layer are in sdCoverageSourceLayers receive a mask (see worker_tile).
         if (checkFrcCoverage && feature.properties && isFeatureCoveredByFrcMask &&
             isFeatureCoveredByFrcMask(feature.properties, coverageFrcMask)) {
             continue;
+        }
+
+        let elevationFeatureIndex = 0xffff;
+        if (bucket.hdExt && feature.properties && Object.hasOwn(feature.properties, PROPERTY_ELEVATION_ID)) {
+            const elevationFeatureId = +feature.properties[PROPERTY_ELEVATION_ID];
+            if (!Number.isNaN(elevationFeatureId)) {
+                const resolved = bucket.hdExt.resolveRoadElevation(feature, elevationFeatureId);
+                if (resolved === 'defer') {
+                    continue;
+                }
+                elevationFeatureIndex = resolved;
+            }
         }
 
         const fontstack = layout.get('text-font').evaluate(feature, {}, canonical).join(',');
@@ -451,7 +394,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
 
             let textAnchor = layout.get('text-anchor').evaluate(feature, {}, canonical);
             imageTextAnchor = textAnchor.startsWith('image') ? textAnchor : false;
-            textAnchor = textAnchor.replace('image-', '') as TextAnchor;
+            textAnchor = textAnchor.replace('image-', '') as any;
             const variableTextAnchor = layout.get('text-variable-anchor');
 
             if (!variableTextAnchor) {
@@ -587,8 +530,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
             shapedIconText(shapedText, shapedIcon, imageTextAnchor, layoutTextSize, layoutIconSize);
         }
 
-        const glyphSize = ONE_EM,
-            fontScale = layoutTextSize * sizes.textScaleFactor / glyphSize;
+        const fontScale = computeFontScale(layoutTextSize, sizes.textScaleFactor);
         const {
             defaultShapedIcon,
             verticallyShapedIcon
@@ -596,11 +538,11 @@ export function performSymbolLayout(bucket: SymbolBucket,
 
         if (iconTextFit !== 'none' && shapedIcon && (isFullyStretchableX(shapedIcon) || isFullyStretchableY(shapedIcon))) {
             // For fully stretchable icons, we can rasterize them at the full resolution now that we know it
-            scaleShapedIconImage(defaultShapedIcon.imagePrimary, primaryImage, iconPrimary, shapedIcon, defaultShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
-            scaleShapedIconImage(defaultShapedIcon.imageSecondary, secondaryImage, iconSecondary, shapedIcon, defaultShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+            scaleShapedIconImage(primaryImage, iconPrimary, shapedIcon, defaultShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+            scaleShapedIconImage(secondaryImage, iconSecondary, shapedIcon, defaultShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
             if (verticallyShapedIcon) {
-                scaleShapedIconImage(verticallyShapedIcon.imagePrimary, primaryImage, iconPrimary, shapedIcon, verticallyShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
-                scaleShapedIconImage(verticallyShapedIcon.imageSecondary, secondaryImage, iconSecondary, shapedIcon, verticallyShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+                scaleShapedIconImage(primaryImage, iconPrimary, shapedIcon, verticallyShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+                scaleShapedIconImage(secondaryImage, iconSecondary, shapedIcon, verticallyShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
             }
         }
 
@@ -632,12 +574,14 @@ export function performSymbolLayout(bucket: SymbolBucket,
             iconCollisionBounds: iconBBox,
             iconVerticalCollisionBounds: iconVerticalBBox,
             textCollisionBounds: textBBox,
-            textVerticalCollisionBounds: textVerticalBBox
+            textVerticalCollisionBounds: textVerticalBBox,
+            elevationFeatureIndex,
         });
 
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    if (bucket.hdExt) bucket.hdExt.clearWorkerState();
+
     return {featureData, sizes, hasAnySecondaryIcon, textAlongLine, symbolPlacement, coverageFrcMask, coveragePolygons, coverageTileZoom, isFeatureCoveredByFrcMask, symbolAnchorInFrcCoverage};
 
 }
@@ -748,8 +692,10 @@ function updateIconBoundingBoxes(input: {
 
     if (imagePositionToUse) {
         appearanceShapedIcon = shapeIcon(imagePositionToUse, null, appearanceIconOffset, iconAnchor);
+        // Vertical placement uses the same shaped icon (no icon-text-fit here, so no divergence);
+        // getUpdateSymbolBoundingBox only reads the shape, so sharing the object is safe.
         if (bucket.allowVerticalPlacement) {
-            appearanceVerticallyShapedIcon = shapeIcon(imagePositionToUse, null, appearanceIconOffset, iconAnchor);
+            appearanceVerticallyShapedIcon = appearanceShapedIcon;
         }
     }
 
@@ -771,32 +717,6 @@ function updateIconBoundingBoxes(input: {
 // Used by both the worker-thread layout phase and main-thread updateAppearances().
 // Not moved to appearance.ts because they depend on SymbolStyleLayer for token resolution,
 // which would create a circular import.
-
-export function getAppearanceIconValues(appearance: SymbolAppearance, symbolLayer: SymbolStyleLayer, feature: SymbolFeature,
-    canonical: CanonicalTileID, iconOffset: [number, number], baseIconRotate: number, layoutIconSize: number, iconScaleFactor: number) {
-    const appearanceIconOffsetValue = appearance.hasLayoutProperty('icon-offset') ?
-        symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'icon-offset', feature, canonical, []) :
-        null;
-    const appearanceIconOffset = (appearanceIconOffsetValue && Array.isArray(appearanceIconOffsetValue)) ?
-        appearanceIconOffsetValue as unknown as [number, number] :
-        iconOffset;
-
-    const appearanceIconRotateValue = appearance.hasLayoutProperty('icon-rotate') ?
-        symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'icon-rotate', feature, canonical, []) :
-        null;
-    const appearanceIconRotate = (typeof appearanceIconRotateValue === 'number') ?
-        appearanceIconRotateValue :
-        baseIconRotate;
-
-    const appearanceIconSizeValue = appearance.hasLayoutProperty('icon-size') ?
-        symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'icon-size', feature, canonical, []) :
-        null;
-    const appearanceIconSize = (typeof appearanceIconSizeValue === 'number') ?
-        appearanceIconSizeValue * iconScaleFactor :
-        layoutIconSize;
-
-    return {appearanceIconOffset, appearanceIconRotate, appearanceIconSize};
-}
 
 function getAppearanceImagePosition(bucket: SymbolBucket, symbolLayer: SymbolStyleLayer, appearance: SymbolAppearance, feature: SymbolFeature, canonical: CanonicalTileID,
     imagePositions: ImagePositionMap, iconScaleFactor: number, availableImages: ImageId[]) {
@@ -852,33 +772,7 @@ function updateTextBoundingBoxes(input: {
     }
 }
 
-export function getAppearanceTextValues(appearance: SymbolAppearance, symbolLayer: SymbolStyleLayer, feature: SymbolFeature,
-    canonical: CanonicalTileID, textOffset: [number, number], baseTextRotate: number, layoutTextSize: number) {
-    const appearanceTextOffsetValue = appearance.hasLayoutProperty('text-offset') ?
-        symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'text-offset', feature, canonical, []) :
-        null;
-    const appearanceTextOffset = (appearanceTextOffsetValue && Array.isArray(appearanceTextOffsetValue)) ?
-        [appearanceTextOffsetValue[0] * ONE_EM, appearanceTextOffsetValue[1] * ONE_EM] as [number, number] :
-        textOffset;
-
-    const appearanceTextRotateValue = appearance.hasLayoutProperty('text-rotate') ?
-        symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'text-rotate', feature, canonical, []) :
-        null;
-    const appearanceTextRotate = (typeof appearanceTextRotateValue === 'number') ?
-        appearanceTextRotateValue :
-        baseTextRotate;
-
-    const appearanceTextSizeValue = appearance.hasLayoutProperty('text-size') ?
-        symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'text-size', feature, canonical, []) :
-        null;
-    const appearanceTextSize = (typeof appearanceTextSizeValue === 'number') ?
-        appearanceTextSizeValue :
-        layoutTextSize;
-
-    return {appearanceTextOffset, appearanceTextRotate, appearanceTextSize};
-}
-
-function scaleShapedIconImage(outImagePosition: ImagePosition, image: StyleImage, variant: ImageVariant, beforeFitIcon: PositionedIcon, afterFitIcon: PositionedIcon,
+function scaleShapedIconImage(image: StyleImage, variant: ImageVariant, beforeFitIcon: PositionedIcon, afterFitIcon: PositionedIcon,
     iconTextFit: IconTextFit, imageRasterizationTasks: ImageRasterizationTasks, imageMap: StyleImageMap<StringifiedImageVariant>, imagePositions: ImagePositionMap) {
     if (!image || !image.usvg) return;
 
@@ -893,20 +787,6 @@ function scaleShapedIconImage(outImagePosition: ImagePosition, image: StyleImage
     imageMap.set(scaledIconId, image);
     const {imagePosition} = getImagePosition(scaledIconId, image, ICON_PADDING);
     imagePositions.set(scaledIconId, imagePosition);
-    outImagePosition = imagePosition;
-}
-
-function scaleImageVariant(image: ImageVariant | null, iconSizeData: SizeData, iconSize: PropertyValue<number, PossiblyEvaluatedPropertyValue<number>>, tileID: CanonicalTileID, zoom: number, feature: SymbolFeature, pixelRatio: number, iconScaleFactor: number, worldview: string | undefined, availableImages?: ImageId[]) {
-    if (!image) return undefined;
-    const iconSizeFactor = getRasterizedIconSize(iconSizeData, iconSize, tileID, zoom, feature, worldview, availableImages);
-    const scaleFactor = iconSizeFactor * iconScaleFactor * pixelRatio;
-    return image.scaleSelf(scaleFactor);
-}
-
-export function getScaledImageVariant(icon: ResolvedImage, iconSizeData: SizeData, iconSize: PropertyValue<number, PossiblyEvaluatedPropertyValue<number>>, tileID: CanonicalTileID, zoom: number, feature: SymbolFeature, pixelRatio: number, iconScaleFactor: number, worldview: string | undefined, availableImages?: ImageId[]) {
-    const iconPrimary = scaleImageVariant(icon.getPrimary(), iconSizeData, iconSize, tileID, zoom, feature, pixelRatio, iconScaleFactor, worldview, availableImages);
-    const iconSecondary = scaleImageVariant(icon.getSecondary(), iconSizeData, iconSize, tileID, zoom, feature, pixelRatio, iconScaleFactor, worldview, availableImages);
-    return {iconPrimary, iconSecondary};
 }
 
 export function checkCrossFadeImagePositions(primary: ImageVariant, secondary: ImageVariant, iconPositions: ImagePositionMap) {
@@ -955,7 +835,7 @@ export function postRasterizationSymbolLayout(bucket: SymbolBucket, bucketData: 
             iconOffset
             , iconCollisionBounds, iconVerticalCollisionBounds,
             textCollisionBounds, textVerticalCollisionBounds
-        } = data;
+        , elevationFeatureIndex} = data;
 
         // Image positions in shapedIcon and shapedText need to be updated since after rasterization, positions in the atlas will have
         // changed
@@ -968,7 +848,7 @@ export function postRasterizationSymbolLayout(bucket: SymbolBucket, bucketData: 
             addFeature(bucket, feature, shapedTextOrientations, shapedIcon, verticallyShapedIcon, imageMap, sizes, layoutTextSize,
                 layoutIconSize, textOffset, isSDFIcon, availableImages, canonical, projection, brightness, hasAnySecondaryIcon, iconTextFit,
                 iconOffset, textAlongLine, symbolPlacement, iconCollisionBounds, iconVerticalCollisionBounds, textCollisionBounds, textVerticalCollisionBounds,
-                coverageFrcMask, coveragePolygons, coverageTileZoom, symbolAnchorInFrcCoverage);
+                coverageFrcMask, coveragePolygons, coverageTileZoom, symbolAnchorInFrcCoverage, elevationFeatureIndex);
         }
     }
 
@@ -1076,20 +956,6 @@ function reconcileTextOrientationImagePositions(shapedText: Shaping | null, atla
 }
 
 // Choose the justification that matches the direction of the TextAnchor
-export function getAnchorJustification(anchor: TextAnchor): TextJustify {
-    switch (anchor) {
-    case 'right':
-    case 'top-right':
-    case 'bottom-right':
-        return 'right';
-    case 'left':
-    case 'top-left':
-    case 'bottom-left':
-        return 'left';
-    }
-    return 'center';
-}
-
 /**
  * for "very" overscaled tiles (overscaleFactor > 2) on high zoom levels (z > 18)
  * we use the tile pixel ratio from the previous zoom level and clamp it to 1
@@ -1130,12 +996,6 @@ function fitIconsToText(bucket: SymbolBucket, shapedIcon: PositionedIcon | undef
     return {defaultShapedIcon, verticallyShapedIcon};
 }
 
-export function computeFontScale(textSize: number, textScaleFactor: number) {
-    const glyphSize = ONE_EM;
-    const fontScale = textSize * textScaleFactor / glyphSize;
-    return fontScale;
-}
-
 /**
  * Given a feature and its shaped text and icon data, add a 'symbol
  * instance' for each _possible_ placement of the symbol feature.
@@ -1170,7 +1030,8 @@ function addFeature(bucket: SymbolBucket,
                     coverageFrcMask?: number | null,
                     coveragePolygons?: FrcCoveragePolygons | null,
                     coverageTileZoom?: number | null,
-                    symbolAnchorInFrcCoverage?: ((coveragePolygons: FrcCoveragePolygons, properties: Record<string, unknown>, anchor: Anchor, canonical: CanonicalTileID, coverageTileZoom: number | null) => boolean) | null) {
+                    symbolAnchorInFrcCoverage?: ((coveragePolygons: FrcCoveragePolygons, properties: Record<string, unknown>, anchor: Anchor, canonical: CanonicalTileID, coverageTileZoom: number | null) => boolean) | null,
+                    elevationFeatureIndex: number = 0xffff) {
     // To reduce the number of labels that jump around when zooming we need
     // to use a text-size value that is the same for all zoom levels.
     // bucket calculates text-size at a high zoom level so that all tiles can
@@ -1212,10 +1073,6 @@ function addFeature(bucket: SymbolBucket,
     if (bucket.hasAnyIconTextFit === false && hasIconTextFit) {
         bucket.hasAnyIconTextFit = true;
     }
-
-    const elevationFeatureId = feature.properties ? +feature.properties[PROPERTY_ELEVATION_ID] : null;
-    const elevationFeatureIdToIndex = bucket.hdExt ? bucket.hdExt.elevationFeatureIdToIndex : undefined;
-    const elevationFeatureIndex = elevationFeatureId && elevationFeatureIdToIndex ? elevationFeatureIdToIndex.get(elevationFeatureId) : 0xffff;
 
     const addSymbolAtAnchor = (line: Array<Point>, anchor: Anchor, canonicalId: CanonicalTileID) => {
         if (anchor.x < 0 || anchor.x >= EXTENT || anchor.y < 0 || anchor.y >= EXTENT) {
@@ -1346,10 +1203,6 @@ function addFeature(bucket: SymbolBucket,
     }
 }
 
-const MAX_GLYPH_ICON_SIZE = 255;
-const MAX_PACKED_SIZE = MAX_GLYPH_ICON_SIZE * SIZE_PACK_FACTOR;
-export {MAX_PACKED_SIZE};
-
 type PlacementTypes = 'vertical' | 'center' | 'left' | 'right';
 
 function addTextVertices(bucket: SymbolBucket,
@@ -1412,32 +1265,6 @@ function addTextVertices(bucket: SymbolBucket,
     }
 
     return glyphQuads.length * 4;
-}
-
-export function packSizeForVertex(layerId: string, inputSizeData: SizeData, evaluatedTextSize: number,
-    scaleFactor: number, minZoomSize: number, maxZoomSize: number
-) {
-    const sizeData = inputSizeData;
-    let effectiveSizeData: number[] = null;
-
-    if (sizeData.kind === 'source') {
-        effectiveSizeData = [
-            SIZE_PACK_FACTOR * evaluatedTextSize * scaleFactor
-        ];
-        if (effectiveSizeData[0] > MAX_PACKED_SIZE) {
-            warnOnce(`${layerId}: Value for "text-size" or "icon-size" is >= ${MAX_GLYPH_ICON_SIZE}. Reduce your "text-size" or "icon-size".`);
-        }
-    } else if (sizeData.kind === 'composite') {
-        effectiveSizeData = [
-            SIZE_PACK_FACTOR * minZoomSize * scaleFactor,
-            SIZE_PACK_FACTOR * maxZoomSize * scaleFactor
-        ];
-        if (effectiveSizeData[0] > MAX_PACKED_SIZE || effectiveSizeData[1] > MAX_PACKED_SIZE) {
-            warnOnce(`${layerId}: Value for "text-size" or "icon-size" is >= ${MAX_GLYPH_ICON_SIZE}. Reduce your "text-size" or "icon-size".`);
-        }
-    }
-
-    return effectiveSizeData;
 }
 
 function getDefaultHorizontalShaping(horizontalShaping: Partial<Record<TextJustify, Shaping>>): Shaping | null {
@@ -1631,7 +1458,7 @@ function addSymbol(bucket: SymbolBucket,
         // Calculate maximum quads needed across layout icon and all appearance variants
         // to prevent vertex buffer overflow during appearance updates
         const maxQuadCount = calculateMaxIconQuadCount(bucket, iconQuads, verticalIconQuads,
-            layer.layout, layer._unevaluatedLayout, feature, canonical, bucket.iconAtlasPositions,
+            layer.layout, feature, canonical, bucket.iconAtlasPositions,
             hasIconTextFit, availableImages);
         numIconVertices = maxQuadCount * 4;
 
@@ -1813,7 +1640,6 @@ function calculateMaxIconQuadCount(
     iconQuads: Array<SymbolQuad>,
     verticalIconQuads: Array<SymbolQuad> | undefined,
     layout: PossiblyEvaluated<LayoutProps>,
-    unevaluatedLayout: Layout<LayoutProps>,
     feature: SymbolFeature,
     canonical: CanonicalTileID,
     imagePositions: ImagePositionMap,
@@ -1838,27 +1664,14 @@ function calculateMaxIconQuadCount(
     const [iconSizeScaleRangeMin, iconSizeScaleRangeMax] = layout.get('icon-size-scale-range');
     const iconScaleFactor = clamp(1, iconSizeScaleRangeMin, iconSizeScaleRangeMax);
 
-    // Check each appearance that has an icon to find maximum quad count needed
+    // Check each appearance that has an icon to find maximum quad count needed.
+    // The image variant is recomputed (rather than reused) because imagePositions is keyed by the
+    // stringified sized icon, so we need getAppearanceImagePosition's exact same resolution here.
     for (const appearance of appearances) {
         if (appearance.hasLayoutProperty('icon-image')) {
-            const appearanceIconImage = symbolLayer.getAppearanceValueAndResolveTokens(appearance, 'icon-image', feature, canonical, availableImages);
-            if (appearanceIconImage) {
-                const icon = bucket.getResolvedImageFromTokens(appearanceIconImage as string);
-                if (icon) {
-                    // Ideally we shouldn't need to compute the scaled image variant because all
-                    // different sized versions of the same icon have the same number of stretchable
-                    // areas, which is what we need but unfortunately, since imagePositions stores the
-                    // position by the stringified sized icon we need to compute it
-                    const unevaluatedIconSize = (appearance.hasLayoutProperty('icon-size') ?
-                        appearance.getUnevaluatedLayoutProperty('icon-size') :
-                        unevaluatedLayout._values['icon-size']) as PropertyValue<number, PossiblyEvaluatedPropertyValue<number>>;
-                    const iconSizeData = getSizeData(bucket.zoom, unevaluatedIconSize, bucket.worldview, availableImages);
-                    const imageVariant = getScaledImageVariant(icon, iconSizeData, unevaluatedIconSize, canonical, bucket.zoom, feature, bucket.pixelRatio, iconScaleFactor, bucket.worldview, availableImages);
-                    const imagePosition = imagePositions.get(imageVariant.iconPrimary.toString());
-                    if (imagePosition) {
-                        maxQuadCount = Math.max(maxQuadCount, getIconQuadsNumber(imagePosition, hasIconTextFit));
-                    }
-                }
+            const imagePosition = getAppearanceImagePosition(bucket, symbolLayer, appearance, feature, canonical, imagePositions, iconScaleFactor, availableImages);
+            if (imagePosition) {
+                maxQuadCount = Math.max(maxQuadCount, getIconQuadsNumber(imagePosition, hasIconTextFit));
             }
         }
     }

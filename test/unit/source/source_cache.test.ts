@@ -1,8 +1,9 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
-import {describe, test, expect, waitFor, vi} from '../../util/vitest';
+import {describe, test, expect, waitFor, vi, beforeAll} from '../../util/vitest';
 import SourceCache from '../../../src/source/source_cache';
 import {create, setType} from '../../../src/source/source';
+import {ensureSourceType} from '../../../src/source/lazy_source_types';
 import Tile from '../../../src/source/tile';
 import {QueryGeometry} from '../../../src/style/query_geometry';
 import {OverscaledTileID} from '../../../src/source/tile_id';
@@ -2157,6 +2158,15 @@ test('sortCoordinatesByDistance', () => {
     sourceCache.getSource().onAdd();
 });
 
+test('sortCoordinatesByDistance without transform', () => {
+    const {sourceCache} = createSourceCache({});
+    const coords = [
+        new OverscaledTileID(2, 0, 2, 1, 1),
+        new OverscaledTileID(2, 0, 2, 0, 0),
+    ];
+    expect(sourceCache.sortCoordinatesByDistance(coords)).toStrictEqual(coords);
+});
+
 describe('shadow caster tiles', () => {
     const transform = new Transform();
     transform.resize(512, 512);
@@ -2233,6 +2243,12 @@ describe('shadow caster tiles', () => {
 });
 
 describe('SourceCache#hasTransition', () => {
+    // raster-array is registered lazily (its class lives in a code-split module); register it
+    // up front so the synchronous `create()` below can resolve the type.
+    beforeAll(async () => {
+        await ensureSourceType('raster-array');
+    });
+
     test('returns true for raster-array source with fading tile', () => {
         const {sourceCache} = createSourceCache({
             type: 'raster-array',

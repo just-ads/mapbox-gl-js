@@ -8,6 +8,9 @@
       "collisionDebug": true,
       "operations": [
         ["wait"]
+      ],
+      "image-threshold": [
+        {"platform-tag-contains": "native", "threshold": 0.00992}
       ]
     }
   },

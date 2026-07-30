@@ -1,10 +1,10 @@
 import Point from '@mapbox/point-geometry';
 import assert from '../../style-spec/util/assert';
 import {mat4, vec4} from 'gl-matrix';
-import {clamp, warnOnce} from '../../util/util';
+import {warnOnce} from '../../util/util';
 import CollisionIndex from '../collision_index';
 import ONE_EM from '../one_em';
-import {WritingMode} from '../shaping';
+import {WritingMode} from '../shaping_shared';
 import {evaluateSizeForFeature} from '../symbol_size';
 import {Elevation} from '../../terrain/elevation';
 import toEvaluationFeature from '../../data/evaluation_feature';
@@ -24,8 +24,8 @@ import type SymbolBucket from '../../data/bucket/symbol_bucket';
 import type {SingleCollisionBox, CollisionArrays} from '../../data/bucket/symbol_bucket';
 import type {SymbolInstance} from '../../data/array_types';
 import type {BucketPart, CollisionGroup, Placement} from '../placement';
-import type {Orientation} from '../shaping';
-import type {TextAnchor} from '../symbol_layout';
+import type {Orientation} from '../shaping_shared';
+import type {TextAnchor} from '../symbol_layout_shared';
 import type {InterpolatedSize} from '../symbol_size';
 import type {PlacedCollisionBox, PlacedCollisionCircles} from '../collision_index';
 import type {Feature} from '../../style-spec/expression/index';
@@ -48,7 +48,6 @@ export class DefaultPlacementAlgorithm implements PlacementAlgorithm {
         bucketPart: BucketPart,
         seenCrossTileIDs: Set<number>,
         showCollisionBoxes: boolean,
-        updateCollisionBoxIfNecessary: boolean,
         scaleFactor: number = 1,
     ): void {
         const {
@@ -80,10 +79,6 @@ export class DefaultPlacementAlgorithm implements PlacementAlgorithm {
         const symbolZOffset = paint.get('symbol-z-offset');
         const elevationFromSea = layout.get('symbol-elevation-reference') === 'sea';
         const symbolPlacement = layout.get('symbol-placement');
-        const [textSizeScaleRangeMin, textSizeScaleRangeMax] = layout.get('text-size-scale-range');
-        const [iconSizeScaleRangeMin, iconSizeScaleRangeMax] = layout.get('icon-size-scale-range');
-        const textScaleFactor = clamp(scaleFactor, textSizeScaleRangeMin, textSizeScaleRangeMax);
-        const iconScaleFactor = clamp(scaleFactor, iconSizeScaleRangeMin, iconSizeScaleRangeMax);
         const textVariableAnchor = layout.get('text-variable-anchor');
 
         const isTextPlacedAlongLine = textRotateWithMap && symbolPlacement !== 'point';
@@ -104,10 +99,6 @@ export class DefaultPlacementAlgorithm implements PlacementAlgorithm {
 
         if (!bucket.collisionArrays && collisionBoxArray) {
             bucket.deserializeCollisionBoxes(collisionBoxArray);
-        }
-
-        if (showCollisionBoxes && updateCollisionBoxIfNecessary) {
-            bucket.updateCollisionDebugBuffers(placement.transform.zoom, collisionBoxArray, textScaleFactor, iconScaleFactor);
         }
 
         const placeSymbol = (symbolInstance: SymbolInstance, boxIndex: number, collisionArrays: CollisionArrays) => {
@@ -203,12 +194,20 @@ export class DefaultPlacementAlgorithm implements PlacementAlgorithm {
                 verticalTextFeatureIndex = collisionArrays.verticalTextFeatureIndex;
             }
 
-            const elevationFeature = bucket.hdExt ? bucket.hdExt.elevationFeatures[symbolInstance.elevationFeatureIndex] : undefined;
-
             const updateBoxData = (box: SingleCollisionBox) => {
                 box.tileID = placement.retainedQueryData[bucket.bucketInstanceId].tileID;
-                const elevation = placement.transform.elevation;
-                box.elevation = (elevationFromSea ? symbolZOffsetValue : symbolZOffsetValue + (Elevation.getAtTileOffset(box.tileID, new Point(box.tileAnchorX, box.tileAnchorY), elevation, elevationFeature)));
+                const terrainElevation = placement.transform.elevation;
+                if (bucket.elevationType === 'road') {
+                    // Road markup height is baked into symbolInstance.zOffset by updateRoadElevation.
+                    // Do not re-sample elevationFeature (wrong coordinate space for cross-source tiles).
+                    box.elevation = elevationFromSea ?
+                        symbolZOffsetValue :
+                        symbolZOffsetValue + Elevation.getAtTileOffset(
+                            box.tileID, new Point(box.tileAnchorX, box.tileAnchorY), terrainElevation, null);
+                } else {
+                    const elevationFeature = bucket.hdExt ? bucket.hdExt.elevationFeatures[symbolInstance.elevationFeatureIndex] : undefined;
+                    box.elevation = (elevationFromSea ? symbolZOffsetValue : symbolZOffsetValue + (Elevation.getAtTileOffset(box.tileID, new Point(box.tileAnchorX, box.tileAnchorY), terrainElevation, elevationFeature)));
+                }
                 box.elevation += symbolInstance.zOffset;
             };
 

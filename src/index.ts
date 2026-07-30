@@ -24,8 +24,16 @@ import {prewarm, clearPrewarmedResources} from './util/worker_pool_factory';
 import {clearTileCache, getCacheContainer} from './util/tile_request_cache';
 import {FreeCameraOptions} from './ui/free_camera';
 import browser from './util/browser';
+import {isMapboxHTTPCDNURL} from './util/mapbox_url';
+import {setSdkInfo, setBundleDistribution} from './util/mapbox';
 
 import type {Class} from './types/class';
+
+// Detect whether this UMD/CSP bundle was served from the Mapbox CDN (telemetry only).
+// Classic scripts expose their URL via `document.currentScript`; the `typeof document`
+// guard keeps the bundle importable in Node/SSR.
+const currentScript = typeof document !== 'undefined' ? document.currentScript as HTMLScriptElement | null : null;
+setBundleDistribution(currentScript && currentScript.src && isMapboxHTTPCDNURL(currentScript.src) ? 'cdn' : 'other');
 
 // Explicit type re-exports
 export type * from './ui/events';
@@ -40,8 +48,7 @@ export type {Event, ErrorEvent} from './util/evented';
 export type {GeoJSONFeature, TargetFeature} from './util/vectortile_to_geojson';
 export type {InteractionEvent} from './ui/interactions';
 export type {PaddingOptions} from './geo/edge_insets';
-export type {RequestParameters} from './util/ajax';
-export type {RequestTransformFunction, ResourceType} from './util/mapbox';
+export type {RequestParameters, RequestTransformFunction, ResourceType} from './util/ajax';
 export type {LngLatLike, LngLatBoundsLike} from './geo/lng_lat';
 
 export type {FeatureSelector} from './style/style';
@@ -85,6 +92,7 @@ const exported = {
     notSupportedReason,
     setRTLTextPlugin,
     getRTLTextPluginStatus,
+    setSdkInfo,
     addTileProvider,
     Map,
     NavigationControl,

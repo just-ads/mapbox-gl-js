@@ -9,13 +9,8 @@ import type {OverscaledTileID} from '../source/tile_id';
 import type {PluginState} from '../source/rtl_text_plugin';
 import type {StyleImageMap} from '../style/style_image';
 import type {TDecodingResult, TProcessingBatch} from '../data/mrt/types';
-import type {
-    WorkerCoverTilesRequest,
-    WorkerCoverTilesResult,
-    WorkerSourceRasterTileRequest,
-    WorkerSourceRequest,
-    WorkerSourceTileRequest
-} from '../source/worker_source';
+import type {Source} from '../source/source';
+import type {WorkerSourceTileRequest, WorkerSourceType} from '../source/worker_source';
 import type {StyleModelMap} from '../style/style_mode';
 import type {IndoorData} from '../style/indoor_data';
 import type {AtlasContentDescriptor} from '../render/atlas_content_descriptor';
@@ -63,7 +58,7 @@ export type WorkerInbox = {
     };
 
     'decodeRasterArray': {
-        params: WorkerSourceTileRequest & { buffer: ArrayBuffer; task: TProcessingBatch };
+        params: WorkerSourceTileRequest & {buffer: ArrayBuffer; task: TProcessingBatch};
         result: TDecodingResult[];
     };
 
@@ -72,18 +67,26 @@ export type WorkerInbox = {
         result: void;
     };
 
+    // Preloads the lazily-imported raster-array worker source (and, transitively, the MRT decoder)
+    // so its serializable classes are registered before the first `decodeRasterArray` message,
+    // whose payload carries an `MRTDecodingBatch` instance, is deserialized.
+    'ensureRasterArraySource': {
+        params: void;
+        result: void;
+    };
+
     'geojson.getClusterChildren': {
-        params: { clusterId: number; source: string; scope: string; };
+        params: {clusterId: number; source: string; scope: string;};
         result: GeoJSON.Feature[];
     };
 
     'geojson.getClusterExpansionZoom': {
-        params: { clusterId: number; source: string; scope: string; };
+        params: {clusterId: number; source: string; scope: string;};
         result: number;
     };
 
     'geojson.getClusterLeaves': {
-        params: { source: string; scope: string; clusterId: number; limit: number; offset: number; };
+        params: {source: string; scope: string; clusterId: number; limit: number; offset: number;};
         result: GeoJSON.Feature[];
     };
 
@@ -102,7 +105,8 @@ export type WorkerInbox = {
             name: string;
             url: string;
             source: string;
-             scope: string; type: string;
+            scope: string;
+            type: WorkerSourceType;
             options: Partial<SourceSpecification>;
             request?: RequestParameters;
         };
@@ -115,7 +119,8 @@ export type WorkerInbox = {
     };
 
     'removeSource': {
-        params: WorkerSourceRequest;
+        // Every source kind reaches here, not just the worker-backed ones.
+        params: {type: Source['type']; source: string; scope: string};
         result: void;
     };
 
@@ -135,7 +140,7 @@ export type WorkerInbox = {
     };
 
     'setImages': {
-        params: { images: ImageId[]; scope: string; isSpriteLoaded?: boolean};
+        params: {images: ImageId[]; scope: string; isSpriteLoaded?: boolean};
         result: void;
     };
 
@@ -145,12 +150,12 @@ export type WorkerInbox = {
     };
 
     'setLayers': {
-        params: { layers: LayerSpecification[]; scope: string; options: ConfigOptions };
+        params: {layers: LayerSpecification[]; scope: string; options: ConfigOptions};
         result: void;
     };
 
     'setModels': {
-        params: { models: StyleModelMap; scope: string; };
+        params: {models: StyleModelMap; scope: string;};
         result: void;
     };
 
@@ -165,7 +170,7 @@ export type WorkerInbox = {
     };
 
     'updateLayers': {
-        params: { layers: LayerSpecification[]; removedIds: string[]; scope: string; options: ConfigOptions };
+        params: {layers: LayerSpecification[]; removedIds: string[]; scope: string; options: ConfigOptions};
         result: void;
     };
 };
@@ -198,16 +203,6 @@ export type MainInbox = {
         params: IndoorData;
         result: void;
     };
-
-    'raster.getCoverTiles': {
-        params: WorkerCoverTilesRequest,
-        callback: ActorCallback<WorkerCoverTilesResult>;
-    }
-
-    'raster.loadTile': {
-        params: WorkerSourceRasterTileRequest,
-        callback: ActorCallback<ImageBitmap | HTMLCanvasElement>;
-    }
 };
 
 /**

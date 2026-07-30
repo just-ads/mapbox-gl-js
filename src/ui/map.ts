@@ -29,10 +29,10 @@ import {RGBAImage} from '../util/image';
 import {Event, ErrorEvent} from '../util/evented';
 import {MapMouseEvent} from './events';
 import TaskQueue from '../util/task_queue';
-import webpSupported from '../util/webp_supported';
 import {PerformanceUtils, PerformanceMarkers} from '../util/performance';
 import {LivePerformanceMarkers, LivePerformanceUtils} from '../util/live_performance';
 import EasedVariable from '../util/eased_variable';
+import {prepareDebug} from '../../modules/debug';
 import {GLOBE_ZOOM_THRESHOLD_MAX} from '../geo/projection/globe_constants';
 import {setCacheLimits} from '../util/tile_request_cache';
 import {Debug} from '../util/debug';
@@ -49,8 +49,7 @@ import type SourceCache from '../source/source_cache';
 import type {MapEventType, MapEventOf} from './events';
 import type {PointLike} from '../types/point-like';
 import type {FeatureState} from '../style-spec/expression/index';
-import type {AJAXError} from '../util/ajax';
-import type {RequestTransformFunction} from '../util/mapbox';
+import type {AJAXError, RequestTransformFunction} from '../util/ajax';
 import type {LngLatLike, LngLatBoundsLike} from '../geo/lng_lat';
 import type {CustomLayerInterface} from '../style/style_layer/custom_style_layer';
 import type {StyleImageInterface, StyleImageMetadata} from '../style/style_image';
@@ -91,7 +90,7 @@ import type {
     ColorThemeSpecification,
     TerrainSpecificationUpdate,
 } from '../style-spec/types';
-import type {Source, SourceClass} from '../source/source';
+import type {Source} from '../source/source';
 import type {EasingOptions} from './camera';
 import type {ContextOptions} from '../gl/context';
 import type {GeoJSONFeature, FeaturesetDescriptor, TargetFeature, TargetDescriptor} from '../util/vectortile_to_geojson';
@@ -287,7 +286,6 @@ const defaultOptions = {
  * Then Mapbox GL JS initializes the map on the page and returns your `Map`
  * object.
  *
- * @extends Evented
  * @param {Object} options
  * @param {HTMLElement|string} options.container The HTML element in which Mapbox GL JS will render the map, or the element's string `id`. The specified element must have no children.
  * @param {number} [options.minZoom=0] The minimum zoom level of the map (0-24).
@@ -395,7 +393,8 @@ const defaultOptions = {
  * When `'client'` (the default), each font in a comma-separated fontstack is loaded individually and missing glyphs are filled from subsequent fallback fonts on the client.
  * When `'server'`, the full fontstack string is passed as-is to the glyph server, which must support server-side fontstack composition.
  * @param {RequestTransformFunction} [options.transformRequest=null] A callback run before the Map makes a request for an external URL. The callback can be used to modify the url, set headers, or set the credentials property for cross-origin requests.
- * Expected to return a {@link RequestParameters} object with a `url` property and optionally `headers` and `credentials` properties.
+ * Expected to return a {@link RequestParameters} object with a `url` property and optionally `headers` and `credentials` properties, or a `Promise` resolving to one. Returning a `Promise` lets the callback resolve values asynchronously before each request, for example to refresh an auth token.
+ * The callback receives a third `options` argument with an optional `signal` ({@link AbortSignal}) that aborts when the request is cancelled.
  * @param {boolean} [options.collectResourceTiming=false] If `true`, Resource Timing API information will be collected for requests made by GeoJSON and Vector Tile web workers (this information is normally inaccessible from the main Javascript thread). Information will be returned in a `resourceTiming` property of relevant `data` events.
  * @param {number} [options.fadeDuration=300] Controls the duration of the fade-in/fade-out animation for label collisions, in milliseconds. This setting affects all symbol layers. This setting does not affect the duration of runtime styling transitions or raster tile cross-fading.
  * @param {boolean} [options.respectPrefersReducedMotion=true] If set to `true`, the map will respect the user's `prefers-reduced-motion` browser setting and apply a reduced motion mode, minimizing animations and transitions. When set to `false`, the map will always ignore the `prefers-reduced-motion` settings, regardless of the user's preference, making all animations essential.
@@ -436,6 +435,16 @@ const defaultOptions = {
  *                 credentials: 'include'  // Include cookies for cross-origin requests
  *             };
  *         }
+ *     }
+ * });
+ * @example
+ * const map = new mapboxgl.Map({
+ *     container: 'map',
+ *     style: 'mapbox://styles/mapbox/streets-v11',
+ *     // `transformRequest` may also be async: await a value, then return the rewritten request.
+ *     transformRequest: async (url, resourceType, options) => {
+ *         const token = await getFreshToken({signal: options && options.signal});
+ *         return {url: `${url}?token=${token}`};
  *     }
  * });
  * @see [Example: Display a map on a webpage](https://docs.mapbox.com/mapbox-gl-js/example/simple-map/)
@@ -1051,7 +1060,7 @@ export class Map extends Camera {
      */
     setMinZoom(minZoom?: number | null): this {
 
-        minZoom = minZoom === null || minZoom === undefined ? defaultMinZoom : minZoom;
+        minZoom = minZoom ?? defaultMinZoom;
 
         if (minZoom >= defaultMinZoom && minZoom <= this.transform.maxZoom) {
             this.transform.minZoom = minZoom;
@@ -1092,7 +1101,7 @@ export class Map extends Camera {
      */
     setMaxZoom(maxZoom?: number | null): this {
 
-        maxZoom = maxZoom === null || maxZoom === undefined ? defaultMaxZoom : maxZoom;
+        maxZoom = maxZoom ?? defaultMaxZoom;
 
         if (maxZoom >= this.transform.minZoom) {
             this.transform.maxZoom = maxZoom;
@@ -1132,7 +1141,7 @@ export class Map extends Camera {
      */
     setMinPitch(minPitch?: number | null): this {
 
-        minPitch = minPitch === null || minPitch === undefined ? defaultMinPitch : minPitch;
+        minPitch = minPitch ?? defaultMinPitch;
 
         if (minPitch < defaultMinPitch) {
             throw new Error(`minPitch must be greater than or equal to ${defaultMinPitch}`);
@@ -1177,7 +1186,7 @@ export class Map extends Camera {
      */
     setMaxPitch(maxPitch?: number | null): this {
 
-        maxPitch = maxPitch === null || maxPitch === undefined ? defaultMaxPitch : maxPitch;
+        maxPitch = maxPitch ?? defaultMaxPitch;
 
         if (maxPitch > defaultMaxPitch) {
             throw new Error(`maxPitch must be less than or equal to ${defaultMaxPitch}`);
@@ -2447,6 +2456,12 @@ export class Map extends Camera {
             return false;
         }
 
+        // Disallow reserved prototype property names
+        if (id === '__proto__' || id === 'constructor' || id === 'prototype') {
+            this.fire(new ErrorEvent(new Error(`IDs can't be "${id}".`)));
+            return false;
+        }
+
         return true;
     }
 
@@ -2556,19 +2571,6 @@ export class Map extends Camera {
      */
     areTilesLoaded(): boolean {
         return this.style.areTilesLoaded();
-    }
-
-    /**
-     * Adds a [custom source type](#Custom Sources), making it available for use with
-     * {@link Map#addSource}.
-     * @private
-     * @param {string} name The name of the source type; source definition objects use this name in the `{type: ...}` field.
-     * @param {Function} SourceType A {@link Source} constructor.
-     * @param {Function} callback Called when the source type is ready or with an error argument if there is an error.
-     */
-    addSourceType(name: string, SourceType: SourceClass, callback: Callback<void>) {
-        this._lazyInitEmptyStyle();
-        this.style.addSourceType(name, SourceType, callback);
     }
 
     /**
@@ -2831,9 +2833,12 @@ export class Map extends Camera {
      * @see [Example: Add an icon to the map](https://www.mapbox.com/mapbox-gl-js/example/add-image/)
      */
     loadImage(url: string, callback: Callback<ImageBitmap | HTMLImageElement | ImageData>) {
-        const request = this._requestManager.transformRequest(url, ResourceType.Image);
-        // No signal: loadImage exposes no cancellation, so getImage never rejects AbortError here.
-        getImage(request).then(({data}) => callback(null, data)).catch(callback);
+        const load = async () => {
+            const request = await this._requestManager.transformRequest(url, ResourceType.Image);
+            const {data} = await getImage(request);
+            return data;
+        };
+        load().then((data) => callback(null, data)).catch(callback);
     }
 
     /**
@@ -3152,6 +3157,10 @@ export class Map extends Camera {
      * }, 'basemap');
      */
     addImport(importSpecification: ImportSpecification, beforeId?: string | null): this {
+        if (!this._isValidId(importSpecification.id)) {
+            return this;
+        }
+
         this.style.addImport(importSpecification, beforeId)
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
             .catch((e) => this.fire(new ErrorEvent(new Error('Failed to add import', e))));
@@ -3593,8 +3602,7 @@ export class Map extends Camera {
      * Returns the imported style schema.
      *
      * @param {string} importId The name of the imported style (e.g. `basemap`).
-     * @returns {*} Returns the imported style schema.
-     * @private
+     * @returns {SchemaSpecification} Returns the imported style schema, if exists.
      *
      * @example
      * map.getSchema('basemap');
@@ -3609,7 +3617,6 @@ export class Map extends Camera {
      * @param {string} importId The name of the imported style (e.g. `basemap`).
      * @param {SchemaSpecification} schema The imported style schema.
      * @returns {Map} Returns itself to allow for method chaining.
-     * @private
      *
      * @example
      * map.setSchema('basemap', {lightPreset: {type: 'string', default: 'night', values: ['day', 'night']}});
@@ -4184,6 +4191,24 @@ export class Map extends Camera {
     }
 
     /**
+     * Resets all feature state within a featureset or a style layer, setting every feature back
+     * to its default (stateless) behavior. This is the bulk equivalent of calling
+     * {@link Map#removeFeatureState} with only a source selector.
+     *
+     * @param {TargetDescriptor} target The featureset or layer whose feature states should be reset.
+     * Pass `{featuresetId, importId?}` to target a named featureset (optionally inside a style
+     * import), or `{layerId}` to target a specific root-style layer.
+     * @returns {Map} The map object.
+     * @example
+     * // Reset all feature state on the 'poi' featureset inside the 'basemap' import
+     * map.resetFeatureStates({featuresetId: 'poi', importId: 'basemap'});
+     */
+    resetFeatureStates(target: TargetDescriptor): this {
+        this.style.resetFeatureStates(target);
+        return this._update();
+    }
+
+    /**
      * *This API is experimental and subject to change in future versions*.
      *
      * @experimental
@@ -4332,11 +4357,21 @@ export class Map extends Camera {
                 if (elevationSource && event.sourceCacheId === elevationSource.id && this.style) {
                     this.style._setLabelPlacementStale();
                 }
+                // Force a full label re-placement when a fill-extrusion (building)
+                // tile loads.  Symbol z-offsets are computed from building heights
+                // during placement, so if a building tile arrives after the initial
+                // placement pass (a common race when the symbol source is GeoJSON
+                // but buildings come from a separate vector tile source) the
+                // collision boxes and elevated symbol positions will be wrong.
+                // Re-running placement after the building data arrives ensures
+                // symbols appear at the correct elevation.
+                if (this.style && event.sourceCacheId &&
+                        this.style._buildingIndex.hasLayerForSourceCache(event.sourceCacheId)) {
+                    this.style._requestFullLabelPlacement();
+                }
                 this.painter.setTileLoadedFlag(true);
             }
         });
-
-        webpSupported.testSupport(gl);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4536,7 +4571,9 @@ export class Map extends Camera {
                 now,
                 fadeDuration,
                 pitch,
-                transition: this.style.transition,
+                // Snap transitions before `load` so initial light transitions don't spin repaints;
+                // after `load`, user-triggered transitions must animate normally.
+                transition: this._loaded ? this.style.transition : {duration: 0, delay: 0},
                 worldview: this._worldview
             });
 
@@ -4617,10 +4654,6 @@ export class Map extends Camera {
         // Background patterns are rasterized in a worker thread, while
         // it's still in progress we need to keep rendering
         if (this.style && this.style.imageManager.hasPatternsInFlight()) {
-            this._styleDirty = true;
-        }
-
-        if (this.style && (!this.style.modelManager.isLoaded())) {
             this._styleDirty = true;
         }
 
@@ -4723,7 +4756,7 @@ export class Map extends Camera {
                     height: this.painter.height,
                     interactionRange: this._interactionRange,
                     visibilityHidden: this._visibilityHidden,
-                    terrainEnabled: !!this.painter.style.getTerrain(),
+                    terrainEnabled: this.painter.style.hasTerrain(),
                     fogEnabled: !!this.painter.style.getFog(),
                     projection: this.getProjection().name,
                     zoom: this.transform.zoom,
@@ -5044,6 +5077,8 @@ export class Map extends Camera {
     set showTileBoundaries(value: boolean) {
         if (this._showTileBoundaries === value) return;
         this._showTileBoundaries = value;
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        if (value) prepareDebug();
         this._update();
     }
 
@@ -5170,6 +5205,8 @@ export class Map extends Camera {
     set showPadding(value: boolean) {
         if (this._showPadding === value) return;
         this._showPadding = value;
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        if (value) prepareDebug();
         this._update();
     }
 
@@ -5188,6 +5225,8 @@ export class Map extends Camera {
     set showCollisionBoxes(value: boolean) {
         if (this._showCollisionBoxes === value) return;
         this._showCollisionBoxes = value;
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        if (value) prepareDebug();
         if (this.style && value) {
             // When we turn collision boxes on we have to generate them for existing tiles
             // When we turn them off, there's no cost to leaving existing boxes in place

@@ -31,7 +31,7 @@ import {HD, prepareHD} from '../../modules/hd_main';
 import hillshade from './draw_hillshade';
 import raster, {prepare as prepareRaster} from './draw_raster';
 import background from './draw_background';
-import {default as drawDebug, drawDebugPadding, drawDebugQueryGeometry} from './draw_debug';
+import {DebugModule} from '../../modules/debug';
 import custom from './draw_custom';
 import sky from './draw_sky';
 import Atmosphere from './draw_atmosphere';
@@ -51,6 +51,7 @@ import {OcclusionParams} from './occlusion_params';
 import {PerformanceUtils} from '../util/performance';
 
 import type {FrcCoverageSnapshot} from '../source/frc_coverage_snapshot';
+import type {ElevationCoverageSnapshot} from '../source/elevation_coverage_snapshot';
 import type {FrcCoverageRenderer} from '../../3d-style/render/frc_coverage_renderer';
 import type {RainParams} from '../precipitation/draw_rain';
 import type {SnowParams} from '../precipitation/draw_snow';
@@ -69,7 +70,7 @@ import type GlyphManager from './glyph_manager';
 import type {ContextOptions} from '../gl/context';
 import type {CutoffParams} from '../render/cutoff';
 import type {DepthRangeType, DepthMaskType, DepthFuncType} from '../gl/types';
-import type {LightsUniformsType} from '../../3d-style/render/lights';
+import type {LightOverrides, LightsUniformsType} from '../../3d-style/render/lights';
 import type {OverscaledTileID, UnwrappedTileID} from '../source/tile_id';
 import type {ProgramName} from './program';
 import type {ProgramUniformsType, DynamicDefinesType} from './program/program_uniforms';
@@ -182,7 +183,10 @@ async function setupStandard(painter?: Painter) {
     Object.assign(prepare, {
         model: Standard.prepare,
     });
-    if (painter && !painter._shadowRenderer) {
+    // The Standard module loads asynchronously (a lazy import in ESM builds), so the
+    // map may have been removed while it was still loading — bail out to avoid touching
+    // a destroyed WebGL context.
+    if (painter && !painter._destroyed && !painter._shadowRenderer) {
         const SR = (Standard as {ShadowRenderer?: new (p: Painter) => ShadowRenderer}).ShadowRenderer;
         if (SR) painter._shadowRenderer = new SR(painter);
     }
@@ -224,6 +228,8 @@ class Painter {
     depthRangeFor3D: DepthRangeType;
     depthOcclusion: boolean;
     frcCoverageSnapshot: FrcCoverageSnapshot | null;
+    elevationCoverageSnapshot: ElevationCoverageSnapshot | null;
+    elevationProvidersReady: boolean | undefined;
     frcCoverageFadeRange: [number, number] | null;
     frcCoverageSourceLayers: string[];
     // Lazy-constructed when the HD chunk loads (HD.FrcCoverageRenderer).
@@ -272,6 +278,7 @@ class Painter {
     _fogVisible: boolean;
     _cachedTileFogOpacities: Record<number, [number, number]>;
     _shadowRenderer?: ShadowRenderer;
+    _destroyed?: boolean;
     _devtools?: IDevTools;
     _wireframeDebugCache: WireframeDebugCache;
 
@@ -339,6 +346,8 @@ class Painter {
         this.frameCopies = [];
         this.loadTimeStamps = [];
         this.frcCoverageSnapshot = null;
+        this.elevationCoverageSnapshot = null;
+        this.elevationProvidersReady = undefined;
         this.frcCoverageFadeRange = null;
         this.frcCoverageSourceLayers = [];
         // Built when HD module is available (UMD: always; ESM: after prepareHD()).
@@ -750,7 +759,7 @@ class Painter {
         if (deferredDrapingEnabled() && this.renderPass === 'translucent') {
             if ((emissiveStrengthForDrapedLayers != null && this.emissiveMode !== 'mrt-fallback') || this.emissiveMode === 'constant') {
                 // Color mode for constant emissive strength.
-                return new ColorMode([gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.CONSTANT_ALPHA, gl.ONE_MINUS_SRC_ALPHA], new Color(0, 0, 0, emissiveStrengthForDrapedLayers != null ? emissiveStrengthForDrapedLayers : 0.0), [true, true, true, true]);
+                return new ColorMode([gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.CONSTANT_ALPHA, gl.ONE_MINUS_SRC_ALPHA], new Color(0, 0, 0, emissiveStrengthForDrapedLayers ?? 0.0), [true, true, true, true]);
             } else if (this.emissiveMode === 'dual-source-blending') {
                 const extBlendFuncExtended = this.context.extBlendFuncExtended;
                 return new ColorMode([gl.ONE, gl.ONE_MINUS_SRC_ALPHA, extBlendFuncExtended.SRC1_ALPHA_WEBGL, gl.ONE_MINUS_SRC_ALPHA], Color.transparent, [true, true, true, true]);
@@ -1525,16 +1534,16 @@ class Painter {
                 }
             });
             if (selectedSource) {
-                if (this.options.showTileBoundaries) {
+                if (this.options.showTileBoundaries && DebugModule.drawDebug) {
                     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-                    drawDebug(this, selectedSource, selectedSource.getVisibleCoordinates(), Color.red, false, this.options.showParseStatus);
+                    DebugModule.drawDebug(this, selectedSource, selectedSource.getVisibleCoordinates(), Color.red, false, this.options.showParseStatus);
                 }
 
                 Debug.run(() => {
                     if (!selectedSource) return;
-                    if (this.options.showQueryGeometry) {
+                    if (this.options.showQueryGeometry && DebugModule.drawDebugQueryGeometry) {
                         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-                        drawDebugQueryGeometry(this, selectedSource, selectedSource.getVisibleCoordinates());
+                        DebugModule.drawDebugQueryGeometry(this, selectedSource, selectedSource.getVisibleCoordinates());
                     }
                     if (this.options.showTileAABBs) {
                         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
@@ -1545,13 +1554,13 @@ class Painter {
         }
 
         Debug.run(() => {
-            if (this.terrain && this._debugParams.showTerrainProxyTiles) {
-                drawDebug(this, this.terrain.proxySourceCache, this.terrain.proxyCoords, new Color(1.0, 0.8, 0.1, 1.0), true, this.options.showParseStatus);
+            if (this.terrain && this._debugParams.showTerrainProxyTiles && DebugModule.drawDebug) {
+                DebugModule.drawDebug(this, this.terrain.proxySourceCache, this.terrain.proxyCoords, new Color(1.0, 0.8, 0.1, 1.0), true, this.options.showParseStatus);
             }
         });
 
-        if (this.options.showPadding) {
-            drawDebugPadding(this);
+        if (this.options.showPadding && DebugModule.drawDebugPadding) {
+            DebugModule.drawDebugPadding(this);
         }
 
         // Set defaults for most GL values so that anyone using the state after the render
@@ -1757,7 +1766,7 @@ class Painter {
 
     terrainRenderModeElevated(): boolean {
         // Whether elevation sampling should be enabled in the vertex shader.
-        return (this.style && !!this.style.getTerrain() && !!this.terrain && !this.terrain.renderingToTexture) || this.forceTerrainMode;
+        return (this.style && this.style.hasTerrain() && !!this.terrain && !this.terrain.renderingToTexture) || this.forceTerrainMode;
     }
 
     linearFloatFilteringSupported(): boolean {
@@ -1903,6 +1912,8 @@ class Painter {
         if (this.emptyDepthTexture) {
             this.emptyDepthTexture.destroy();
         }
+
+        this._destroyed = true;
     }
 
     prepareDrawTile() {
@@ -1911,20 +1922,20 @@ class Painter {
         }
     }
 
-    uploadCommonLightUniforms(context: Context, program: Program<LightsUniformsType>) {
+    uploadCommonLightUniforms(context: Context, program: Program<LightsUniformsType>, lightOverrides?: LightOverrides) {
         if (this.style.enable3dLights()) {
             const directionalLight = this.style.directionalLight;
             const ambientLight = this.style.ambientLight;
 
             if (directionalLight && ambientLight) {
-                const lightsUniforms = lightsUniformValues(directionalLight, ambientLight, this.style);
+                const lightsUniforms = lightsUniformValues(directionalLight, ambientLight, this.style, lightOverrides);
                 program.setLightsUniformValues(context, lightsUniforms);
             }
         }
     }
 
-    uploadCommonUniforms(context: Context, program: Program<ProgramUniformsType[ProgramName]>, tileID?: UnwrappedTileID | null, fogMatrix?: mat4 | null, cutoffParams?: CutoffParams | null) {
-        this.uploadCommonLightUniforms(context, program as unknown as Program<LightsUniformsType>);
+    uploadCommonUniforms(context: Context, program: Program<ProgramUniformsType[ProgramName]>, tileID?: UnwrappedTileID | null, fogMatrix?: mat4 | null, cutoffParams?: CutoffParams | null, lightOverrides?: LightOverrides) {
+        this.uploadCommonLightUniforms(context, program as unknown as Program<LightsUniformsType>, lightOverrides);
 
         // Fog is not enabled when rendering to texture so we
         // can safely skip uploading uniforms in that case

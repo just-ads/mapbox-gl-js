@@ -8,8 +8,8 @@ import {getSymbolPlacementTileProjectionMatrix} from '../geo/projection/projecti
 import EXTENT from '../style-spec/data/extent';
 import {clamp} from '../util/util';
 import * as projection from './projection';
-import {getAnchorAlignment, WritingMode} from './shaping';
-import {evaluateVariableOffset, getAnchorJustification} from './symbol_layout';
+import {getAnchorAlignment, WritingMode} from './shaping_shared';
+import {evaluateVariableOffset, getAnchorJustification} from './symbol_layout_shared';
 import {evaluateSizeForZoom} from './symbol_size';
 
 import type {ReplacementSource} from '../../3d-style/source/replacement_source';
@@ -23,8 +23,8 @@ import type Tile from '../source/tile';
 import type {OverscaledTileID, UnwrappedTileID} from '../source/tile_id';
 import type {FogState} from '../style/fog_helpers';
 import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
-import type {Orientation} from './shaping';
-import type {TextAnchor} from './symbol_layout';
+import type {Orientation} from './shaping_shared';
+import type {TextAnchor} from './symbol_layout_shared';
 import type {Feature} from '../style-spec/expression/index';
 import type {InterpolatedSize} from './symbol_size';
 import type {FilterExpression} from '../style-spec/feature_filter/index';
@@ -437,8 +437,8 @@ export class Placement {
         }
     }
 
-    placeLayerBucketPart(bucketPart: BucketPart, seenCrossTileIDs: Set<number>, showCollisionBoxes: boolean, updateCollisionBoxIfNecessary: boolean, scaleFactor: number = 1) {
-        this.algorithm.placeLayerBucketPart(this, bucketPart, seenCrossTileIDs, showCollisionBoxes, updateCollisionBoxIfNecessary, scaleFactor);
+    placeLayerBucketPart(bucketPart: BucketPart, seenCrossTileIDs: Set<number>, showCollisionBoxes: boolean, scaleFactor: number = 1) {
+        this.algorithm.placeLayerBucketPart(this, bucketPart, seenCrossTileIDs, showCollisionBoxes, scaleFactor);
     }
 
     commit(now: number): void {
@@ -504,7 +504,7 @@ export class Placement {
         }
     }
 
-    updateLayerOpacities(styleLayer: TypedStyleLayer, tiles: Array<Tile>, layerIndex: number, replacementSource?: ReplacementSource | null) {
+    updateLayerOpacities(styleLayer: TypedStyleLayer, tiles: Array<Tile>, layerIndex: number, replacementSource?: ReplacementSource | null, showCollisionBoxes: boolean = false, scaleFactor: number = 1) {
         if (replacementSource) {
             this.lastReplacementSourceUpdateTime = replacementSource.updateTime;
         }
@@ -521,6 +521,18 @@ export class Placement {
                     symbolBucket.hdExt.updateRoadElevation(symbolBucket, tile.tileID.canonical);
                 }
                 symbolBucket.updateZOffset();
+
+                // Collision debug boxes encode elevation directly in their vertex data, so they must be
+                // rebuilt here (after zOffset is refreshed above) rather than during placement, otherwise
+                // they'd render one placement cycle behind the actual symbol quads whenever elevation changes.
+                if (showCollisionBoxes && tile.collisionBoxArray) {
+                    const layout = symbolBucket.layers[0].layout;
+                    const [textSizeScaleRangeMin, textSizeScaleRangeMax] = layout.get('text-size-scale-range');
+                    const [iconSizeScaleRangeMin, iconSizeScaleRangeMax] = layout.get('icon-size-scale-range');
+                    const textScaleFactor = clamp(scaleFactor, textSizeScaleRangeMin, textSizeScaleRangeMax);
+                    const iconScaleFactor = clamp(scaleFactor, iconSizeScaleRangeMin, iconSizeScaleRangeMax);
+                    symbolBucket.updateCollisionDebugBuffers(this.transform.zoom, tile.collisionBoxArray, textScaleFactor, iconScaleFactor);
+                }
             }
         }
     }

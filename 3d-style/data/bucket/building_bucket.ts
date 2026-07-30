@@ -68,7 +68,8 @@ import {
 import {getBuildingGenUrl} from '../../../src/util/config';
 import {
     BUILDING_VISIBLE,
-    BUILDING_HIDDEN_BY_REPLACEMENT
+    BUILDING_HIDDEN_BY_REPLACEMENT,
+    BUILDING_HIDDEN_WITH_INCOMPLETE_PARTS
 } from './building_bucket_flags';
 
 import type {OverscaledTileID, UnwrappedTileID, CanonicalTileID} from '../../../src/source/tile_id';
@@ -91,8 +92,6 @@ import type {ProjectionSpecification} from '../../../src/style-spec/types';
 import type {BucketWithGroundEffect} from '../../../src/render/draw_fill_extrusion';
 import type {AreaLight} from '../model';
 import type {NonPremultipliedRenderColor} from '../../../src/style-spec/util/color';
-
-const BUILDING_HIDDEN_WITH_INCOMPLETE_PARTS: number = 0x4;
 
 const MAX_INT_16 = 32767.0;
 
@@ -958,7 +957,8 @@ export class BuildingBucket implements BucketWithGroundEffect {
             const footprintBoundsMin = new Point(Infinity, Infinity);
             const footprintBoundsMax = new Point(-Infinity, -Infinity);
 
-            // Add ground effect data
+            // Add ground effect data if feature is not elevated
+            const useGroundEffect = (base <= 0);
             const groundEffectVertexOffset = this.groundEffect.vertexArray.length;
 
             for (const ring of result.modifiedPolygonRings) {
@@ -973,7 +973,9 @@ export class BuildingBucket implements BucketWithGroundEffect {
                     boundsMax.x = Math.max(boundsMax.x, ring[reverseIdx]);
                     boundsMax.y = Math.max(boundsMax.y, ring[reverseIdx + 1]);
                     const point = new Point(ring[reverseIdx], ring[reverseIdx + 1]);
-                    groundPolyline.push(point);
+                    if (useGroundEffect) {
+                        groundPolyline.push(point);
+                    }
 
                     footprintFlattened.push(point.x, point.y);
                     this.footprintsVertices.emplaceBack(point.x, point.y);
@@ -984,7 +986,9 @@ export class BuildingBucket implements BucketWithGroundEffect {
                 footprintBoundsMax.x = Math.max(footprintBoundsMax.x, boundsMax.x);
                 footprintBoundsMax.y = Math.max(footprintBoundsMax.y, boundsMax.y);
 
-                this.groundEffect.addData(groundPolyline, [boundsMin, boundsMax], maxRadius);
+                if (useGroundEffect) {
+                    this.groundEffect.addData(groundPolyline, [boundsMin, boundsMax], maxRadius);
+                }
             }
 
             const groundEffectVertexLength = this.groundEffect.vertexArray.length - groundEffectVertexOffset;
@@ -1008,7 +1012,7 @@ export class BuildingBucket implements BucketWithGroundEffect {
                 this.footprintsIndices.resize(this.footprintsIndices.length + indices.length);
                 this.footprintsIndices.uint16.set(indices, footprintIndexOffset);
 
-                const buildingOrFeatureId = buildingId != null ? buildingId : feature.id;
+                const buildingOrFeatureId = buildingId ?? feature.id;
                 this.buildingIds.add(buildingOrFeatureId);
                 this.footprintsMin.x = Math.min(this.footprintsMin.x, footprintBoundsMin.x);
                 this.footprintsMin.y = Math.min(this.footprintsMin.y, footprintBoundsMin.y);

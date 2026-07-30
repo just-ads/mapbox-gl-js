@@ -23,12 +23,6 @@ export type GeolocateControlOptions = {
     followUserLocation?: boolean;
 };
 
-declare global {
-    interface DeviceOrientationEvent {
-        readonly webkitCompassHeading?: number;
-    }
-}
-
 type DeviceOrientationEventStatic = typeof DeviceOrientationEvent & {
     requestPermission?: () => Promise<'granted' | 'denied' | 'prompt'>;
 };
@@ -709,7 +703,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
      * geolocate.setFollowUserLocation(true);  // resume and center
      */
     setFollowUserLocation(follow?: boolean): this {
-        this.options.followUserLocation = follow != null ? follow : defaultOptions.followUserLocation;
+        this.options.followUserLocation = follow ?? defaultOptions.followUserLocation;
 
         if (this.options.trackUserLocation && this._watchState !== 'OFF') {
             if (this.options.followUserLocation) {
@@ -751,7 +745,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
      * geolocate.setShowAccuracyCircle(false);
      */
     setShowAccuracyCircle(show?: boolean): this {
-        this.options.showAccuracyCircle = show != null ? show : defaultOptions.showAccuracyCircle;
+        this.options.showAccuracyCircle = show ?? defaultOptions.showAccuracyCircle;
 
         if (!this._accuracyCircleMarker) return this;
 
@@ -782,7 +776,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
      * geolocate.setShowUserHeading(true);
      */
     setShowUserHeading(show?: boolean): this {
-        this.options.showUserHeading = show != null ? show : defaultOptions.showUserHeading;
+        this.options.showUserHeading = show ?? defaultOptions.showUserHeading;
 
         if (!this._setup) return this;
 
@@ -812,7 +806,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
      * geolocate.setFitBoundsOptions({maxZoom: 17, duration: 0});
      */
     setFitBoundsOptions(opts?: EasingOptions): this {
-        this.options.fitBoundsOptions = opts != null ? opts : defaultOptions.fitBoundsOptions;
+        this.options.fitBoundsOptions = opts ?? defaultOptions.fitBoundsOptions;
         return this;
     }
 
@@ -830,7 +824,7 @@ class GeolocateControl extends Evented<GeolocateControlEvents> implements IContr
      * geolocate.setShowUserLocation(true);  // show it again
      */
     setShowUserLocation(show?: boolean): this {
-        this.options.showUserLocation = show != null ? show : defaultOptions.showUserLocation;
+        this.options.showUserLocation = show ?? defaultOptions.showUserLocation;
 
         if (!this._setup) return this;
 

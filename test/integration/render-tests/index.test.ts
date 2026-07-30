@@ -1,50 +1,23 @@
 import {server} from 'vitest/browser';
 import {test, assert, afterEach, afterAll} from 'vitest';
-import ignoresAll from '../../ignores/all.js';
-import ignoreWindowsChrome from '../../ignores/windows-chrome.js';
-import ignoreMacChrome from '../../ignores/mac-chrome.js';
-import ignoreMacSafari from '../../ignores/mac-safari.js';
-import ignoreLinuxChrome from '../../ignores/linux-chrome.js';
-import ignoreLinuxFirefox from '../../ignores/linux-firefox.js';
 import {parseStyle, parseOptions, getActualImage, calculateDiff, diffCanvas, diffCtx, getActualImageDataURL, mapRef, fakeCanvasContainer} from './utils.js';
 // @ts-expect-error Cannot find module 'virtual:integration-tests' or its corresponding type declarations.
 import {integrationTests} from 'virtual:integration-tests';
-import {getStatsHTML, updateHTML, registerIgnoredNotRun} from '../../util/html_generator';
+import {getStatsHTML, updateHTML, registerSkipped, fragmentIdFor} from '../../util/html_generator';
 import {mapboxgl} from '../lib/mapboxgl.js';
-import {sendFragment, sendBrowserDiagnostics} from '../lib/utils';
+import {sendFragment, sendBrowserDiagnostics, detectPlatformTagFromUserAgent, matchSkipTestRule, type SkipRuleMatch} from '../lib/utils';
 
 function getEnvironmentParams() {
     let timeout = 30000;
-    if (import.meta.env.VITE_CI === 'true') {
-        let ignoresPlatformSpecific;
-        const ua = navigator.userAgent;
-        const browser = ua.includes('Firefox') ? 'firefox' :
-            ua.includes('Edge') ? 'edge' :
-            ua.includes('Chrome') ? 'chrome' :
-            ua.includes('Safari') ? 'safari' :
-            null;
-
-        // On CI, MacOS and Windows run on virtual machines.
-        // Windows runs are especially slow so we increase the timeout.
-        if (ua.includes('Macintosh')) {
-            ignoresPlatformSpecific = browser === 'safari' ? ignoreMacSafari : ignoreMacChrome;
-        } else if (ua.includes('Linux')) {
-            ignoresPlatformSpecific = browser === 'firefox' ? ignoreLinuxFirefox : ignoreLinuxChrome;
-        } else if (ua.includes('Windows')) {
-            ignoresPlatformSpecific = ignoreWindowsChrome;
-            timeout = 150000; // 2:30
-        } else {  throw new Error(`Can't determine OS with user agent: ${ua}`); }
-
-        return {
-            ignores: {
-                todo: [...ignoresPlatformSpecific.todo, ...ignoresAll.todo],
-                skip: [...ignoresPlatformSpecific.skip, ...ignoresAll.skip]
-            },
-            timeout
-        };
-    } else {
-        return {ignores: ignoresAll, timeout};
+    const platformTag = detectPlatformTagFromUserAgent(navigator.userAgent);
+    if (!platformTag) {
+        throw new Error(`Unable to determine a valid platform-tag from user agent: ${navigator.userAgent}`);
     }
+    if (import.meta.env.VITE_CI === 'true' && platformTag === 'web-windows-chrome') {
+        // On CI, Windows runs on virtual machines and are especially slow.
+        timeout = 150000; // 2:30
+    }
+    return {timeout, platformTag};
 }
 
 type ImageDataWithCanvas = {
@@ -68,54 +41,71 @@ function loadPngFromUrl(url: string): Promise<ImageDataWithCanvas> {
     });
 }
 
-async function getExpectedImages(currentTestName: string, renderTest: Record<string, unknown>): Promise<Array<ImageDataWithCanvas & {src: string}>> {
-    const urls: string[] = [];
-    for (const prop in renderTest) {
-        if (prop.indexOf('expected') > -1) {
-            // Encode each path segment to handle special characters (e.g. '#' in regression test names).
-            const url = `/render-tests/${currentTestName}/${prop}.png`
-                .split('/')
-                .map(encodeURIComponent)
-                .join('/');
-            urls.push(url);
-        }
+// Tries, in order, expected-<full-tag>.png, expected-<tag-with-last-segment-dropped>.png, ...,
+// down to expected-<first-segment>.png, then falls back to the bare expected.png. Returns the
+// first of those property names (set by generate-fixture-json.js for every "expected*.png" file
+// present) that actually exists next to this test's style.json.
+function resolveExpectedImageProp(renderTest: Record<string, unknown>, platformTag: string): string | undefined {
+    const segments = platformTag.split('-');
+    for (let i = segments.length; i > 0; i--) {
+        const candidate = `expected-${segments.slice(0, i).join('-')}`;
+        if (renderTest[candidate]) return candidate;
     }
-    return Promise.all(urls.map(async (url) => {
-        const result = await loadPngFromUrl(url);
-        return Object.assign({}, result, {src: url});
-    }));
+    return renderTest.expected ? 'expected' : undefined;
+}
+
+async function getExpectedImage(currentTestName: string, renderTest: Record<string, unknown>, platformTag: string): Promise<(ImageDataWithCanvas & {src: string, prop: string}) | undefined> {
+    const prop = resolveExpectedImageProp(renderTest, platformTag);
+    if (!prop) return undefined;
+
+    // Encode each path segment to handle special characters (e.g. '#' in regression test names).
+    const url = `/render-tests/${currentTestName}/${prop}.png`
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/');
+    const result = await loadPngFromUrl(url);
+    return Object.assign({}, result, {src: url, prop});
 }
 
 type TestMetadata = {
     name: string;
     minDiff: number;
-    allowed: number;
+    imageThreshold: number;
+    imageThresholdRule?: string;
+    testPath: string;
     status: string;
-    ignoredOutcome?: string;
     color?: string;
     width?: number;
     height?: number;
     actual?: string;
     expected?: string;
-    expectedPath?: string;
+    matchedExpectedFile?: string;
     imgDiff?: string;
     error?: Error;
 }
 
 let reportFragment: string | undefined;
+let reportFragmentName: string | undefined;
 
-const getTest = (renderTestName: string) => async () => {
-    const fullTestName = `render-tests/${renderTestName}`;
-    const isTodo = ignores.todo.includes(fullTestName);
+// Passed-test images are embedded only when explicitly opted in (never on CI --
+// the flag is forced off there by the vite config). Failed tests always embed.
+const embedPassedImages = import.meta.env.VITE_EMBED_PASSED_IMAGES === 'true';
+
+const getTest = (renderTestName: string, preflightError?: unknown) => async () => {
     let errorMessage: string | undefined;
+    reportFragmentName = renderTestName;
     try {
+        if (preflightError) {
+            throw preflightError;
+        }
+
         const renderTest = integrationTests[renderTestName];
         const testPath = renderTest.path;
         const style = parseStyle(renderTest);
-        const options = parseOptions(renderTest, style);
+        const options = parseOptions(renderTest, style, platformTag);
 
-        const [expectedImages, {actualImageData, w, h}] = await Promise.all([
-            getExpectedImages(renderTestName, renderTest),
+        const [expectedImage, {actualImageData, w, h}] = await Promise.all([
+            getExpectedImage(renderTestName, renderTest, platformTag),
             getActualImage(style, options, renderTestName),
         ]);
 
@@ -125,31 +115,56 @@ const getTest = (renderTestName: string) => async () => {
             await server.commands.writeFile(`${testPath}/actual.png`, actual.split(',')[1], {encoding: 'base64'});
         }
 
-        if (expectedImages.length === 0 && import.meta.env.VITE_UPDATE === 'false') {
-            throw new Error(`No expected images found for ${renderTestName}. Please run the test with UPDATE=true to generate expected images.`);
+        if (!expectedImage && import.meta.env.VITE_UPDATE === 'false') {
+            throw new Error(`No expected image found for ${renderTestName} on platform-tag "${platformTag}". Please run the test with UPDATE=true to generate one.`);
         }
 
-        const {minDiff, minDiffImage, expectedIndex, minImageSrc} = calculateDiff(actualImageData, expectedImages.map(({imageData, src}) => ({data: imageData.data, src})), {w, h}, options['diff-calculation-threshold']);
-        const pass = minDiff <= options.allowed;
+        // calculateDiff throws (rather than returning a diff) when the actual and
+        // expected images differ in size -- most often because an expected.png wasn't
+        // regenerated after a width/height/pixelRatio change. Catch that here, instead
+        // of letting it fall into the generic catch below, so the report can still
+        // embed the actual/expected images alongside the error instead of just the
+        // bare error text.
+        let diff = Infinity;
+        let diffImage: Uint8ClampedArray | undefined;
+        let diffError: unknown;
+        if (expectedImage) {
+            try {
+                ({diff, diffImage} = calculateDiff(actualImageData, expectedImage.imageData.data, {w, h}, options['diff-calculation-threshold']));
+            } catch (e) {
+                diffError = e;
+            }
+        }
+        const pass = !diffError && diff <= options.imageThreshold;
         const testMetaData: TestMetadata = {
             name: renderTestName,
-            minDiff: Math.round(100000 * minDiff) / 100000,
-            allowed: options.allowed,
-            width: w,
-            height: h,
+            testPath: `${testPath}/style.json`,
+            minDiff: diffError ? undefined : Math.round(100000 * diff) / 100000,
+            imageThreshold: options.imageThreshold,
+            imageThresholdRule: options.imageThresholdRule,
             status: pass ? 'passed' : 'failed',
         };
 
-        if (isTodo) {
-            testMetaData.status = 'ignored';
-            testMetaData.color = '#9E9E9E';
-            testMetaData.ignoredOutcome = pass ? 'passed' : 'failed';
+        if (expectedImage) {
+            testMetaData.matchedExpectedFile = decodeURIComponent(expectedImage.src.split('/').pop() || '');
         }
 
-        if (minDiffImage && expectedIndex !== -1 && (import.meta.env.VITE_CI === 'false' || !pass)) {
+        if (diffError) {
+            // Sizes differ, so the images can't be compared pixel-for-pixel or shown
+            // side-by-side at a shared width/height -- embed them at their own natural
+            // size instead of a diff image.
+            testMetaData.error = diffError instanceof Error ? diffError : new Error(String(diffError));
+            testMetaData.actual = actual;
+            if (expectedImage) testMetaData.expected = expectedImage.canvas.toDataURL();
+        } else {
+            testMetaData.width = w;
+            testMetaData.height = h;
+        }
+
+        if (!diffError && diffImage && (!pass || embedPassedImages)) {
             diffCanvas.width = w;
             diffCanvas.height = h;
-            const diffImageData = new ImageData(minDiffImage, w, h);
+            const diffImageData = new ImageData(diffImage, w, h);
             diffCtx.putImageData(diffImageData, 0, 0);
 
             const imgDiff = diffCanvas.toDataURL();
@@ -159,26 +174,25 @@ const getTest = (renderTestName: string) => async () => {
             }
 
             testMetaData.actual = actual;
-            testMetaData.expected = expectedImages[expectedIndex].canvas.toDataURL();
-            testMetaData.expectedPath = minImageSrc;
+            testMetaData.expected = expectedImage.canvas.toDataURL();
             testMetaData.imgDiff = imgDiff;
         }
 
         if (!pass && import.meta.env.VITE_UPDATE === 'true') {
-            await server.commands.writeFile(`${testPath}/expected.png`, actual.split(',')[1], {encoding: 'base64'});
+            // Update whichever file was (or would have been) used as the baseline for this
+            // platform-tag, so a subsequent run resolves the freshly-written image instead of
+            // silently preferring a higher-priority expected-<tag>.png that update left untouched.
+            const updateProp = expectedImage ? expectedImage.prop : 'expected';
+            await server.commands.writeFile(`${testPath}/${updateProp}.png`, actual.split(',')[1], {encoding: 'base64'});
+        } else if (diffError) {
+            errorMessage = `Render test ${renderTestName} failed with error: ${diffError}`;
         } else if (!pass) {
-            errorMessage = `Render test ${renderTestName} failed with ${minDiff} diff`;
+            errorMessage = `Render test ${renderTestName} failed with ${diff} diff`;
         }
 
         reportFragment = updateHTML(testMetaData);
     } catch (error) {
-        reportFragment = updateHTML(isTodo ? {
-            name: renderTestName,
-            status: 'ignored',
-            color: '#9E9E9E',
-            ignoredOutcome: 'failed',
-            error,
-        } : {
+        reportFragment = updateHTML({
             name: renderTestName,
             status: 'failed',
             error,
@@ -190,24 +204,34 @@ const getTest = (renderTestName: string) => async () => {
     }
 };
 
-const {ignores, timeout} = getEnvironmentParams();
-const skippedTests: string[] = [];
+const {timeout, platformTag} = getEnvironmentParams();
+const skippedTests: Record<string, SkipRuleMatch> = {};
 
 Object.keys(integrationTests).forEach((testName) => {
-    const renderTestName = `render-tests/${testName}`;
-    if (ignores.skip.includes(renderTestName)) {
-        skippedTests.push(testName);
+    const style = integrationTests[testName]?.style;
+    const {match: skipMatch, validationError} = matchSkipTestRule(style?.metadata?.test?.['skip-test'], platformTag);
+    if (validationError) {
+        test(testName, {timeout}, getTest(testName, new Error(validationError)));
+    } else if (skipMatch) {
+        skippedTests[testName] = skipMatch;
         test.skip(testName, getTest(testName));
-    } else if (ignores.todo.includes(renderTestName)) {
-        test.todo(testName, getTest(testName));
     } else {
         test(testName, {timeout}, getTest(testName));
     }
 });
 
 afterAll(async () => {
-    for (const testName of skippedTests) {
-        await sendFragment(reportFragmentIdx++, registerIgnoredNotRun(testName));
+    for (const [testName, skipMatch] of Object.entries(skippedTests)) {
+        const testPath = integrationTests[testName]?.path;
+        await sendFragment(
+            fragmentIdFor(testName),
+            registerSkipped(
+                testName,
+                testPath ? `${testPath}/style.json` : undefined,
+                skipMatch.reasons,
+                skipMatch.rules
+            )
+        );
     }
     await sendBrowserDiagnostics();
     await sendFragment(0, getStatsHTML());
@@ -217,10 +241,12 @@ afterAll(async () => {
     });
 });
 
-let reportFragmentIdx = 1;
-
 afterEach(async () => {
-    await sendFragment(reportFragmentIdx++, reportFragment);
+    // Send under the test's stable fragment id so a retry overwrites the prior
+    // attempt's fragment instead of adding a second entry for the same test.
+    if (reportFragmentName !== undefined) {
+        await sendFragment(fragmentIdFor(reportFragmentName), reportFragment);
+    }
 });
 
 afterEach(() => {

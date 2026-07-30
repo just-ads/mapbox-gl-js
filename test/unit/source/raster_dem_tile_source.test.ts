@@ -10,7 +10,7 @@ import config from '../../../src/util/config';
 import type Tile from '../../../src/source/tile';
 import type Dispatcher from '../../../src/util/dispatcher';
 import type {Map as MapboxMap} from '../../../src/ui/map';
-import type {RequestTransformFunction} from '../../../src/util/mapbox';
+import type {RequestTransformFunction} from '../../../src/util/ajax';
 import type {RasterDEMSourceSpecification} from '../../../src/style-spec/types';
 
 function createSource(options: Partial<RasterDEMSourceSpecification>, transformCallback?: RequestTransformFunction) {
@@ -107,7 +107,8 @@ describe('RasterTileSource', () => {
             setExpiryData() {}
         } as unknown as Tile;
         source.loadTile(tile, () => {});
-        // transformRequest is called synchronously when building params for the worker
+        // transformRequest is invoked synchronously (before the first await), even though its
+        // result is now awaited before the worker message is built.
         expect(transformSpy).toHaveBeenCalledTimes(1);
         expect(transformSpy.mock.calls[0][0]).toEqual('http://example.com/10/5/5.png');
         expect(transformSpy.mock.calls[0][1]).toEqual('Tile');
@@ -233,24 +234,23 @@ describe('RasterDEMTileSource provider', () => {
     function createProviderSource(
         providerName: string,
         options: Record<string, unknown> = {},
-        overrides: {broadcastResult?: unknown[]; broadcastError?: Error} = {},
+        overrides: {sendResult?: unknown[]; sendError?: Error} = {},
     ) {
         const moduleUrl = 'http://example.com/mock-provider.js';
         config.TILE_PROVIDER_URLS[providerName] = moduleUrl;
 
-        const {broadcastResult, broadcastError} = overrides;
-        const broadcastSpy = vi.fn((_type: string, _data: unknown, _signal?: AbortSignal) => {
-            if (broadcastError) {
-                return Promise.reject(broadcastError);
+        const {sendResult, sendError} = overrides;
+        const sendSpy = vi.fn((_type: string, _data: unknown, _signal?: AbortSignal) => {
+            if (sendError) {
+                return Promise.reject(sendError);
             }
-            return Promise.resolve(broadcastResult !== undefined ? broadcastResult : [null]);
+            return Promise.resolve(sendResult !== undefined ? sendResult : [null]);
         });
 
         const dispatcher = {
-            send() {},
             getActor() { return {send() { return {cancel() {}}; }}; },
             ready: true,
-            broadcast: broadcastSpy,
+            send: sendSpy,
         } as unknown as Dispatcher;
 
         const source = new RasterDEMTileSource(
@@ -270,22 +270,22 @@ describe('RasterDEMTileSource provider', () => {
             getWorldview: () => undefined,
         } as unknown as MapboxMap);
 
-        return {source, broadcastSpy};
+        return {source, sendSpy};
     }
 
-    test('broadcasts loadTileProvider when provider resolves', async () => {
+    test('sends loadTileProvider when provider resolves', async () => {
         const name = nextProvider();
-        const {source, broadcastSpy} = createProviderSource(name, {
+        const {source, sendSpy} = createProviderSource(name, {
             provider: name,
             tiles: ['http://example.com/{z}/{x}/{y}.png'],
         });
 
-        expect(broadcastSpy).toHaveBeenCalledWith(
+        await waitFor(source, 'data');
+        expect(sendSpy).toHaveBeenCalledWith(
             'loadTileProvider',
             expect.objectContaining({name, source: 'id', type: 'raster-dem'}),
             expect.anything(),
         );
-        await waitFor(source, 'data');
         expect(source.tiles).toEqual(['http://example.com/{z}/{x}/{y}.png']);
     });
 
@@ -296,7 +296,7 @@ describe('RasterDEMTileSource provider', () => {
             minzoom: 2,
             maxzoom: 16,
         };
-        const {source} = createProviderSource(name, {provider: name}, {broadcastResult: [tileJSON]});
+        const {source} = createProviderSource(name, {provider: name}, {sendResult: [tileJSON]});
 
         await waitFor(source, 'data');
         expect(source.tiles).toEqual(['http://provider.example.com/{z}/{x}/{y}.png']);
@@ -309,7 +309,7 @@ describe('RasterDEMTileSource provider', () => {
         const {source} = createProviderSource(name, {
             provider: name,
             tiles: ['http://example.com/{z}/{x}/{y}.png'],
-        }, {broadcastResult: [null]});
+        }, {sendResult: [null]});
 
         await waitFor(source, 'data');
         expect(source.tiles).toEqual(['http://example.com/{z}/{x}/{y}.png']);
@@ -321,10 +321,9 @@ describe('RasterDEMTileSource provider', () => {
         delete config.TILE_PROVIDER_URLS[name];
 
         const dispatcher = {
-            send() {},
             getActor() { return {send() { return {cancel() {}}; }}; },
             ready: true,
-            broadcast: vi.fn(),
+            send: vi.fn(),
         } as unknown as Dispatcher;
 
         const source = new RasterDEMTileSource(

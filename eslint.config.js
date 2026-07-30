@@ -66,11 +66,9 @@ const IGNORED_PATHS = [
     './test/integration/tiles/**/*',
     './test/integration/tilesets/**/*',
     './test/integration/lib/operation-handlers.js',
-    './test/build/vite/**/*',
-    './test/build/webpack/**/*',
+    './test/bundlers/*/**',
     './test/build/typings/**/*',
     './test/build/style-spec.test.js',
-    './dts.config.cjs',
 ];
 
 export default tseslint.config(
@@ -160,12 +158,6 @@ export default tseslint.config(
                     selector: 'ClassProperty[value]',
                     message: 'ClassProperty values are not allowed.',
                 }, {
-                    selector: 'LogicalExpression[operator=\'??\']',
-                    message: 'Nullish coalescing is not allowed.',
-                }, {
-                    selector: 'ChainExpression',
-                    message: 'Optional chaining is not allowed.',
-                }, {
                     selector: 'MemberExpression[object.type=\'MetaProperty\'][property.name=\'url\']',
                     message: 'import.meta.url is not available in the UMD bundle.',
                 }, {
@@ -201,7 +193,7 @@ export default tseslint.config(
                 caughtErrors: 'none',
                 ignoreRestSiblings: true,
             }],
-            '@typescript-eslint/no-non-null-assertion': 'error',
+            '@typescript-eslint/non-nullable-type-assertion-style': 'error',
             '@typescript-eslint/no-floating-promises': ['error', {ignoreVoid: false}],
             '@typescript-eslint/no-misused-promises': 'error',
             '@typescript-eslint/ban-ts-comment': ['error', {'ts-expect-error': true}],
@@ -243,7 +235,6 @@ export default tseslint.config(
 
             // e18e (disabled for browser compatibility)
             'e18e/prefer-spread-syntax': 'off',       // also rewrites .concat/Array.from (array-spread regressions); object spread enforced via core prefer-object-spread
-            'e18e/prefer-nullish-coalescing': 'off',  // ?? not allowed (affects some downstream bundlers)
             'e18e/prefer-array-to-sorted': 'off',     // Not available until Safari 16
             'e18e/prefer-array-to-reversed': 'off',   // Not available until Safari 16
             'e18e/prefer-url-canparse': 'off',        // Not available until Safari 17

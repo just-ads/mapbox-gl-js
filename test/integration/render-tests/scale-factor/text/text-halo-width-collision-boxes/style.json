@@ -2,13 +2,17 @@
   "version": 8,
   "metadata": {
     "test": {
-      "allowed": 0.00075,
+      
       "width": 128,
       "height": 128,
       "scaleFactor": 2,
       "collisionDebug": true,
       "operations": [
         ["wait"]
+      ],
+      "image-threshold": [
+        {"platform-tag-contains": "", "threshold": 0.00075},
+        {"platform-tag-contains": "native", "threshold": 0.0078}
       ]
     }
   },

@@ -95,10 +95,7 @@ function detectReproduceCommand(): string | undefined {
     return undefined;
 }
 
-export function setupIntegrationTestsMiddlewares({reportPath, suiteName}: {
-    reportPath: string;
-    suiteName?: string;
-}): Plugin {
+export function setupIntegrationTestsMiddlewares({reportPath}: {reportPath: string;}): Plugin {
     return {
         name: 'setup-integration-tests-middlewares',
         configureServer(server) {
@@ -153,10 +150,7 @@ export function setupIntegrationTestsMiddlewares({reportPath, suiteName}: {
                 const shardId = process.env.POOL_SHARD_ID;
                 const totalShards = process.env.POOL_SHARDS;
                 const diagnostics: DiagnosticInfo = {
-                    platform: 'Mapbox GL JS (Web)',
                     generatedAt: new Date().toISOString(),
-                    testSuite: suiteName,
-                    configFile: detectConfigFileFromArgv(),
                     reproduceCommand: detectReproduceCommand(),
                     spriteFormat: process.env.SPRITE_FORMAT,
                     nodeVersion: process.version,

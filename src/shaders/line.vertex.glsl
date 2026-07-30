@@ -27,10 +27,9 @@ out vec3 v_elevation_id_col;
 in float a_elevation_ground_scale;
 #endif
 
-// Includes in order: a_uv_x, a_split_index, a_line_progress
-// to reduce attribute count on older devices.
-// Only line-gradient and line-trim-offset will requires a_packed info.
-#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET) || defined(RENDER_LINE_CURVE)
+// Includes in order: a_uv_x, a_split_index, a_line_progress to reduce attribute count on older devices.
+// Only line-gradient, line-border-gradient and line-trim-offset will requires a_packed info.
+#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_BORDER_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET) || defined(RENDER_LINE_CURVE)
 in highp vec3 a_packed;
 #endif
 
@@ -46,6 +45,11 @@ uniform float u_width_scale;
 // Note: This value is zero if line-z-offset has feature dependencies,
 // in that case the value is passed as a vertex attribute instead of a uniform.
 uniform float u_z_offset;
+
+// Elevated-road VLW carpet: 0.5 m view-depth pull toward camera (0 when disabled).
+// Always declared so GL locations resolve on all line program variants.
+uniform highp float u_road_view_depth_bias;
+uniform highp vec4 u_road_clip_to_view; // a,b,c,d for view = (a*z+b)/(c*z+d)
 
 #ifdef RENDER_LINE_CURVE
 // Encodes curve control points in 3x3 matrices for x, y, z
@@ -88,11 +92,11 @@ uniform float u_tile_units_to_pixels;
 out vec2 v_tex;
 #endif
 
-#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET)
+#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_BORDER_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET)
 out highp vec3 v_uv;
 #endif
 
-#ifdef RENDER_LINE_GRADIENT
+#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_BORDER_GRADIENT)
 uniform float u_image_height;
 #endif
 
@@ -218,7 +222,7 @@ void main() {
 #endif
 
     highp float line_progress = 0.0;
-#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET) || defined(RENDER_LINE_CURVE)
+#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_BORDER_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET) || defined(RENDER_LINE_CURVE)
     line_progress = a_packed[2];
 #endif
 
@@ -413,6 +417,25 @@ void main() {
     v_tile_pos = (v_tile_pos + extrude) / EXTENT;
 #ifdef ELEVATED_ROADS
     gl_Position = gl_Position + projected_extrude;
+#ifdef VARIABLE_LINE_WIDTH
+#ifndef ELEVATED
+    // Depth-only pull toward camera (xy/w unchanged — no world-Z float).
+    // Cap: 0.5 m in view/camera Z (same units as feature cutout). OpenGL view Z is
+    // negative; +bias = toward camera. Matches route cutout depth margin.
+    if (u_road_view_depth_bias > 0.0) {
+        highp float z_in = gl_Position.z / gl_Position.w * 0.5 + 0.5;
+        highp float a = u_road_clip_to_view.x;
+        highp float b = u_road_clip_to_view.y;
+        highp float c = u_road_clip_to_view.z;
+        highp float d = u_road_clip_to_view.w;
+        highp float view = (a * z_in + b) / (c * z_in + d);
+        highp float view_new = view + u_road_view_depth_bias;
+        highp float z_new = (view_new * d - b) / (a - view_new * c);
+        z_new = clamp(z_new, 0.0, 1.0);
+        gl_Position.z = (z_new * 2.0 - 1.0) * gl_Position.w;
+    }
+#endif // ELEVATED
+#endif // VARIABLE_LINE_WIDTH
 #else
     gl_Position = mix(gl_Position + projected_extrude, AWAY, hidden);
 #endif
@@ -444,10 +467,10 @@ void main() {
     v_gamma_scale = 1.0;
 #endif
 
-#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET)
+#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_BORDER_GRADIENT) || defined(RENDER_LINE_TRIM_OFFSET)
     highp float a_uv_x = a_packed[0];
     float a_split_index = a_packed[1];
-#ifdef RENDER_LINE_GRADIENT
+#if defined(RENDER_LINE_GRADIENT) || defined(RENDER_LINE_BORDER_GRADIENT)
     highp float texel_height = 1.0 / u_image_height;
     highp float half_texel_height = 0.5 * texel_height;
 

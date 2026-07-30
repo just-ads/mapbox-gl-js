@@ -22,6 +22,7 @@ import type {TextureImage, TextureWrap, TextureFilter} from '../../src/render/te
 import type Transform from '../../src/geo/transform';
 import type {Footprint} from '../util/conflation';
 import type {ModelBVH} from '../source/model_bvh';
+import type {LightOverrides} from '../render/lights';
 
 export type Sampler = {
     minFilter: TextureFilter;
@@ -309,6 +310,7 @@ export default class Model {
     materialOverrideNames: string[] = [];
     nodeOverrideNames: string[] = [];
     featureProperties: Record<string, unknown> = {};
+    lightOverrides?: LightOverrides;
 
     uri: string;
 
@@ -317,7 +319,7 @@ export default class Model {
         this.uri = uri;
         this.position = position != null ? new LngLat(position[0], position[1]) : new LngLat(0, 0);
 
-        this.orientation = orientation != null ? orientation : [0, 0, 0];
+        this.orientation = orientation ?? [0, 0, 0];
         this.nodes = nodes;
         this.uploaded = false;
         this.aabb = new Aabb([Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]);

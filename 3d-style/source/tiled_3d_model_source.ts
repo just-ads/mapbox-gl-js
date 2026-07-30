@@ -53,13 +53,10 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
     map: Map;
 
     onRemove: undefined;
-    abortTile: undefined;
     unloadTile: undefined;
     prepare: undefined;
     afterUpdate: undefined;
     _clear: undefined;
-
-    customTags?: Record<string, any>;
 
     /**
      * @private
@@ -80,7 +77,6 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
         this.reparseOverscaled = false;
         this.scheme = 'xyz';
         this._loaded = false;
-        this.customTags = options.customTags;
         this.setEventedParent(eventedParent);
     }
     onAdd(map: Map) {
@@ -141,43 +137,21 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
         return this._loaded;
     }
 
-    loadTile(tile: Tile, callback: Callback<undefined>) {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    async loadTile(tile: Tile, callback: Callback<undefined>): Promise<void> {
         const url = this.map._requestManager.normalizeTileURL(tile.tileID.canonical.url(this.tiles, this.scheme));
-        const request = this.map._requestManager.transformRequest(url, ResourceType.Tile, this.customTags, tile.tileID.canonical);
-        const params: WorkerSourceTiled3dModelRequest = {
-            request,
-            data: undefined,
-            uid: tile.uid,
-            tileID: tile.tileID,
-            tileZoom: tile.tileZoom,
-            zoom: tile.tileID.overscaledZ,
-            tileSize: this.tileSize * tile.tileID.overscaleFactor(),
-            type: this.type,
-            source: this.id,
-            scope: this.scope,
-            showCollisionBoxes: this.map.showCollisionBoxes,
-            renderSourceType: tile.renderSourceType,
-            brightness: this.map.style ? (this.map.style.getBrightness() || 0.0) : 0.0,
-            pixelRatio: browser.devicePixelRatio,
-            promoteId: this.promoteId,
-        };
 
-        const done = (err?: AJAXError | null, data?: WorkerSourceVectorTileResult | null) => {
-            if (tile.aborted) return callback(null);
-            if (err && !isHttpNotFound(err)) return callback(err);
-            if (this.map._refreshExpiredTiles && data) tile.setExpiryData(parseExpiryData(data.headers));
-            tile.loadModelData(data, this.map.painter);
-            tile.state = 'loaded';
-            callback(null);
-        };
-
-        if (!tile.actor || tile.state === 'expired') {
+        // The actor/state branch stays synchronous so a re-entrant loadTile dedupes correctly.
+        const isFresh = !tile.actor || tile.state === 'expired';
+        if (isFresh) {
             tile.actor = this.dispatcher.getActor();
-            tile.request = tile.actor.sendCancelable('loadTile', params, {}, done);
-        } else if (tile.state === 'loading') {
-            // schedule tile reloading after it has been loaded
-            tile.reloadCallback = callback;
         } else {
+            if (tile.state === 'loading') {
+                // schedule tile reloading after it has been loaded
+                tile.reloadCallback = callback;
+                return;
+            }
+
             // If the tile has already been parsed we may just need to reevaluate
             if (tile.buckets) {
                 const buckets = Object.values(tile.buckets) as Tiled3dModelBucket[];
@@ -187,8 +161,64 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
                 tile.state = 'loaded';
                 return;
             }
+        }
 
-            tile.request = tile.actor.sendCancelable('reloadTile', params, {}, done);
+        const messageType = isFresh ? 'loadTile' : 'reloadTile';
+        const controller = new AbortController();
+        tile.request = controller;
+
+        const done = (err?: AJAXError | null, data?: WorkerSourceVectorTileResult | null) => {
+            delete tile.request;
+            if (tile.aborted) return callback(null);
+            if (err && !isHttpNotFound(err)) return callback(err);
+            if (this.map._refreshExpiredTiles && data) tile.setExpiryData(parseExpiryData(data.headers));
+            tile.loadModelData(data, this.map.painter);
+            tile.state = 'loaded';
+            callback(null);
+
+            if (tile.reloadCallback) {
+                // eslint-disable-next-line @typescript-eslint/no-floating-promises
+                this.loadTile(tile, tile.reloadCallback);
+                tile.reloadCallback = null;
+            }
+        };
+
+        try {
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+            if (controller.signal.aborted) return callback(null);
+
+            const params: WorkerSourceTiled3dModelRequest = {
+                request,
+                data: undefined,
+                uid: tile.uid,
+                tileID: tile.tileID,
+                tileZoom: tile.tileZoom,
+                zoom: tile.tileID.overscaledZ,
+                tileSize: this.tileSize * tile.tileID.overscaleFactor(),
+                type: this.type,
+                source: this.id,
+                scope: this.scope,
+                showCollisionBoxes: this.map.showCollisionBoxes,
+                renderSourceType: tile.renderSourceType,
+                brightness: this.map.style ? (this.map.style.getBrightness() || 0.0) : 0.0,
+                pixelRatio: browser.devicePixelRatio,
+                promoteId: this.promoteId,
+            };
+
+            tile.request = tile.actor.sendCancelable(messageType, params, {}, done);
+        } catch (err) {
+            if (controller.signal.aborted) return callback(null);
+            callback(err as Error);
+        }
+    }
+
+    abortTile(tile: Tile) {
+        if (tile.request) {
+            tile.request.abort();
+            delete tile.request;
+        }
+        if (tile.actor) {
+            tile.actor.notify('abortTile', {uid: tile.uid, type: this.type, source: this.id, scope: this.scope});
         }
     }
 

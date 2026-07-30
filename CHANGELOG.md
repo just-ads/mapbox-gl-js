@@ -1,4 +1,74 @@
-## 3.25.0-rc.1
+## 3.28.0-rc.1
+
+### Breaking changes ⚠️
+- Disable `text-variable-anchor` when appearances are present.
+
+### Features and improvements ✨
+- Introduce _experimental_ `map.getVerticalFieldOfView()`, `map.setVerticalFieldOfView()`, and read-only `map.getHorizontalFieldOfView()` and an animatable `fov` camera option.
+- Expose `line-border-width` and `line-border-color` as public paint properties.
+- Introduce _experimental_ `line-border-gradient` property for rendering gradient borders on lines.
+- Add support for Meshopt v1 compressed models.
+- Support string color values for the `model-color` in a model source.
+- Add `map.resetFeatureStates()` to clear all feature states for a featureset or layer.
+- Expose `map.getSchema()`/`map.setSchema()` for managing the imported style's schema.
+- Extract development and debug code from the ESM bundle into a separate module.
+- Extract more model code from the ESM core bundle.
+- Extract `raster-array` layer as a separate ESM module.
+- Reduce the bundle size by restructuring style, program, symbol, and expression code.
+- Remove experimental flag from layer appearances.
+- Improve symbol layer performance.
+- Reduce redundant repaints and checks during initial load.
+
+### Bug fixes 🐞
+- Fix double rotation of the FF5C character in vertical text rendering.
+- Preserve live gesture when camera setter is called from inside a drag/move handler.
+- Stop overwriting the `pointerEvents` of markers set by the user.
+- Fix models with vertex alpha 0 appearing black.
+- Fix incorrect rendering of fill extrusions with `fill-extrusion-edge-radius` at low zoom levels in some cases.
+
+## 3.27.0
+
+### Features and improvements ✨
+
+- Upgrade to Typescript 7
+- Add cross-source HD roads elevation for symbols
+- Improve character rotation logic for some CJK characters in vertical text rendering mode
+
+### Bug fixes 🐞
+
+- Fix raster-array out of bounds assertion error for non-mecator projections
+- Fix error when object-property strings were used in expressions
+- Fix wrong access token used on multi-map environments
+- Fix `number-format` dropping `min/max-fraction-digits` when they were 0
+- Fix line-aligned label placement during globe-mercator transition
+- Fix crash when using style expressions with prototype-derived keys
+- Fix atlas cache returning another scope images
+- Fix `Style#{get,set,remove}FeatureState` with `{target: {layerId}}` so imported-layer targets resolve against their own fragment's sources instead of the root style's
+- Fix missing building along tile borders
+- Fix dynamic imports in UMD
+- Fix import.meta crash under modern bundlers
+- Fix `setPaintProperty` on symbol properties with a transition duration of 0
+
+## 3.26.0
+
+### Breaking changes ⚠️
+
+- Remove `transition` and `interpolated` flags from the `camera-projection` style property — enum properties cannot be transitioned, so these flags were incorrect.
+
+### Features and improvements ✨
+
+- Make published TypeScript declarations self-contained, fixing consumer builds that failed with `skipLibCheck: false`.
+- Improve terrain raycast accuracy for mouse events, camera fitting, and other pointer interactions.
+- Improve landmark model LOD switching with size-based distance heuristics for better rendering performance.
+
+### Bug fixes 🐞
+
+- Fix `hd-road-markup` elevated lines rendering flat with zero-exaggeration terrain.
+- Fix `viewport-y` symbol sorting causing a `Vertex buffer is not big enough for the draw call` error when a symbol bucket had multiple segments.
+- Fix multilinestrings not displaying labels correctly.
+- Fix parametric colors sometimes loading the wrong cached image.
+
+## 3.25.0
 
 ### Breaking changes ⚠️
 
@@ -21,7 +91,9 @@
 - Remove all direct dependencies from `package.json` slightly improving NPM install size and time.
 - Improve anti-aliasing for lines with borders.
 - Implement automatic conflation of regular and HD road data in preparation for future Mapbox Standard updates.
-- Improve lightmap shading for model layers.
+- Add support for async `transformRequest`: the callback can now return a `Promise` and receives an `AbortSignal`, enabling patterns such as refreshing an auth token before each request.
+- Add `lightOverrides` to model source, allowing per-model light configuration independent of the global style light setup.
+- Expose `setWorkerUrl` for the ESM entry point.
 
 ## Bug fixes 🐞
 

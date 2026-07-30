@@ -244,8 +244,7 @@ class ModelBucket implements Bucket {
 
         for (const {feature, id, index, sourceLayerIndex} of features) {
             // use non numeric id, if in properties, too.
-            const featureId = (id != null) ? id :
-                (feature.properties && Object.hasOwn(feature.properties, "id")) ? feature.properties["id"] : undefined;
+            const featureId = id ?? ((feature.properties && Object.hasOwn(feature.properties, "id")) ? feature.properties["id"] : undefined);
             const evaluationFeature = toEvaluationFeature(feature, needGeometry);
 
             if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom, {worldview: this.worldview, activeFloors: options.activeFloors}), evaluationFeature, canonical))
@@ -455,7 +454,7 @@ class ModelBucket implements Bucket {
         geometry: Array<Array<Point>>,
         evaluationFeature: EvaluationFeature,
         elevationFeatures?: ElevationFeature[],
-        canonical?: CanonicalTileID
+        canonical?: CanonicalTileID,
     ): string {
         const layer = this.layers[0];
         const modelIdProperty = layer.layout.get('model-id');
@@ -482,7 +481,8 @@ class ModelBucket implements Bucket {
         // Query elevation feature once per feature
         let tiledElevation: ElevationFeature | undefined;
         if (elevationFeatures) {
-            tiledElevation = getElevationFeature(feature, elevationFeatures);
+            const tiledResult = getElevationFeature(feature, elevationFeatures, undefined, canonical);
+            tiledElevation = tiledResult ? tiledResult.feature : undefined;
         }
 
         for (const geometries of geometry) {

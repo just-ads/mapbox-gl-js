@@ -73,6 +73,19 @@ describe('frc_road_classes', () => {
         test('missing class returns null', () => {
             expect(featureFrcLevel({})).toBeNull();
         });
+
+        test('incident_class used as fallback when class is absent', () => {
+            expect(featureFrcLevel({'incident_class': 'motorway'})).toBe(0);
+            expect(featureFrcLevel({'incident_class': 'primary'})).toBe(2);
+        });
+
+        test('class takes precedence over incident_class', () => {
+            expect(featureFrcLevel({'class': 'motorway', 'incident_class': 'service'})).toBe(0);
+        });
+
+        test('unknown incident_class returns null', () => {
+            expect(featureFrcLevel({'incident_class': 'aeroway'})).toBeNull();
+        });
     });
 
     describe('isFeatureCoveredByFrcMask', () => {
@@ -100,6 +113,11 @@ describe('frc_road_classes', () => {
             expect(isFeatureCoveredByFrcMask({class: 'trunk'}, mask)).toBe(true);
             expect(isFeatureCoveredByFrcMask({class: 'primary'}, mask)).toBe(true);
             expect(isFeatureCoveredByFrcMask({class: 'secondary'}, mask)).toBe(false);
+        });
+
+        test('incident_class fallback works in coverage check', () => {
+            expect(isFeatureCoveredByFrcMask({'incident_class': 'motorway'}, 0b1)).toBe(true);
+            expect(isFeatureCoveredByFrcMask({'incident_class': 'motorway'}, 0b10)).toBe(false);
         });
     });
 
@@ -225,6 +243,21 @@ describe('FrcCoverageSnapshot', () => {
         const miss = new FrcCoveragePolygon(0b1000, [squareRing(EXTENT - 100, EXTENT - 100, 50)]); // tiny far corner
         const snap = new FrcCoverageSnapshot([{tileId: new CanonicalTileID(13, 4398, 2686), polygons: [fullA, fullB, miss], frcMask: 0b1101}]);
         expect(snap.getFullCoverageMask(new CanonicalTileID(14, 8796, 5373))).toBe(0b101);
+    });
+
+    test('getFullCoverageMask: mixed full-tile 255 + partial path 256 → only 255', () => {
+        // Munich-style mixed tile: HD fully covers some road classes and only partly
+        // covers others — only the fully covered classes should count as full coverage.
+        const full = new FrcCoveragePolygon(255, []);
+        const path = new FrcCoveragePolygon(256, [squareRing(EXTENT - 100, EXTENT - 100, 50)]);
+        const snap = new FrcCoverageSnapshot([{
+            tileId: new CanonicalTileID(14, 8716, 5685),
+            polygons: [full, path],
+            frcMask: 511,
+        }]);
+        expect(snap.tiles[0].frcMask).toBe(511);
+        expect(path.hasGeometry()).toBe(true);
+        expect(snap.getFullCoverageMask(new CanonicalTileID(16, 34864, 22740))).toBe(255);
     });
 
     test('getFullCoverageMask: coverage tile with frcMask=0 returns null', () => {

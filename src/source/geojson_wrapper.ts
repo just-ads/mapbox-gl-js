@@ -31,7 +31,7 @@ class FeatureWrapper implements VectorTileFeatureLike {
 
     extent: number;
     type: 1 | 2 | 3;
-    id: number;
+    id: number | undefined;
     properties: {
         [_: string]: string | number | boolean;
     };
@@ -93,7 +93,7 @@ class LayerWrapper implements VectorTileLayerLike {
     }
 
     feature(i: number): VectorTileFeature {
-        return new FeatureWrapper(this._jsonFeatures[i] as Feature) as unknown as VectorTileFeature;
+        return new FeatureWrapper(this._jsonFeatures[i]!) as unknown as VectorTileFeature;
     }
 }
 
@@ -106,7 +106,7 @@ class GeoJSONWrapper implements VectorTile {
         this.extent = EXTENT;
 
         for (const name of Object.keys(layers)) {
-            this.layers[name] = new LayerWrapper(name, layers[name] as Array<Feature>) as unknown as VectorTileLayer;
+            this.layers[name] = new LayerWrapper(name, layers[name]!) as unknown as VectorTileLayer;
         }
     }
 }

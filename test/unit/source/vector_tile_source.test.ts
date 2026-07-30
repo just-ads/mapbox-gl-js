@@ -4,7 +4,12 @@ import {vi} from 'vitest';
 import {describe, test, expect, waitFor, doneAsync, afterEach} from '../../util/vitest';
 import {mockFetch} from '../../util/network';
 import VectorTileSource from '../../../src/source/vector_tile_source';
-import {OverscaledTileID} from '../../../src/source/tile_id';
+import {OverscaledTileID, CanonicalTileID} from '../../../src/source/tile_id';
+import {RenderSourceType} from '../../../src/source/render_source_type';
+import {HD} from '../../../modules/hd_main';
+import {ElevationFeature} from '../../../3d-style/elevation/elevation_feature';
+import {ElevationCoverageSnapshot} from '../../../3d-style/source/elevation_coverage_snapshot';
+import EXTENT from '../../../src/style-spec/data/extent';
 import {Evented} from '../../../src/util/evented';
 import {RequestManager} from '../../../src/util/mapbox';
 import sourceFixture from '../../fixtures/source.json';
@@ -17,6 +22,9 @@ const wrapDispatcher = (dispatcher) => {
         const send = dispatcher.send.bind(dispatcher);
         dispatcher.send = (type, data, options) => Promise.resolve(send(type, data, options));
         dispatcher.sendCancelable = Actor.prototype.sendCancelable;
+    }
+    if (dispatcher.send && !dispatcher.notify) {
+        dispatcher.notify = () => {};
     }
     /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment */
     return {
@@ -446,6 +454,144 @@ describe('VectorTileSource', () => {
         });
     });
 
+    function captureElevationParams({painter, tileID, renderSourceType, crossSourceEnabled}) {
+        return new Promise((resolve) => {
+            const source = createSource({
+                minzoom: 0,
+                maxzoom: 22,
+                tiles: ["http://example.com/{z}/{x}/{y}.png"]
+            });
+
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+            source.map.painter = painter;
+            source.map.transform = {...source.map.transform, zoom: 14};
+
+            source.dispatcher = wrapDispatcher({
+                send(type, params) {
+                    if (type === 'loadTile') {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                        resolve(params.elevation);
+                    }
+                }
+            });
+
+            source.on('data', (e) => {
+                if (e.sourceDataType === 'metadata') {
+                    if (crossSourceEnabled) {
+                        source.map.style._crossSourceElevationActive = true;
+                    }
+                    source.loadTile({
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                        tileID,
+                        uid: 0,
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                        renderSourceType: renderSourceType ?? RenderSourceType.Other,
+                    }, () => {});
+                }
+            });
+        });
+    }
+
+    describe('elevation params', () => {
+        test('painter.elevationCoverageSnapshot=null → elevation=null', async () => {
+            const elevation = await captureElevationParams({
+                painter: {
+                    _debugParams: {showElevationIdDebug: false},
+                    elevationCoverageSnapshot: null,
+                },
+                tileID: new OverscaledTileID(14, 0, 14, 8800, 5373),
+            });
+            expect(elevation).toBeNull();
+        });
+
+        test('HdRoadElevation render source → elevation=null', async () => {
+            const tileId = new CanonicalTileID(14, 8800, 5373);
+            const snapshot = new ElevationCoverageSnapshot([{
+                sourceFQID: 'roads',
+                tileId,
+                features: [new ElevationFeature(1, {min: 0, max: EXTENT}, 5.0)],
+            }]);
+            const elevation = await captureElevationParams({
+                painter: {
+                    _debugParams: {showElevationIdDebug: false},
+                    elevationCoverageSnapshot: snapshot,
+                },
+                tileID: new OverscaledTileID(14, 0, 14, 8800, 5373),
+                renderSourceType: RenderSourceType.HdRoadElevation,
+            });
+            expect(elevation).toBeNull();
+        });
+
+        test('style.terrain set → terrainEnabled=true and elevation=null', async () => {
+            // Under terrain, HD road-markup lines drape flat: the worker is
+            // told terrain is on and no snapshot is shipped, even when one exists on the painter.
+            const tileId = new CanonicalTileID(14, 8800, 5373);
+            const snapshot = new ElevationCoverageSnapshot([{
+                sourceFQID: 'roads',
+                tileId,
+                features: [new ElevationFeature(42, {min: 0, max: EXTENT}, 8.0)],
+            }]);
+            const params = await new Promise((resolve) => {
+                const source = createSource({
+                    minzoom: 0,
+                    maxzoom: 22,
+                    tiles: ["http://example.com/{z}/{x}/{y}.png"]
+                });
+                source.map.painter = {_debugParams: {showElevationIdDebug: false}, elevationCoverageSnapshot: snapshot};
+                source.map.style.terrain = {isZoomDependent: () => false, getExaggeration: () => 1};
+                source.map.transform = {...source.map.transform, zoom: 14, projection: {requiresDraping: false}};
+                source.dispatcher = wrapDispatcher({
+                    send(type, p) { if (type === 'loadTile') resolve(p); }
+                });
+                source.on('data', (e) => {
+                    if (e.sourceDataType === 'metadata') {
+                        source.loadTile({tileID: new OverscaledTileID(14, 0, 14, 8800, 5373), uid: 0, renderSourceType: RenderSourceType.Other}, () => {});
+                    }
+                });
+            });
+            expect(params.terrainEnabled).toBe(true);
+            expect(params.elevation).toBeNull();
+        });
+
+        test('snapshot present → buildElevationRequestParams payload attached', async () => {
+            expect(typeof HD.buildElevationRequestParams).toBe('function');
+            const tileId = new CanonicalTileID(14, 8800, 5373);
+            const feature = new ElevationFeature(42, {min: 0, max: EXTENT}, 8.0);
+            const snapshot = new ElevationCoverageSnapshot([{
+                sourceFQID: 'roads',
+                tileId,
+                features: [feature],
+            }]);
+            const elevation = await captureElevationParams({
+                painter: {
+                    _debugParams: {showElevationIdDebug: false},
+                    elevationCoverageSnapshot: snapshot,
+                },
+                tileID: new OverscaledTileID(14, 0, 14, 8800, 5373),
+                crossSourceEnabled: true,
+            });
+            expect(elevation).not.toBeNull();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(elevation.registry.length).toBe(1);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(elevation.registry[0].feature.id).toBe(42);
+        });
+
+        test('cross-source enabled but no snapshot → empty-registry stub', async () => {
+            // Every feature renders flat; once a covering provider tile loads the snapshot
+            // changes and this tile reparses.
+            const elevation = await captureElevationParams({
+                painter: {
+                    _debugParams: {showElevationIdDebug: false},
+                    elevationCoverageSnapshot: null,
+                },
+                tileID: new OverscaledTileID(14, 0, 14, 8800, 5373),
+                crossSourceEnabled: true,
+            });
+            expect(elevation).toEqual({registry: [], hasCoveringTile: false, allProvidersReady: false});
+        });
+    });
+
     test('transforms tile urls before requesting', async () => {
         mockFetch({
             '/source.json': () => new Response(JSON.stringify(sourceFixture))
@@ -488,7 +634,7 @@ describe('VectorTileSource', () => {
             source.loadTile(tile, () => {});
             expect(transformSpy).toHaveBeenCalledTimes(1);
             expect(transformSpy.mock.calls[0][0]).toEqual(
-                `https://api.mapbox.com/v4/user.map/10/5/5.png?sku=${source.map._requestManager._skuToken}&access_token=key`
+                `https://api.mapbox.com/v4/user.map/10/5/5.webp?sku=${source.map._requestManager._skuToken}&access_token=key`
             );
             expect(transformSpy.mock.calls[0][1]).toEqual('Tile');
         }
@@ -521,7 +667,8 @@ describe('VectorTileSource', () => {
                 source.loadTile(tile, () => {});
                 expect(tile.state).toEqual('loading');
                 source.loadTile(tile, withAsync((_, __, doneRef) => {
-                    expect(events).toStrictEqual(['loadTile', 'tileLoaded', 'enforceCacheSizeLimit', 'reloadTile', 'tileLoaded']);
+                    // `enforceCacheSizeLimit` is now fire-and-forget (notify), so the send-spy no longer records it.
+                    expect(events).toStrictEqual(['loadTile', 'tileLoaded', 'reloadTile', 'tileLoaded']);
                     // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                     doneRef.resolve();
                 }));
@@ -774,6 +921,44 @@ describe('VectorTileSource', () => {
             });
         }
     });
+
+    test('aborting a tile while its transform is pending issues no worker message', async () => {
+        let resolveTransform;
+        const transformCallback = vi.fn(() => new Promise((resolve) => { resolveTransform = resolve; }));
+
+        const source = createSource({
+            minzoom: 0,
+            maxzoom: 22,
+            tiles: ["http://example.com/{z}/{x}/{y}.png"]
+        }, {transformCallback});
+
+        let sendCalled = false;
+        source.dispatcher = wrapDispatcher({
+            send(type) {
+                if (type === 'loadTile' || type === 'reloadTile') sendCalled = true;
+                return new Promise(() => {});
+            }
+        });
+
+        source.tiles = ["http://example.com/{z}/{x}/{y}.png"];
+        const tile = {tileID: new OverscaledTileID(10, 0, 10, 5, 5), state: 'loading'};
+        let callbackErr = 'unset';
+        source.loadTile(tile, (err) => { callbackErr = err; });
+
+        expect(transformCallback).toHaveBeenCalledTimes(1);
+        expect(tile.request).toBeTruthy();
+
+        // Abort mid-transform, then let the transform resolve.
+        tile.aborted = true;
+        source.abortTile(tile);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        resolveTransform({url: 'http://example.com/10/5/5.png'});
+
+        await new Promise(resolve => { setTimeout(resolve, 0); });
+
+        expect(sendCalled).toEqual(false);
+        expect(callbackErr).toEqual(null);
+    });
 });
 
 describe('VectorTileSource provider', () => {
@@ -789,16 +974,16 @@ describe('VectorTileSource provider', () => {
     function createProviderSource(
         providerName: string,
         options: Record<string, unknown>,
-        overrides: {dispatcherOverrides?: object; mapOverrides?: object; broadcastResult?: unknown[]} = {},
+        overrides: {dispatcherOverrides?: object; mapOverrides?: object; sendResult?: unknown[]} = {},
     ) {
-        const {dispatcherOverrides, mapOverrides, broadcastResult} = overrides;
-        const broadcastSpy = vi.fn((_type: string, _data: unknown, _signal?: AbortSignal) => {
-            return Promise.resolve(broadcastResult !== undefined ? broadcastResult : [null]);
+        const {dispatcherOverrides, mapOverrides, sendResult} = overrides;
+        const sendSpy = vi.fn((_type: string, _data: unknown, _signal?: AbortSignal) => {
+            return Promise.resolve(sendResult !== undefined ? sendResult : [null]);
         });
         const dispatcher = {
             getActor() { return {send() { return new Promise(() => {}); }}; },
             ready: true,
-            broadcast: broadcastSpy,
+            send: sendSpy,
             ...dispatcherOverrides,
         };
 
@@ -825,7 +1010,7 @@ describe('VectorTileSource provider', () => {
             ...mapOverrides,
         } as unknown as Parameters<typeof source.onAdd>[0]);
 
-        return {source, broadcastSpy, dispatcher};
+        return {source, sendSpy, dispatcher};
     }
 
     test('fires error when provider is not registered', async () => {
@@ -839,7 +1024,7 @@ describe('VectorTileSource provider', () => {
         }, {
             getActor() { return {send() {}}; },
             ready: true,
-            broadcast: vi.fn(),
+            send: vi.fn(),
         }, null);
 
         // Listen before onAdd since the error fires synchronously
@@ -864,21 +1049,21 @@ describe('VectorTileSource provider', () => {
         expect(e.error.message).toMatch(new RegExp(`TileProvider "${name}" is not registered`));
     });
 
-    test('broadcasts loadTileProvider to workers', async () => {
+    test('sends loadTileProvider to workers', async () => {
         const name = nextProvider();
         const moduleUrl = 'http://example.com/provider.js';
         config.TILE_PROVIDER_URLS[name] = moduleUrl;
 
-        const {source, broadcastSpy} = createProviderSource(name, {
+        const {source, sendSpy} = createProviderSource(name, {
             tiles: ['http://example.com/{z}/{x}/{y}.mvt'],
         });
 
-        expect(broadcastSpy).toHaveBeenCalledWith(
+        await waitFor(source, 'data');
+        expect(sendSpy).toHaveBeenCalledWith(
             'loadTileProvider',
             expect.objectContaining({name, url: moduleUrl, source: 'id', type: 'vector'}),
             expect.anything()
         );
-        await waitFor(source, 'data');
         expect(source.tiles).toEqual(['http://example.com/{z}/{x}/{y}.mvt']);
     });
 
@@ -892,7 +1077,7 @@ describe('VectorTileSource provider', () => {
         config.TILE_PROVIDER_URLS[name] = 'http://example.com/provider.js';
 
         const {source} = createProviderSource(name, {url: 'pmtiles://my-archive.pmtiles'}, {
-            broadcastResult: [tileJSON],
+            sendResult: [tileJSON],
         });
 
         await waitFor(source, 'data');
@@ -914,16 +1099,16 @@ describe('VectorTileSource provider autodetection', () => {
 
     function createAutodetectSource(
         options: Record<string, unknown>,
-        overrides: {broadcastResult?: unknown[]} = {},
+        overrides: {sendResult?: unknown[]} = {},
     ) {
-        const {broadcastResult} = overrides;
-        const broadcastSpy = vi.fn((_type: string, _data: unknown, _signal?: AbortSignal) => {
-            return Promise.resolve(broadcastResult !== undefined ? broadcastResult : [null]);
+        const {sendResult} = overrides;
+        const sendSpy = vi.fn((_type: string, _data: unknown, _signal?: AbortSignal) => {
+            return Promise.resolve(sendResult !== undefined ? sendResult : [null]);
         });
         const dispatcher = {
             getActor() { return {send() { return new Promise(() => {}); }}; },
             ready: true,
-            broadcast: broadcastSpy,
+            send: sendSpy,
         };
 
         const source = new VectorTileSource(
@@ -948,17 +1133,18 @@ describe('VectorTileSource provider autodetection', () => {
             },
         } as unknown as Parameters<typeof source.onAdd>[0]);
 
-        return {source, broadcastSpy, dispatcher};
+        return {source, sendSpy, dispatcher};
     }
 
-    test('autodetects provider from .pmtiles URL extension', () => {
+    test('autodetects provider from .pmtiles URL extension', async () => {
         config.TILE_PROVIDER_URLS['pmtiles'] = '/mapbox-gl-js/mock-provider.js';
 
-        const {broadcastSpy} = createAutodetectSource({
+        const {sendSpy} = createAutodetectSource({
             url: 'https://example.com/tiles.pmtiles',
         });
 
-        expect(broadcastSpy).toHaveBeenCalledWith(
+        await new Promise(resolve => { setTimeout(resolve, 0); });
+        expect(sendSpy).toHaveBeenCalledWith(
             'loadTileProvider',
             expect.objectContaining({name: 'pmtiles'}),
             expect.anything()
@@ -968,24 +1154,25 @@ describe('VectorTileSource provider autodetection', () => {
     test('does not autodetect when provider is false', () => {
         config.TILE_PROVIDER_URLS['pmtiles'] = '/mapbox-gl-js/mock-provider.js';
 
-        const {broadcastSpy} = createAutodetectSource({
+        const {sendSpy} = createAutodetectSource({
             url: 'https://example.com/tiles.pmtiles',
             provider: false,
         });
 
-        expect(broadcastSpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
     });
 
-    test('does not autodetect when provider is explicitly set', () => {
+    test('does not autodetect when provider is explicitly set', async () => {
         config.TILE_PROVIDER_URLS['pmtiles'] = '/mapbox-gl-js/mock-provider.js';
         config.TILE_PROVIDER_URLS['custom'] = 'https://example.com/custom.js';
 
-        const {broadcastSpy} = createAutodetectSource({
+        const {sendSpy} = createAutodetectSource({
             url: 'https://example.com/tiles.pmtiles',
             provider: 'custom',
         });
 
-        expect(broadcastSpy).toHaveBeenCalledWith(
+        await new Promise(resolve => { setTimeout(resolve, 0); });
+        expect(sendSpy).toHaveBeenCalledWith(
             'loadTileProvider',
             expect.objectContaining({name: 'custom', url: 'https://example.com/custom.js'}),
             expect.anything()
@@ -994,22 +1181,23 @@ describe('VectorTileSource provider autodetection', () => {
     });
 
     test('does not autodetect when URL has no matching extension', () => {
-        const {broadcastSpy} = createAutodetectSource({
+        const {sendSpy} = createAutodetectSource({
             url: 'https://example.com/tilejson.json',
         });
 
-        expect(broadcastSpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
     });
 
-    test('resolves relative provider URL against API_URL', () => {
+    test('resolves relative provider URL against API_URL', async () => {
         config.TILE_PROVIDER_URLS['pmtiles'] = '/mapbox-gl-js/mock-provider.js';
         config.API_URL = 'https://api.mapbox.cn';
 
-        const {broadcastSpy} = createAutodetectSource({
+        const {sendSpy} = createAutodetectSource({
             url: 'https://example.com/tiles.pmtiles',
         });
 
-        expect(broadcastSpy).toHaveBeenCalledWith(
+        await new Promise(resolve => { setTimeout(resolve, 0); });
+        expect(sendSpy).toHaveBeenCalledWith(
             'loadTileProvider',
             expect.objectContaining({url: 'https://api.mapbox.cn/mapbox-gl-js/mock-provider.js'}),
             expect.anything()

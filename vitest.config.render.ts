@@ -7,7 +7,7 @@ import {integrationTests, setupIntegrationTestsMiddlewares, serveDistPlugin, sui
 import type {BrowserConfigOptions} from 'vitest/node';
 
 const renderBrowser = process.env.RENDER_BROWSER || 'chromium';
-const bundle = process.env.RENDER_BUNDLE || 'dev';
+const bundle = process.env.RENDER_BUNDLE || 'esm';
 
 const getAngle = () => {
     if (os.platform() === 'darwin' && os.arch() === 'arm64') return '--use-angle=metal';
@@ -35,8 +35,11 @@ const browser = browsers[renderBrowser === 'safari' ? 'webkit' : renderBrowser];
 
 export default mergeConfig(baseConfig, defineConfig({
     define: {
-        'import.meta.env.VITE_CI': isCI,
-        'import.meta.env.VITE_UPDATE': process.env.UPDATE != null,
+        'import.meta.env.VITE_CI': JSON.stringify(String(isCI)),
+        'import.meta.env.VITE_UPDATE': JSON.stringify(String(process.env.UPDATE === 'true')),
+        // Opt-in embedding of passed-test images in the report (local dev only;
+        // forced off on CI to keep the report small).
+        'import.meta.env.VITE_EMBED_PASSED_IMAGES': JSON.stringify(String(!isCI && process.env.EMBED_PASSED_IMAGES === 'true')),
         'import.meta.env.VITE_SPRITE_FORMAT': process.env.SPRITE_FORMAT != null ? JSON.stringify(process.env.SPRITE_FORMAT) : null,
         'import.meta.env.VITE_DIST_BUNDLE': JSON.stringify(bundle),
     },
@@ -50,7 +53,6 @@ export default mergeConfig(baseConfig, defineConfig({
     plugins: [
         setupIntegrationTestsMiddlewares({
             reportPath: 'test/integration/render-tests/render-tests.html',
-            suiteName: 'render-tests',
         }),
         integrationTests({suiteDirs: suiteDirs('render-tests'), includeImages: true}),
         serveDistPlugin(),

@@ -1,24 +1,25 @@
 import {compile} from 'yeahjs';
 
-type TestStatus = 'passed' | 'failed' | 'ignored';
-
-type IgnoredOutcome = 'not run' | 'passed' | 'failed';
+type TestStatus = 'passed' | 'failed' | 'skipped';
 
 export type TestReportData = {
     name: string;
     status: TestStatus;
     color?: string;
-    ignoredOutcome?: IgnoredOutcome;
+    testPath?: string;
     width?: number;
     height?: number;
     actual?: string;
     expected?: string;
-    expectedPath?: string;
     imgDiff?: string;
-    allowed?: number;
+    imageThreshold?: number;
+    imageThresholdRule?: string;
     minDiff?: number;
     jsonDiff?: string;
     error?: Error;
+    skippedReasons?: string[];
+    matchedSkipRules?: string[];
+    matchedExpectedFile?: string;
 };
 
 type DecoratedTestData = TestReportData & {
@@ -26,7 +27,9 @@ type DecoratedTestData = TestReportData & {
     domId: string;
     domIdJs: string;
     isRenderTest: boolean;
-    attempt?: number;
+    attempts: number;
+    failedAttempts: number;
+    retryNote?: string;
     errorMessage?: string;
 };
 
@@ -37,10 +40,10 @@ type ReportWindow = Window & {updateState?: () => void};
 const renderResultHTML = compile(`
   <div class="test <%= r.status %>">
     <h2><span class="label" style="background: <%= r.color %>"><%= r.status %></span> <%= r.name %></h2>
-    <% if (r.ignoredOutcome) { %>
-      <p class="ignore-outcome"><strong>Outcome:</strong> <% if (r.ignoredOutcome === 'failed') { %><span class="ignore-outcome-failed">FAILED</span><% } else { %><%= r.ignoredOutcome %><% } %></p>
+    <% if (r.testPath) { %>
+      <p class="diff"><strong>Test path:</strong> <%= r.testPath %></p>
     <% } %>
-    <% if (r.showImages !== false && !r.error) { %>
+    <% if (r.showImages !== false && (!r.error || r.actual || r.expected)) { %>
       <% if (r.isRenderTest && (r.actual || r.expected)) { %>
         <span class="img-container" onmouseover="showExpected('<%= r.domIdJs %>')" onmouseout="showActual('<%= r.domIdJs %>')">
           <p class="img-label" id="<%= r.domId %>-label">Actual Result (hover mouse to show expected)</p>
@@ -63,20 +66,41 @@ const renderResultHTML = compile(`
     <% if (r.error) { %>
       <p style="color: red"><strong>Test Error:</strong> <%= r.errorMessage %></p>
     <% } %>
-    <% if (r.allowed !== undefined) { %>
-      <p class="diff"><strong>Allowed:</strong> <%= r.allowed %></p>
+    <% if (r.status !== 'skipped' && r.imageThreshold !== undefined) { %>
+      <p class="diff"><strong>Image Threshold<% if (r.imageThresholdRule !== undefined) { %> (<%= r.imageThresholdRule === '' ? '""' : r.imageThresholdRule %>)<% } %>:</strong> <%= r.imageThreshold %></p>
     <% } %>
-    <% if (r.minDiff !== undefined) { %>
+    <% if (r.status !== 'skipped' && r.minDiff !== undefined) { %>
       <p class="diff"><strong>Diff:</strong> <%= r.minDiff === 0 ? 'none' : r.minDiff %></p>
     <% } %>
-    <% if (r.expectedPath) { %>
-      <p class="diff"><strong>Expected image path:</strong> <%= r.expectedPath %></p>
+    <% if (r.matchedExpectedFile) { %>
+      <p class="diff"><strong>Matched expected file:</strong> <%= r.matchedExpectedFile %></p>
+    <% } %>
+    <% if (r.retryNote) { %>
+      <p class="retry-note"><strong><%= r.retryNote %></strong></p>
     <% } %>
     <% if (r.jsonDiff) { %>
       <details>
         <summary><strong style="color: red">JSON Diff</strong></summary>
         <pre><%= r.jsonDiff %></pre>
       </details>
+    <% } %>
+    <% if (r.status === 'skipped') { %>
+      <%
+        const reasons = r.skippedReasons || [];
+        const rules = r.matchedSkipRules || [];
+        const count = Math.max(reasons.length, rules.length);
+        for (let i = 0; i < count; i++) {
+          const rule = rules[i];
+          const reason = reasons[i];
+      %>
+        <% if (rule && reason) { %>
+          <p class="ignore-reason"><strong>Skip reason:</strong> <%= rule %> - <%= reason %></p>
+        <% } else if (rule) { %>
+          <p class="ignore-reason"><strong>Skip reason:</strong> <%= rule %></p>
+        <% } else if (reason) { %>
+          <p class="ignore-reason"><strong>Skip reason:</strong> <%= reason %></p>
+        <% } %>
+      <% } %>
     <% } %>
   </div>
 `, {locals: ['r']});
@@ -95,9 +119,8 @@ img { margin: 0 10px 10px 0; border: 1px dotted #ccc; image-rendering: pixelated
 .test { border-bottom: 1px dotted #bbb; padding-bottom: 5px; }
 .tests { border-top: 1px dotted #bbb; margin-top: 10px; }
 .diff { color: #777; }
+.retry-note { color: #b26a00; }
 .ignore-reason { color: #555; font-style: italic; }
-.ignore-outcome { color: #555; }
-.ignore-outcome-failed { color: red; font-weight: bold; }
 .test p, .test pre { margin: 0 0 10px; }
 .test pre { font-size: 14px; }
 .label { color: white; font-size: 18px; padding: 2px 6px 3px; border-radius: 3px; margin-right: 3px; vertical-align: bottom; display: inline-block; }
@@ -114,8 +137,8 @@ const reportScript = `
 function isPassedTest(row) {
     return row.classList.contains('passed') || row.classList.contains('passed-metrics-failed');
 }
-function isIgnoredTest(row) {
-    return row.classList.contains('ignored');
+function isSkippedTest(row) {
+    return row.classList.contains('skipped');
 }
 function isFailedTest(row) {
     return row.classList.contains('failed');
@@ -123,17 +146,21 @@ function isFailedTest(row) {
 function updateState() {
     const showPassedCheckbox = document.getElementById('checkbox-show-passed');
     const showPassed = showPassedCheckbox ? showPassedCheckbox.checked : false;
-    const showIgnored = document.getElementById('checkbox-show-ignored').checked;
+    const showSkipped = document.getElementById('checkbox-show-skipped').checked;
     for (const row of document.querySelectorAll('.test')) {
-        const show = isFailedTest(row) || (showPassed && isPassedTest(row)) || (showIgnored && isIgnoredTest(row));
+        const show = isFailedTest(row) || (showPassed && isPassedTest(row)) || (showSkipped && isSkippedTest(row));
         row.classList.toggle('hide', !show);
+    }
+    const embedHint = document.getElementById('embed-passed-hint');
+    if (embedHint) {
+        embedHint.classList.toggle('hide', !showPassed);
     }
 }
 const showPassedCheckbox = document.getElementById('checkbox-show-passed');
 if (showPassedCheckbox) {
     showPassedCheckbox.addEventListener('change', function (e) { updateState(); });
 }
-document.getElementById('checkbox-show-ignored').addEventListener('change', function (e) { updateState(); });
+document.getElementById('checkbox-show-skipped').addEventListener('change', function (e) { updateState(); });
 document.getElementById('checkbox-img-hover').addEventListener('change', function (e) {
     if (document.getElementById('checkbox-img-hover').checked == false){
 
@@ -178,26 +205,44 @@ function showActual(prefixId) {
 
 const stats: Stats = {
     passed: 0,
-    ignored: 0,
+    skipped: 0,
     failed: 0,
 };
 
 const colors: Record<TestStatus, string> = {
     passed: 'green',
     failed: 'red',
-    ignored: '#9E9E9E',
+    skipped: '#9E9E9E',
 };
 
 let resultsContainer: HTMLDivElement | undefined;
 let statsFailedHeader: HTMLHeadingElement | undefined;
 let statsSummary: HTMLParagraphElement | undefined;
 let refreshReportFilters: () => void = () => {};
+let embedPassedImagesForRun = false;
 
+// Latest known status per test, so a test that fails then passes on retry is
+// counted once, by its final outcome.
 const testStatus = new Map<string, TestStatus>();
-const testId = new Map<string, number>();
+// Total runs and failed runs per test, used to annotate flaky/retried tests.
+const testAttempts = new Map<string, number>();
+const testFailedAttempts = new Map<string, number>();
+// Stable report-fragment id per test. Reused across a test's retries so the
+// final attempt's fragment overwrites earlier ones on the server side (the
+// report is assembled from fragments keyed by id), yielding exactly one report
+// entry per test regardless of how many times vitest reran it.
+const fragmentIds = new Map<string, number>();
+let nextFragmentId = 1;
+// Live in-browser DOM node per test, for the optional local watch view.
+const liveDomNodes = new Map<string, Element>();
 
-function isCI(): boolean {
-    return import.meta.env.CI === true || import.meta.env.VITE_CI === 'true';
+export function fragmentIdFor(name: string): number {
+    let id = fragmentIds.get(name);
+    if (id === undefined) {
+        id = nextFragmentId++;
+        fragmentIds.set(name, id);
+    }
+    return id;
 }
 
 function failedCount(): number {
@@ -216,18 +261,25 @@ function updateStatsDisplay(): void {
         statsFailedHeader.textContent = 'All tests passed!';
     }
 
-    const passedLabel = isCI() ? `${stats.passed} passed (hidden)` : `${stats.passed} passed`;
-    statsSummary.textContent = `${passedLabel}, ${stats.ignored} ignored, ${failedCount()} failed.`;
+    statsSummary.textContent = `${stats.passed} passed, ${stats.skipped} skipped, ${failedCount()} failed.`;
 }
 
-function shouldAddToReport(testData: TestReportData): boolean {
-    if (testData.status === 'passed' && isCI()) return false;
-    return true;
+// A note surfaced on retried tests: flaky passes and all-attempts failures.
+// Retries themselves are kept (they smooth over genuinely flaky rendering);
+// this just makes the retrying visible instead of leaving a stale failed entry.
+function retryNote(status: TestStatus, attempts: number, failedAttempts: number): string | undefined {
+    if (status === 'passed' && failedAttempts > 0) {
+        const plural = failedAttempts === 1 ? 'attempt' : 'attempts';
+        return `Flaky: passed after ${failedAttempts} failed ${plural} (${attempts} runs total).`;
+    }
+    if (status === 'failed' && attempts > 1) {
+        return `Failed on all ${attempts} attempts.`;
+    }
+    return undefined;
 }
 
 function shouldShowImages(testData: TestReportData): boolean {
-    if (testData.ignoredOutcome === 'not run') return false;
-    if (testData.status === 'ignored' && testData.ignoredOutcome === 'passed' && isCI()) return false;
+    if (testData.status === 'skipped') return false;
     return true;
 }
 
@@ -239,7 +291,7 @@ function escapeHTML(value: string): string {
     return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function decorateTestData(testData: TestReportData): DecoratedTestData {
+function decorateTestData(testData: TestReportData, attempts: number, failedAttempts: number): DecoratedTestData {
     const status = testData.status;
     const decorated: DecoratedTestData = {
         ...testData,
@@ -247,8 +299,10 @@ function decorateTestData(testData: TestReportData): DecoratedTestData {
         showImages: shouldShowImages(testData),
         domId: testData.name,
         domIdJs: escapeJsString(testData.name),
-        isRenderTest: testData.allowed !== undefined,
-        attempt: testId.get(testData.name),
+        isRenderTest: testData.imageThreshold !== undefined,
+        attempts,
+        failedAttempts,
+        retryNote: retryNote(status, attempts, failedAttempts),
     };
     if (testData.error) {
         decorated.errorMessage = escapeHTML(testData.error.stack || testData.error.message || String(testData.error));
@@ -256,26 +310,34 @@ function decorateTestData(testData: TestReportData): DecoratedTestData {
     return decorated;
 }
 
-function getFilterCheckboxesHTML(minimizeReport = isCI()): string {
-    const showPassedCheckbox = minimizeReport ? '' : '<label><input type="checkbox" id="checkbox-show-passed">Show passed tests</label>\n';
-    return `${showPassedCheckbox}<label><input type="checkbox" id="checkbox-show-ignored">Show ignored tests</label>
-<label><input type="checkbox" id="checkbox-img-hover" checked>Toggle images on Hover</label>`;
+// Passed tests are always included now (hidden behind the "Show passed tests"
+// checkbox), so the checkbox is always rendered.
+function getFilterCheckboxesHTML(embedPassedImages: boolean): string {
+    const hint = embedPassedImages ? '' : `
+<p id="embed-passed-hint" class="hide" style="color: red; font-weight: bold;">Passed-test images are not embedded in this report. Re-run with EMBED_PASSED_IMAGES=true to include them.</p>`;
+    return `<label><input type="checkbox" id="checkbox-show-passed">Show passed tests</label>
+<label><input type="checkbox" id="checkbox-show-skipped">Show skipped tests</label>
+<label><input type="checkbox" id="checkbox-img-hover" checked>Toggle images on Hover</label>${hint}`;
 }
 
 function runReportUpdateState(): void {
     (window as ReportWindow).updateState?.();
 }
 
-export function registerIgnoredNotRun(name: string): string {
+export function registerSkipped(name: string, testPath?: string, skippedReasons?: string[], matchedSkipRules?: string[]): string {
     return updateHTML({
         name,
-        status: 'ignored',
-        color: colors.ignored,
-        ignoredOutcome: 'not run',
+        status: 'skipped',
+        color: colors.skipped,
+        testPath,
+        skippedReasons,
+        matchedSkipRules,
     });
 }
 
-export function setupHTML(): void {
+export function setupHTML(embedPassedImages: boolean): void {
+    embedPassedImagesForRun = embedPassedImages;
+
     const style = document.createElement('style');
     document.head.appendChild(style);
     style.appendChild(document.createTextNode(pageCss));
@@ -284,7 +346,7 @@ export function setupHTML(): void {
     statsFailedHeader.textContent = 'All tests passed!';
     document.body.appendChild(statsFailedHeader);
 
-    const filterFragment = document.createRange().createContextualFragment(getFilterCheckboxesHTML());
+    const filterFragment = document.createRange().createContextualFragment(getFilterCheckboxesHTML(embedPassedImages));
     document.body.appendChild(filterFragment);
 
     statsSummary = document.createElement('p');
@@ -316,54 +378,65 @@ function installReportFilterHandlers(): void {
 
 export function getStatsHTML(): string {
     if (statsFailedHeader && statsSummary) {
-        return `${statsFailedHeader.outerHTML}\n${getFilterCheckboxesHTML()}\n${statsSummary.outerHTML}`;
+        return `${statsFailedHeader.outerHTML}\n${getFilterCheckboxesHTML(embedPassedImagesForRun)}\n${statsSummary.outerHTML}`;
     }
 
     return '';
 }
 
+// Records one run of a test and returns the HTML fragment for its (single)
+// report entry. On a retry this is called again for the same name; the caller
+// sends the result under the test's stable fragmentIdFor(name), so the latest
+// run's fragment replaces earlier ones -- a flaky test that eventually passes
+// ends up as one passed entry (annotated with its failed attempts), and a test
+// that fails every attempt ends up as one failed entry (annotated with the
+// attempt count). Always returns a non-empty fragment so the overwrite happens.
 export function updateHTML(testData: TestReportData): string {
     const status = testData.status;
+    const name = testData.name;
 
-    if (!testStatus.has(testData.name)) {
-        stats[status]++;
-        testStatus.set(testData.name, status);
-        testId.set(testData.name, 0);
-    } else {
-        const previousStatus = testStatus.get(testData.name);
-        if (previousStatus !== status) {
-            if (previousStatus) stats[previousStatus]--;
-            stats[status]++;
-            testStatus.set(testData.name, status);
-            testId.set(testData.name, (testId.get(testData.name) ?? 0) + 1);
-        } else {
-            testId.set(testData.name, (testId.get(testData.name) ?? 0) + 1);
-        }
+    const attempts = (testAttempts.get(name) ?? 0) + 1;
+    testAttempts.set(name, attempts);
+    if (status === 'failed') {
+        testFailedAttempts.set(name, (testFailedAttempts.get(name) ?? 0) + 1);
     }
+
+    // Tally each test once, by its latest status.
+    const previousStatus = testStatus.get(name);
+    if (previousStatus === undefined) {
+        stats[status]++;
+    } else if (previousStatus !== status) {
+        stats[previousStatus]--;
+        stats[status]++;
+    }
+    testStatus.set(name, status);
 
     updateStatsDisplay();
 
-    if (!shouldAddToReport(testData)) {
-        return '';
-    }
+    const failedAttempts = testFailedAttempts.get(name) ?? 0;
+    const html = generateResultHTML({r: decorateTestData(testData, attempts, failedAttempts)});
 
-    if (!resultsContainer) {
-        return '';
+    // Mirror into the live in-browser DOM for local watching. Replace any prior
+    // entry for this test rather than appending a duplicate on retries.
+    if (resultsContainer) {
+        const frag = document.createRange().createContextualFragment(html);
+        const node = frag.firstElementChild;
+        const existing = liveDomNodes.get(name);
+        if (existing && node) {
+            resultsContainer.replaceChild(node, existing);
+        } else if (node) {
+            resultsContainer.appendChild(node);
+        }
+        if (node) liveDomNodes.set(name, node);
+        refreshReportFilters();
     }
-
-    const html = generateResultHTML({r: decorateTestData(testData)});
-    const resultHTMLFrag = document.createRange().createContextualFragment(html);
-    resultsContainer.appendChild(resultHTMLFrag);
-    refreshReportFilters();
 
     return html;
 }
 
 export type DiagnosticInfo = {
-    platform: string;
+    platformTag?: string;
     generatedAt: string;
-    testSuite?: string;
-    configFile?: string;
     reproduceCommand?: string;
     userAgent?: string;
     os?: string;
@@ -377,7 +450,8 @@ export type DiagnosticInfo = {
 };
 
 function formatDuration(ms: number): string {
-    const totalSeconds = Math.round(ms / 1000);
+    if (ms <= 0) return '0sec';
+    const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
@@ -388,11 +462,9 @@ function formatDuration(ms: number): string {
 
 export function getDiagnosticsHTML(diag: DiagnosticInfo): string {
     const rows: Array<[string, string | undefined]> = [
-        ['Platform', diag.platform],
+        ['Platform-Tag', diag.platformTag],
         ['Generated', diag.generatedAt],
         ['Duration', diag.durationMs !== undefined ? formatDuration(diag.durationMs) : undefined],
-        ['Test suite', diag.testSuite],
-        ['Config file', diag.configFile],
         ['Reproduce locally', diag.reproduceCommand],
         ['Browser', diag.browser],
         ['Operating system', diag.os],
@@ -426,6 +498,7 @@ export function getHTML(statsContent: string, testsContent: string, diagnosticsC
       <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
           <title>GL JS | Render tests results</title>
           <style>${pageCss}</style>
       </head>

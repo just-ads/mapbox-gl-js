@@ -33,7 +33,6 @@ export type MapTouchEventType =
  * mouse events of specific types such as 'click' or 'hover'.
  * For a full list of available events, see [`Map` events](/mapbox-gl-js/api/map/#map-events).
  *
- * @extends {Object}
  * @example
  * // Example of a MapMouseEvent of type "click"
  * map.on('click', (e) => {
@@ -161,8 +160,6 @@ export class MapMouseEvent extends Event<MapEvents, MapMouseEventType> {
  * `MapTouchEvent` is a class used by other classes to generate
  * mouse events of specific types such as 'touchstart' or 'touchend'.
  * For a full list of available events, see [`Map` events](/mapbox-gl-js/api/map/#map-events).
- *
- * @extends {Object}
  *
  * @example
  * // Example of a MapTouchEvent of type "touch"
@@ -311,7 +308,6 @@ export type MapWheelEventType = 'wheel';
  * mouse events of specific types such as 'wheel'.
  * For a full list of available events, see [`Map` events](/mapbox-gl-js/api/map/#map-events).
  *
- * @extends {Object}
  * @example
  * // Example event trigger for a MapWheelEvent of type "wheel"
  * map.on('wheel', (e) => {

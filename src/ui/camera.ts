@@ -31,6 +31,7 @@ import {getZoomAdjustment} from '../geo/projection/adjustments';
 import type Tile from '../source/tile';
 import type Transform from '../geo/transform';
 import type HandlerManager from './handler_manager';
+import type {KeepGesture} from './handler_manager';
 import type {TaskID} from '../util/task_queue';
 import type {Callback} from '../types/callback';
 import type {MapEvents} from './events';
@@ -55,6 +56,7 @@ import type {LngLatLike, LngLatBoundsLike} from '../geo/lng_lat';
  * measured in degrees with a range between 0 and 85 degrees. For example, pitch: 0 provides the appearance
  * of looking straight down at the map, while pitch: 60 tilts the user's perspective towards the horizon.
  * Increasing the pitch value is often used to display 3D objects.
+ * @property {number} fov The desired vertical field of view in degrees, clamped to [0.01, 60]. This property is experimental.
  * @property {LngLatLike} around The location serving as the origin for a change in `zoom`, `pitch` and/or `bearing`.
  * This location will remain at the same screen position following the transform.
  * This is useful for drawing attention to a location that is not in the screen center.
@@ -83,6 +85,12 @@ export type CameraOptions = {
     zoom?: number;
     bearing?: number;
     pitch?: number;
+    /**
+     * Vertical field of view, measured in degrees. Clamped to [0.01, 60].
+     *
+     * @experimental
+     */
+    fov?: number;
     around?: LngLatLike;
     padding?: number | PaddingOptions;
     minZoom?: number;
@@ -585,6 +593,46 @@ class Camera extends Evented<MapEvents> {
         this.jumpTo({pitch}, eventData);
         return this;
     }
+
+    /**
+     * Returns the map's current vertical field of view, measured in degrees.
+     *
+     * @memberof Map#
+     * @returns {number} The map's current vertical field of view, measured in degrees.
+     * @experimental
+     * @example
+     * const verticalFieldOfView = map.getVerticalFieldOfView();
+     */
+    getVerticalFieldOfView(): number { return this.transform.fov; }
+
+    /**
+     * Sets the map's vertical field of view, measured in degrees. Equivalent to `jumpTo({fov})`.
+     *
+     * @memberof Map#
+     * @param {number} fov The vertical field of view to set, measured in degrees (0.01-60).
+     * @param {Object | null} eventData Additional properties to be added to event objects of events triggered by this method.
+     * @fires Map.event:movestart
+     * @fires Map.event:moveend
+     * @returns {Map} Returns itself to allow for method chaining.
+     * @experimental
+     * @example
+     * map.setVerticalFieldOfView(30);
+     */
+    setVerticalFieldOfView(fov: number, eventData?: EventData): this {
+        return this.jumpTo({fov}, eventData);
+    }
+
+    /**
+     * Returns the map's current horizontal field of view, measured in degrees. This value is
+     * derived from the vertical field of view and the map's aspect ratio, and is read-only.
+     *
+     * @memberof Map#
+     * @returns {number} The map's current horizontal field of view, measured in degrees.
+     * @experimental
+     * @example
+     * const horizontalFieldOfView = map.getHorizontalFieldOfView();
+     */
+    getHorizontalFieldOfView(): number { return this.transform.horizontalFov; }
 
     /**
      * Returns a {@link CameraOptions} object for the highest zoom level
@@ -1103,7 +1151,9 @@ class Camera extends Evented<MapEvents> {
      * @see [Example: Update a feature in realtime](https://docs.mapbox.com/mapbox-gl-js/example/live-update-feature/)
      */
     jumpTo(options: CameraOptions & {preloadOnly?: AnimationOptions['preloadOnly']}, eventData?: EventData): this {
-        this.stop();
+        // a camera setter (setCenter/setPitch/…) called from within a 'drag'/'move' handler
+        // must not tear down the gesture the user is still performing.
+        this._stop({keepGesture: 'ifPointerDown'});
 
         const tr = options.preloadOnly ? this.transform.clone() : this.transform;
         let zoomChanged = false,
@@ -1128,6 +1178,8 @@ class Camera extends Evented<MapEvents> {
             pitchChanged = true;
             tr.pitch = +options.pitch;
         }
+
+        if ('fov' in options) tr.fov = +options.fov;
 
         const padding = typeof options.padding === 'number' ?
             this._extendPadding(options.padding) :
@@ -1325,7 +1377,9 @@ class Camera extends Evented<MapEvents> {
         },
         eventData?: EventData,
     ): this {
-        this._stop(false, options.easeId);
+        this._stop({
+            easeId: options.easeId
+        });
 
         options = {offset: [0, 0],
             duration: 500,
@@ -1338,10 +1392,12 @@ class Camera extends Evented<MapEvents> {
             startBearing = this.getBearing(),
             startPitch = this.getPitch(),
             startPadding = this.getPadding(),
+            startFov = this.getVerticalFieldOfView(),
 
             zoom = 'zoom' in options ? +options.zoom : startZoom,
             bearing = 'bearing' in options ? this._normalizeBearing(options.bearing, startBearing) : startBearing,
             pitch = 'pitch' in options ? +options.pitch : startPitch,
+            fov = 'fov' in options ? +options.fov : startFov,
             padding = this._extendPadding(options.padding);
 
         const offsetAsPoint = Point.convert(options.offset);
@@ -1387,6 +1443,7 @@ class Camera extends Evented<MapEvents> {
         const zoomChanged = this._zooming || (zoom !== startZoom);
         const bearingChanged = this._rotating || (startBearing !== bearing);
         const pitchChanged = this._pitching || (pitch !== startPitch);
+        const fovChanged = fov !== startFov;
         const paddingChanged = !tr.isPaddingEqual(padding);
 
         const transformForPadding = options.retainPadding === false ? tr.clone() : tr;
@@ -1400,6 +1457,9 @@ class Camera extends Evented<MapEvents> {
             }
             if (pitchChanged) {
                 tr.pitch = interpolate(startPitch, pitch, k);
+            }
+            if (fovChanged) {
+                tr.fov = interpolate(startFov, fov, k);
             }
             if (paddingChanged) {
                 transformForPadding.interpolatePadding(startPadding, padding, k);
@@ -1584,7 +1644,7 @@ class Camera extends Evented<MapEvents> {
     flyTo(options: EasingOptions, eventData?: EventData): this {
         // Fall through to jumpTo if user has set prefers-reduced-motion
         if (this._prefersReducedMotion(options)) {
-            const coercedOptions = pick(options, ['center', 'zoom', 'bearing', 'pitch', 'around', 'padding', 'retainPadding']);
+            const coercedOptions = pick(options, ['center', 'zoom', 'bearing', 'pitch', 'fov', 'around', 'padding', 'retainPadding']);
             return this.jumpTo(coercedOptions, eventData);
         }
 
@@ -1607,11 +1667,14 @@ class Camera extends Evented<MapEvents> {
             startZoom = this.getZoom(),
             startBearing = this.getBearing(),
             startPitch = this.getPitch(),
-            startPadding = this.getPadding();
+            startPadding = this.getPadding(),
+            startFov = this.getVerticalFieldOfView();
 
         const zoom = 'zoom' in options ? clamp(+options.zoom, tr.minZoom, tr.maxZoom) : startZoom;
         const bearing = 'bearing' in options ? this._normalizeBearing(options.bearing, startBearing) : startBearing;
         const pitch = 'pitch' in options ? +options.pitch : startPitch;
+        const fov = 'fov' in options ? +options.fov : startFov;
+        const fovChanged = fov !== startFov;
         const padding = this._extendPadding(options.padding);
 
         const scale = tr.zoomScale(zoom - startZoom);
@@ -1720,6 +1783,9 @@ class Camera extends Evented<MapEvents> {
             if (pitchChanged) {
                 tr.pitch = interpolate(startPitch, pitch, k);
             }
+            if (fovChanged) {
+                tr.fov = interpolate(startFov, fov, k);
+            }
             if (paddingChanged) {
                 transformForPadding.interpolatePadding(startPadding, padding, k);
                 // When padding is being applied, Transform#centerPoint is changing continuously,
@@ -1777,7 +1843,24 @@ class Camera extends Evented<MapEvents> {
     // No-op in the Camera class, implemented by the Map class
     _cancelRenderFrame(_: TaskID): void {}
 
-    _stop(allowGestures?: boolean, easeId?: string): this {
+    // Cancels any running camera animation.
+    // `keepGesture` controls whether to keep a gesture that is currently in progress or not:
+    // - 'never' (default behavior):
+    //      Never keep the gesture.
+    //      Used in `stop`.
+    // - 'always':
+    //      Always keep the gesture.
+    //      Used when only want to cancel any animation.
+    // - 'ifPointerDown':
+    //      Keep the gesture only if a pointer is still physically down (see `_isPointerDown` in `HandlerManager`).
+    //      Possible use case: when `jumpTo` called from inside a drag/move handler, do not kill the drag the user is still performing.
+    _stop({
+        easeId,
+        keepGesture
+    }: {
+        easeId?: string;
+        keepGesture?: KeepGesture;
+    } = {}): this {
         if (this._easeFrameId) {
             this._cancelRenderFrame(this._easeFrameId);
             this._easeFrameId = undefined;
@@ -1792,10 +1875,10 @@ class Camera extends Evented<MapEvents> {
             this._onEaseEnd = undefined;
             onEaseEnd.call(this, easeId);
         }
-        if (!allowGestures) {
-            const handlers = this.handlers;
-            if (handlers) handlers.stop(false);
-        }
+
+        const handlers = this.handlers;
+        if (handlers) handlers.stop(keepGesture);
+
         return this;
     }
 

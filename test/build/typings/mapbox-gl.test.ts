@@ -19,6 +19,15 @@ const map = new mapboxgl.Map({
 
 const transformRequest: mapboxgl.RequestTransformFunction = (url: string, resourceType?: mapboxgl.ResourceType): mapboxgl.RequestParameters => {return {url}};
 
+// An async transform observing the abort signal is assignable.
+const asyncTransformRequest: mapboxgl.RequestTransformFunction = async (url: string, resourceType?: mapboxgl.ResourceType, options?: {signal?: AbortSignal}): Promise<mapboxgl.RequestParameters> => {
+    options && options.signal;
+    return {url};
+};
+
+// @ts-expect-error — a transform returning a non-RequestParameters value does not compile.
+const badTransformRequest: mapboxgl.RequestTransformFunction = (url: string): string => url;
+
 //
 // Events
 //
@@ -587,6 +596,11 @@ if (feature5.id) {
 
 const feature6 = features6[0];
 map.removeFeatureState(feature6);
+
+// resetFeatureStates
+map.resetFeatureStates({featuresetId: 'poi', importId: 'basemap'}) satisfies mapboxgl.Map;
+map.resetFeatureStates({featuresetId: 'poi'}) satisfies mapboxgl.Map;
+map.resetFeatureStates({layerId: 'buildings'}) satisfies mapboxgl.Map;
 
 //
 // EasingOptions, CameraOptions, AnimationOptions

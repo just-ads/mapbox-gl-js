@@ -22,6 +22,8 @@ import type {Callback} from '../types/callback';
 import type {ImageId} from '../style-spec/expression/types/image_id';
 import type {RenderSourceType} from './render_source_type';
 import type {FrcCoverageParams, FrcCoveragePolygons} from './frc_coverage_snapshot';
+import type {ElevationFeature} from '../../3d-style/elevation/elevation_feature';
+import type {ElevationParams} from './elevation_coverage_snapshot';
 import type {StringifiedImageVariant} from '../style-spec/expression/types/image_variant';
 import type {StyleModelMap} from '../style/style_mode';
 import type {IndoorTileOptions} from '../style/indoor_data.js';
@@ -61,8 +63,7 @@ export type WorkerSourceRasterTileRequest = WorkerSourceRequest & {
  * The parameters passed to the {@link MapWorker#getWorkerSource}.
  */
 export type WorkerSourceRequest = {
-    type: string; // The source type must be a string, because we can register new source types dynamically.
-    uid: number;
+    type: WorkerSourceType;
     source: string;
     scope: string;
 };
@@ -73,6 +74,7 @@ export type WorkerSourceRequest = {
  * {@link WorkerSource#removeTile}.
  */
 export type WorkerSourceTileRequest = WorkerSourceRequest & {
+    uid: number;
     tileID?: OverscaledTileID;
     request?: RequestParameters;
     projection?: Projection;
@@ -106,6 +108,9 @@ export type WorkerSourceVectorTileRequest = WorkerSourceTileRequest & {
     extraShadowCaster?: boolean;
     renderSourceType?: RenderSourceType | null;
     frcCoverage?: FrcCoverageParams | null;
+    elevation?: ElevationParams | null;
+    crossSourceElevationEnabled?: boolean;
+    terrainEnabled?: boolean;
     partial?: boolean;
     tessellationStep?: number // test purpose only;
     worldview?: string | null;
@@ -171,6 +176,8 @@ export type WorkerSourceVectorTileResult = {
     glyphPositions?: GlyphPositions;
     frcCoveragePolygons?: FrcCoveragePolygons;
     hasDeferredRoadStructure?: boolean;
+    parsedElevationFeatures?: ElevationFeature[];
+    hasDeferredElevationFeatures?: boolean;
 };
 
 export type WorkerSourceDEMTileRequest = WorkerSourceTileRequest & {
@@ -202,7 +209,6 @@ export type WorkerSourceVectorTileCallback = Callback<WorkerSourceVectorTileResu
  * implementation may also be targeted by the {@link Source} via
  * `dispatcher.getActor().send('source-type.methodname', params, {signal})`.
  *
- * @see {@link Map#addSourceType}
  * @private
  */
 export interface WorkerSource {
@@ -231,8 +237,8 @@ export interface WorkerSource {
     removeTile: (params: WorkerSourceTileRequest) => void | Promise<void>;
     /**
      * Tells the WorkerSource to abort in-progress tasks and release resources.
-     * The foreground Source is responsible for ensuring that 'removeSource' is
-     * the last message sent to the WorkerSource.
+     * Sent by {@link Style#removeSource} after the source's tiles are cleared, so
+     * it is the last message the WorkerSource receives.
      */
     removeSource?: (params: { source: string }) => Promise<void>;
 }
@@ -245,7 +251,7 @@ export interface WorkerSource {
  * `Pick` so the signatures can't drift. Worker sources only send back to the
  * main thread, hence `Actor<MainInbox>`.
  */
-export type WorkerSourceActor = Pick<Actor<MainInbox>, 'send' | 'sendCancelable' | 'scheduler'>;
+export type WorkerSourceActor = Pick<Actor<MainInbox>, 'send' | 'notify' | 'sendCancelable' | 'scheduler'>;
 
 export type WorkerSourceOptions = {
     actor: WorkerSourceActor;

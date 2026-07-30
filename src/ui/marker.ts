@@ -108,6 +108,7 @@ export default class Marker extends Evented<MarkerEvents> {
     _updateMoving: () => void;
     _occludedOpacity: number;
     _altitude: number;
+    _pointerEvents?: string;
     _svgElement: Element;
     _shadowElement: Element;
     _interactable: boolean;
@@ -156,6 +157,7 @@ export default class Marker extends Evented<MarkerEvents> {
 
         this._state = 'inactive';
         this._isDragging = false;
+        this._pointerEvents = null;
         this._updateMoving = () => this._update(true);
         this._occludedOpacity = (options && options.occludedOpacity) || 0.2;
         this._interactable = !(options && options.interactable === false);
@@ -552,13 +554,18 @@ export default class Marker extends Evented<MarkerEvents> {
             opacity = 0;
         } else {
             opacity = 1 - map._queryFogOpacity(mapLocation);
-            if (map.transform._terrainEnabled() && map.getTerrain() && this._behindTerrain()) {
+            if (map.transform._terrainEnabled() && map.style && map.style.hasTerrain() && this._behindTerrain()) {
                 opacity *= this._occludedOpacity;
             }
         }
 
         this._element.style.opacity = `${opacity}`;
-        this._element.style.pointerEvents = this._interactable ? (opacity > 0 ? 'auto' : 'none') : 'none';
+        const currentPointerEvents = this._element.style.pointerEvents;
+        const isUnmanaged = this._pointerEvents === null ? currentPointerEvents === '' : currentPointerEvents === this._pointerEvents;
+        if (isUnmanaged) {
+            this._pointerEvents = this._interactable ? (opacity > 0 ? 'auto' : 'none') : 'none';
+            this._element.style.pointerEvents = this._pointerEvents;
+        }
         if (this._popup) {
             this._popup._setOpacity(opacity);
         }
@@ -689,7 +696,7 @@ export default class Marker extends Evented<MarkerEvents> {
                 this._updateDOM();
             }
 
-            if ((map._showingGlobe() || map.getTerrain() || map.getFog()) && !this._fadeTimer) {
+            if ((map._showingGlobe() || (map.style && map.style.hasTerrain()) || map.getFog()) && !this._fadeTimer) {
 
                 this._fadeTimer = window.setTimeout(this._evaluateOpacity.bind(this), 60);
             }

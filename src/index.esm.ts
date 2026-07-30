@@ -1,6 +1,13 @@
 import assert from './style-spec/util/assert';
 import _Point from '@mapbox/point-geometry';
 import {version as _version} from '../package.json';
+import {setBundleDistribution} from './util/mapbox';
+import {isMapboxHTTPCDNURL} from './util/mapbox_url';
+
+// Detect whether this ESM bundle was served from the Mapbox CDN (telemetry only).
+// `import.meta.url` is the module URL; bundlers rewrite it to a local URL, yielding 'other'.
+// eslint-disable-next-line no-restricted-syntax -- this file is the ESM-only entry, never bundled as UMD
+setBundleDistribution(isMapboxHTTPCDNURL(import.meta.url) ? 'cdn' : 'other');
 
 // Source class instance types — returned by map.getSource()
 export type * from './source/source_types';
@@ -12,8 +19,7 @@ export type {Event, ErrorEvent} from './util/evented';
 export type {GeoJSONFeature, TargetFeature} from './util/vectortile_to_geojson';
 export type {InteractionEvent} from './ui/interactions';
 export type {PaddingOptions} from './geo/edge_insets';
-export type {RequestParameters} from './util/ajax';
-export type {RequestTransformFunction, ResourceType} from './util/mapbox';
+export type {RequestParameters, RequestTransformFunction, ResourceType} from './util/ajax';
 export type {LngLatLike, LngLatBoundsLike} from './geo/lng_lat';
 
 export type {FeatureSelector} from './style/style';
@@ -164,6 +170,7 @@ export {default as MercatorCoordinate} from './geo/mercator_coordinate';
 export {Evented} from './util/evented';
 export {FreeCameraOptions} from './ui/free_camera';
 export {setRTLTextPlugin, getRTLTextPluginStatus} from './source/rtl_text_plugin';
+export {setSdkInfo} from './util/mapbox';
 export {addTileProvider} from './source/tile_provider';
 export {prewarm, clearPrewarmedResources} from './util/worker_pool_factory';
 export {setWorkerUrl} from './util/worker_class';

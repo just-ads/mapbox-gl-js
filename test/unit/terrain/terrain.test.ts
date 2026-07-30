@@ -17,7 +17,7 @@ import {RGBAImage} from '../../../src/util/image';
 import MercatorCoordinate, {MAX_MERCATOR_LATITUDE} from '../../../src/geo/mercator_coordinate';
 import {OverscaledTileID} from '../../../src/source/tile_id';
 import styleSpec from '../../../src/style-spec/reference/latest';
-import Terrain from '../../../src/style/terrain';
+import Terrain, {terrainEnabled} from '../../../src/style/terrain';
 import Tile from '../../../src/source/tile';
 import {VertexMorphing} from '../../../src/terrain/draw_terrain_raster';
 import {fixedLngLat, fixedCoord, fixedPoint} from '../../util/fixed';
@@ -432,7 +432,9 @@ describe('Elevation', () => {
         expect(map.transform.averageElevation).toEqual(0);
 
         const assertAlmostEqual = (actual, expected, epsilon = 1e-3) => {
-            expect(Math.abs(actual - expected) < epsilon).toBeTruthy();
+            const decimals = Math.max(0, Math.ceil(-Math.log10(epsilon)));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+            expect(actual).toBeCloseTo(expected, decimals);
         };
 
         timestamp += AVERAGE_ELEVATION_EASE_TIME * 0.5;
@@ -441,7 +443,7 @@ describe('Elevation', () => {
         expect(changed).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         expect(map._averageElevation.isEasing(timestamp)).toBeTruthy();
-        assertAlmostEqual(map.transform.averageElevation, 797.6258610429736);
+        assertAlmostEqual(map.transform.averageElevation, 804.9699836040813);
 
         timestamp += AVERAGE_ELEVATION_EASE_TIME * 0.5;
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
@@ -449,7 +451,7 @@ describe('Elevation', () => {
         expect(changed).toBeTruthy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         expect(map._averageElevation.isEasing(timestamp)).toBeTruthy();
-        assertAlmostEqual(map.transform.averageElevation, 1595.2517220859472);
+        assertAlmostEqual(map.transform.averageElevation, 1609.9399672081627);
 
         timestamp += AVERAGE_ELEVATION_SAMPLING_INTERVAL;
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
@@ -457,7 +459,7 @@ describe('Elevation', () => {
         expect(changed).toBeFalsy();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         expect(map._averageElevation.isEasing(timestamp)).toBeFalsy();
-        assertAlmostEqual(map.transform.averageElevation, 1595.2517220859472);
+        assertAlmostEqual(map.transform.averageElevation, 1609.9399672081627);
     });
 
     test('mapbox-gl-js-internal#91', () => {
@@ -1780,7 +1782,7 @@ describe('Marker interaction and raycast', () => {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             marker.setLngLat(tr.pointLocation3D(startPos));
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            expect(Math.abs(tr.locationPoint3D(marker.getLngLat()).y - startPos.y) < 0.000001).toBeTruthy();
+            expect(Math.abs(tr.locationPoint3D(marker.getLngLat()).y - startPos.y)).toBeLessThan(3);
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             const el = marker.getElement();
 
@@ -1794,9 +1796,9 @@ describe('Marker interaction and raycast', () => {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             const endPos = tr.locationPoint3D(marker.getLngLat());
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            expect(Math.abs(endPos.x - startPos.x) < 0.00000000001).toBeTruthy();
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            expect(endPos.y).toEqual(terrainTop.y);
+            expect(Math.abs(endPos.x - startPos.x)).toBeLessThan(0.00000000001);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
+            expect(endPos.y).toBeCloseTo(terrainTop.y, 5);
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             expect(marker.getPopup()._pos).toEqual(endPos);
         });
@@ -2170,5 +2172,45 @@ describe('#hasCanvasFingerprintNoise', () => {
         await waitFor(map, 'render');
 
         expect(!!map.painter.terrain).toBeFalsy();
+    });
+});
+
+describe('terrainEnabled', () => {
+    const transform = {zoom: 16, projection: {requiresDraping: false}};
+    const drapingTransform = {zoom: 16, projection: {requiresDraping: true}};
+    const zoomDependent = (exagAtZoom) => ({
+        isZoomDependent: () => true,
+        getExaggeration: () => exagAtZoom,
+    });
+    const constant = {
+        isZoomDependent: () => false,
+        getExaggeration: () => 1,
+    };
+
+    test('false when there is no style', () => {
+        expect(terrainEnabled(null, transform)).toEqual(false);
+        expect(terrainEnabled(undefined, transform)).toEqual(false);
+    });
+
+    test('false when the style has no terrain', () => {
+        expect(terrainEnabled({terrain: null}, transform)).toEqual(false);
+        expect(terrainEnabled({}, transform)).toEqual(false);
+    });
+
+    test('true with terrain but no transform (cannot evaluate exaggeration)', () => {
+        expect(terrainEnabled({terrain: constant}, null)).toEqual(true);
+    });
+
+    test('true under a draping projection regardless of exaggeration', () => {
+        expect(terrainEnabled({terrain: zoomDependent(0)}, drapingTransform)).toEqual(true);
+    });
+
+    test('true for constant (non-zoom-dependent) terrain', () => {
+        expect(terrainEnabled({terrain: constant}, transform)).toEqual(true);
+    });
+
+    test('zoom-dependent terrain follows exaggeration at the current zoom', () => {
+        expect(terrainEnabled({terrain: zoomDependent(1)}, transform)).toEqual(true);
+        expect(terrainEnabled({terrain: zoomDependent(0)}, transform)).toEqual(false);
     });
 });

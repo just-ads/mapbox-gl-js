@@ -1,62 +1,34 @@
 // eslint-disable-next-line import-x/extensions
 import {server} from 'vitest/browser';
-import ignoresAll from '../../ignores/all.js';
-import ignoreWindowsChrome from '../../ignores/windows-chrome.js';
-import ignoreMacChrome from '../../ignores/mac-chrome.js';
-import ignoreMacSafari from '../../ignores/mac-safari.js';
-import ignoreLinuxChrome from '../../ignores/linux-chrome.js';
-import ignoreLinuxFirefox from '../../ignores/linux-firefox.js';
 import {test, assert, afterEach, afterAll} from '../../util/vitest';
 import {applyOperations} from '../lib/operation-handlers.js';
 import {deepEqual, generateDiffLog} from '../lib/json-diff.js';
 // @ts-expect-error Cannot find module 'virtual:integration-tests' or its corresponding type declarations.
 import {integrationTests} from 'virtual:integration-tests';
-import {getStatsHTML, setupHTML, updateHTML, registerIgnoredNotRun} from '../../util/html_generator';
+import {getStatsHTML, setupHTML, updateHTML, registerSkipped, fragmentIdFor} from '../../util/html_generator';
 import {mapboxgl} from '../lib/mapboxgl.js';
-import {sendFragment, sendBrowserDiagnostics} from '../lib/utils';
+import {sendFragment, sendBrowserDiagnostics, detectPlatformTagFromUserAgent, matchSkipTestRule, type SkipRuleMatch} from '../lib/utils';
 import {transformRequest} from '../lib/transform-request.js';
 
-setupHTML();
+setupHTML(import.meta.env.VITE_EMBED_PASSED_IMAGES === 'true');
 
 function getEnvironmentParams() {
     let timeout = 30000;
-    if (import.meta.env.VITE_CI === 'true') {
-        let ignoresPlatformSpecific;
-        const ua = navigator.userAgent;
-        const browser = ua.includes('Firefox') ? 'firefox' :
-            ua.includes('Edge') ? 'edge' :
-            ua.includes('Chrome') ? 'chrome' :
-            ua.includes('Safari') ? 'safari' :
-            null;
-
-        // On CI, MacOS and Windows run on virtual machines.
-        // Windows runs are especially slow so we increase the timeout.
-        if (ua.includes('Macintosh')) {
-            ignoresPlatformSpecific = browser === 'safari' ? ignoreMacSafari : ignoreMacChrome;
-        } else if (ua.includes('Linux')) {
-            ignoresPlatformSpecific = browser === 'firefox' ? ignoreLinuxFirefox : ignoreLinuxChrome;
-        } else if (ua.includes('Windows')) {
-            ignoresPlatformSpecific = ignoreWindowsChrome;
-            timeout = 150000; // 2:30
-        } else {  throw new Error(`Can't determine OS with user agent: ${ua}`); }
-
-        return {
-            ignores: {
-                todo: [...ignoresPlatformSpecific.todo, ...ignoresAll.todo],
-                skip: [...ignoresPlatformSpecific.skip, ...ignoresAll.skip]
-            },
-            timeout
-        };
-    } else {
-        return {ignores: ignoresAll, timeout};
+    const platformTag = detectPlatformTagFromUserAgent(navigator.userAgent);
+    if (!platformTag) {
+        throw new Error(`Unable to determine a valid platform-tag from user agent: ${navigator.userAgent}`);
     }
+    if (import.meta.env.VITE_CI === 'true' && platformTag === 'web-windows-chrome') {
+        timeout = 150000; // 2:30
+    }
+    return {timeout, platformTag};
 }
 
 type TestMetadata = {
     name: string;
     minDiff: number;
+    testPath: string;
     status: string;
-    ignoredOutcome?: string;
     color?: string;
     errors: Error[];
     actual?: string;
@@ -75,12 +47,20 @@ document.body.appendChild(container);
 let map;
 
 let reportFragment: string | undefined;
+let reportFragmentName: string | undefined;
 
-const getTest = (queryTestName) => async () => {
-    const fullTestName = `query-tests/${queryTestName}`;
-    const isTodo = ignores.todo.includes(fullTestName);
+// Passed-test images are embedded only when explicitly opted in (never on CI --
+// the flag is forced off there by the vite config). Failed tests always embed.
+const embedPassedImages = import.meta.env.VITE_EMBED_PASSED_IMAGES === 'true';
+
+const getTest = (queryTestName: string, preflightError?: unknown) => async () => {
     let errorMessage: string | undefined;
+    reportFragmentName = queryTestName;
     try {
+        if (preflightError) {
+            throw preflightError;
+        }
+
         const queryTest = integrationTests[queryTestName];
         const testPath = queryTest.path;
         const {style, expected} = queryTest;
@@ -137,9 +117,17 @@ const getTest = (queryTestName) => async () => {
         await map.once('load');
         await applyOperations(map, options);
 
+        // toDataURL() is an expensive canvas readback + PNG encode, so compute
+        // it lazily and only once, on first use. In the common CI case (passing
+        // test, passed images not embedded) it is never needed.
+        let cachedCanvasDataUrl: string | undefined;
+        const getCanvasDataUrl = () => {
+            if (cachedCanvasDataUrl === undefined) cachedCanvasDataUrl = map.getCanvas().toDataURL();
+            return cachedCanvasDataUrl;
+        };
         const testMetaData: TestMetadata = {
             name: queryTestName,
-            actual: map.getCanvas().toDataURL(),
+            testPath: `${testPath}/style.json`,
             width: options.width,
             height: options.height,
             minDiff: options.minDiff || 0,
@@ -167,16 +155,16 @@ const getTest = (queryTestName) => async () => {
 
         testMetaData.status = success ? 'passed' : 'failed';
 
-        if (isTodo) {
-            testMetaData.status = 'ignored';
-            testMetaData.color = '#9E9E9E';
-            testMetaData.ignoredOutcome = success ? 'passed' : 'failed';
+        // Embed the canvas image for failed tests always; for passed tests only
+        // when opted in (keeps the report small, especially on CI).
+        if (!success || embedPassedImages) {
+            testMetaData.actual = getCanvasDataUrl();
         }
 
         if (import.meta.env.VITE_CI === 'false' && import.meta.env.VITE_UPDATE === 'true') {
             await server.commands.writeFile(`${testPath}/expected.json`, jsonDiff.replace('+ ', '').trim());
         } else if (import.meta.env.VITE_CI === 'false') {
-            await server.commands.writeFile(`${testPath}/actual.png`, testMetaData.actual!.split(',')[1], {encoding: 'base64'});
+            await server.commands.writeFile(`${testPath}/actual.png`, getCanvasDataUrl().split(',')[1], {encoding: 'base64'});
             await server.commands.writeFile(`${testPath}/actual.json`, JSON.stringify(actual, undefined, 2));
         }
 
@@ -184,14 +172,7 @@ const getTest = (queryTestName) => async () => {
 
         if (!success) errorMessage = `Query test ${queryTestName} failed`;
     } catch (error) {
-        reportFragment = updateHTML(isTodo ? {
-            name: queryTestName,
-            status: 'ignored',
-            color: '#9E9E9E',
-            ignoredOutcome: 'failed',
-            error,
-            errors: []
-        } : {
+        reportFragment = updateHTML({
             name: queryTestName,
             status: 'failed',
             error,
@@ -204,16 +185,17 @@ const getTest = (queryTestName) => async () => {
     }
 };
 
-const {ignores, timeout} = getEnvironmentParams();
-const skippedTests: string[] = [];
+const {timeout, platformTag} = getEnvironmentParams();
+const skippedTests: Record<string, SkipRuleMatch> = {};
 
 Object.keys(integrationTests).forEach((testName) => {
-    const queryTestName = `query-tests/${testName}`;
-    if (ignores.skip.includes(queryTestName)) {
-        skippedTests.push(testName);
+    const style = integrationTests[testName]?.style;
+    const {match: skipMatch, validationError} = matchSkipTestRule(style?.metadata?.test?.['skip-test'], platformTag);
+    if (validationError) {
+        test(testName, {timeout}, getTest(testName, new Error(validationError)));
+    } else if (skipMatch) {
+        skippedTests[testName] = skipMatch;
         test.skip(testName, getTest(testName));
-    } else if (ignores.todo.includes(queryTestName)) {
-        test.todo(testName, getTest(testName));
     } else {
         test(testName, {timeout}, getTest(testName));
     }
@@ -221,8 +203,17 @@ Object.keys(integrationTests).forEach((testName) => {
 
 afterAll(async () => {
     document.body.removeChild(container);
-    for (const testName of skippedTests) {
-        await sendFragment(reportFragmentIdx++, registerIgnoredNotRun(testName));
+    for (const [testName, skipMatch] of Object.entries(skippedTests)) {
+        const testPath = integrationTests[testName]?.path;
+        await sendFragment(
+            fragmentIdFor(testName),
+            registerSkipped(
+                testName,
+                testPath ? `${testPath}/style.json` : undefined,
+                skipMatch.reasons,
+                skipMatch.rules
+            )
+        );
     }
     await sendBrowserDiagnostics();
     await sendFragment(0, getStatsHTML());
@@ -232,10 +223,12 @@ afterAll(async () => {
     });
 });
 
-let reportFragmentIdx = 1;
-
 afterEach(async () => {
-    await sendFragment(reportFragmentIdx++, reportFragment);
+    // Send under the test's stable fragment id so a retry overwrites the prior
+    // attempt's fragment instead of adding a second entry for the same test.
+    if (reportFragmentName !== undefined) {
+        await sendFragment(fragmentIdFor(reportFragmentName), reportFragment);
+    }
 });
 
 afterEach(() => {

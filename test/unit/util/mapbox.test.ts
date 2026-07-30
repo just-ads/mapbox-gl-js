@@ -4,7 +4,6 @@ import {describe, test, beforeEach, afterEach, expect, vi, equalWithPrecision} f
 import {getRequestBody} from '../../util/network';
 import * as mapbox from '../../../src/util/mapbox';
 import config from '../../../src/util/config';
-import webpSupported from '../../../src/util/webp_supported';
 import {uuid} from '../../../src/util/util';
 import {SKU_ID} from '../../../src/util/sku_token';
 import {version} from '../../../package.json';
@@ -92,7 +91,44 @@ describe("mapbox", () => {
             );
         });
 
-        webpSupported.supported = false;
+        describe('.transformRequest', () => {
+            test('resolves {url} when no transform function is set', async () => {
+                const m = new mapbox.RequestManager();
+                expect(await m.transformRequest('http://example.com/x', 'Source')).toEqual({url: 'http://example.com/x'});
+            });
+
+            test('resolves a sync transform return value', async () => {
+                const m = new mapbox.RequestManager(url => ({url: `${url}?a=1`}));
+                expect(await m.transformRequest('http://example.com/x', 'Source')).toEqual({url: 'http://example.com/x?a=1'});
+            });
+
+            test('resolves an async transform return value', async () => {
+                // eslint-disable-next-line @typescript-eslint/require-await
+                const m = new mapbox.RequestManager(async url => ({url: `${url}?a=1`}));
+                expect(await m.transformRequest('http://example.com/x', 'Source')).toEqual({url: 'http://example.com/x?a=1'});
+            });
+
+            test('resolves {url} when the transform returns a falsy value', async () => {
+                const m = new mapbox.RequestManager(() => undefined);
+                expect(await m.transformRequest('http://example.com/x', 'Source')).toEqual({url: 'http://example.com/x'});
+            });
+
+            test('a sync-throwing transform rejects rather than throwing synchronously', async () => {
+                const m = new mapbox.RequestManager(() => { throw new Error('boom'); });
+                const promise = m.transformRequest('http://example.com/x', 'Source');
+                await expect(promise).rejects.toThrow('boom');
+            });
+
+            test('forwards the signal to the transform when passed, and omits it otherwise', async () => {
+                let seenOptions: {signal?: AbortSignal} | undefined;
+                const m = new mapbox.RequestManager((url, type, options) => { seenOptions = options; return {url}; });
+                const controller = new AbortController();
+                await m.transformRequest('http://example.com/x', 'Source', controller.signal);
+                expect(seenOptions.signal).toBe(controller.signal);
+                await m.transformRequest('http://example.com/x', 'Source');
+                expect(seenOptions.signal).toBeUndefined();
+            });
+        });
 
         describe('.normalizeStyleURL', () => {
             test(
@@ -382,44 +418,33 @@ describe("mapbox", () => {
         });
 
         describe('.normalizeTileURL', () => {
-            test('.normalizeTileURL does nothing on 1x devices', () => {
-                config.API_URL = 'http://path.png';
-                config.REQUIRE_ACCESS_TOKEN = false;
-                webpSupported.supported = false;
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.png')).toEqual(`http://path.png/v4/tile.png`);
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.png32')).toEqual(`http://path.png/v4/tile.png32`);
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.jpg70')).toEqual(`http://path.png/v4/tile.jpg70`);
-            });
-
             test('.normalizeTileURL inserts @2x if source requests it', () => {
                 config.API_URL = 'http://path.png';
                 config.REQUIRE_ACCESS_TOKEN = false;
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.png', true)).toEqual(`http://path.png/v4/tile@2x.png`);
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.png32', true)).toEqual(`http://path.png/v4/tile@2x.png32`);
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.jpg70', true)).toEqual(`http://path.png/v4/tile@2x.jpg70`);
+                expect(manager.normalizeTileURL('mapbox://path.png/tile.png', true)).toEqual(`http://path.png/v4/tile@2x.webp`);
+                expect(manager.normalizeTileURL('mapbox://path.png/tile.png32', true)).toEqual(`http://path.png/v4/tile@2x.webp`);
+                expect(manager.normalizeTileURL('mapbox://path.png/tile.jpg70', true)).toEqual(`http://path.png/v4/tile@2x.webp`);
                 expect(
                     manager.normalizeTileURL('mapbox://path.png/tile.png?access_token=foo', true)
-                ).toEqual(`http://path.png/v4/tile@2x.png?access_token=foo`);
+                ).toEqual(`http://path.png/v4/tile@2x.webp?access_token=foo`);
             });
 
             test('.normalizeTileURL inserts @2x for 512 raster tiles on v4 of the api', () => {
                 config.API_URL = 'http://path.png';
                 config.REQUIRE_ACCESS_TOKEN = false;
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.png', false, 256)).toEqual(`http://path.png/v4/tile.png`);
-                expect(manager.normalizeTileURL('mapbox://path.png/tile.png', false, 512)).toEqual(`http://path.png/v4/tile@2x.png`);
-                expect(manager.normalizeTileURL("mapbox://raster/a.b/0/0/0.png", false, 256)).toEqual(`http://path.png/raster/v1/a.b/0/0/0.png`);
-                expect(manager.normalizeTileURL("mapbox://raster/a.b/0/0/0.png", false, 512)).toEqual(`http://path.png/raster/v1/a.b/0/0/0.png`);
+                expect(manager.normalizeTileURL('mapbox://path.png/tile.png', false, 256)).toEqual(`http://path.png/v4/tile.webp`);
+                expect(manager.normalizeTileURL('mapbox://path.png/tile.png', false, 512)).toEqual(`http://path.png/v4/tile@2x.webp`);
+                expect(manager.normalizeTileURL("mapbox://raster/a.b/0/0/0.png", false, 256)).toEqual(`http://path.png/raster/v1/a.b/0/0/0.webp`);
+                expect(manager.normalizeTileURL("mapbox://raster/a.b/0/0/0.png", false, 512)).toEqual(`http://path.png/raster/v1/a.b/0/0/0.webp`);
             });
 
-            test('.normalizeTileURL replaces img extension with webp on supporting devices', () => {
-                webpSupported.supported = true;
+            test('.normalizeTileURL replaces img extension with webp', () => {
                 config.API_URL = 'http://path.png';
                 config.REQUIRE_ACCESS_TOKEN = false;
                 expect(manager.normalizeTileURL('mapbox://path.png/tile.png')).toEqual(`http://path.png/v4/tile.webp`);
                 expect(manager.normalizeTileURL('mapbox://path.png/tile.png32')).toEqual(`http://path.png/v4/tile.webp`);
                 expect(manager.normalizeTileURL('mapbox://path.png/tile.jpg70')).toEqual(`http://path.png/v4/tile.webp`);
                 expect(manager.normalizeTileURL('mapbox://path.png/tile.png?access_token=foo')).toEqual(`http://path.png/v4/tile.webp?access_token=foo`);
-                webpSupported.supported = false;
             });
 
             test('.normalizeTileURL ignores non-mapbox:// sources', () => {
@@ -467,16 +492,16 @@ describe("mapbox", () => {
                     `https://api.mapbox.com/v4/a.b/0/0/0.pbf?sku=${manager._skuToken}&access_token=key`
                 );
                 expect(manager.normalizeTileURL("mapbox://tiles/a.b/0/0/0.png")).toEqual(
-                    `https://api.mapbox.com/v4/a.b/0/0/0.png?sku=${manager._skuToken}&access_token=key`
+                    `https://api.mapbox.com/v4/a.b/0/0/0.webp?sku=${manager._skuToken}&access_token=key`
                 );
                 expect(manager.normalizeTileURL("mapbox://tiles/a.b/0/0/0@2x.png")).toEqual(
-                    `https://api.mapbox.com/v4/a.b/0/0/0@2x.png?sku=${manager._skuToken}&access_token=key`
+                    `https://api.mapbox.com/v4/a.b/0/0/0@2x.webp?sku=${manager._skuToken}&access_token=key`
                 );
                 expect(manager.normalizeTileURL("mapbox://tiles/a.b,c.d/0/0/0.pbf")).toEqual(
                     `https://api.mapbox.com/v4/a.b,c.d/0/0/0.pbf?sku=${manager._skuToken}&access_token=key`
                 );
                 expect(manager.normalizeTileURL("mapbox://raster/a.b/0/0/0.png")).toEqual(
-                    `https://api.mapbox.com/raster/v1/a.b/0/0/0.png?sku=${manager._skuToken}&access_token=key`
+                    `https://api.mapbox.com/raster/v1/a.b/0/0/0.webp?sku=${manager._skuToken}&access_token=key`
                 );
                 expect(manager.normalizeTileURL("mapbox://rasterarrays/a.b/0/0/0.mrt")).toEqual(
                     `https://api.mapbox.com/rasterarrays/v1/a.b/0/0/0.mrt?sku=${manager._skuToken}&access_token=key`
@@ -487,13 +512,11 @@ describe("mapbox", () => {
 
                 config.API_URL = 'https://api.example.com/';
                 expect(manager.normalizeTileURL("mapbox://tiles/a.b/0/0/0.png")).toEqual(
-                    `https://api.example.com/v4/a.b/0/0/0.png?sku=${manager._skuToken}&access_token=key`
+                    `https://api.example.com/v4/a.b/0/0/0.webp?sku=${manager._skuToken}&access_token=key`
                 );
                 expect(manager.normalizeTileURL("http://path")).toEqual("http://path");
             });
         });
-
-        webpSupported.supported = true;
     });
 
     describe('TelemetryEvent', () => {
@@ -778,9 +801,15 @@ describe("mapbox", () => {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(mapLoadEvent["enabled.telemetry"]).toEqual(false);
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.version).toEqual('2.2');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(!!mapLoadEvent.userId).toBeTruthy();
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(!!mapLoadEvent.created).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.bundleFormat).toEqual('unknown');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.bundleDistribution).toEqual('other');
         });
 
         test('does not POST when mapboxgl.ACCESS_TOKEN is not set', () => {
@@ -1206,6 +1235,58 @@ describe("mapbox", () => {
             expect(!!mapLoadEvent.userId).toBeTruthy();
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             expect(!!mapLoadEvent.created).toBeTruthy();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.version).toEqual('2.2');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.sdkInfo).toBeUndefined();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.bundleFormat).toEqual('unknown');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.bundleDistribution).toEqual('other');
+        });
+
+        test('drains the second queued event using its own access token, not the first event\'s stale token', async () => {
+            // Simulates two Map instances with different per-Map accessTokens posting
+            // telemetry through the shared MapLoadEvent singleton while a request is in flight.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            event.postMapLoadEvent(1, skuToken, 'token-for-map-a', () => {});
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            event.postMapLoadEvent(2, skuToken, 'token-for-map-b', () => {});
+
+            // Let the first request's promise chain settle, which triggers draining the
+            // second queued event.
+            await new Promise(resolve => { setTimeout(resolve, 0); });
+
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests.length).toEqual(2);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests[0].url).toContain('access_token=token-for-map-a');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(window.server.requests[1].url).toContain('access_token=token-for-map-b');
+        });
+
+        test('setSdkInfo ignores invalid values', async () => {
+            mapbox.setSdkInfo('not a valid value!');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            event.postMapLoadEvent(1, skuToken);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            const reqBody = await window.server.requests[0].requestBody;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const mapLoadEvent = JSON.parse(reqBody.slice(1, reqBody.length - 1));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.sdkInfo).toBeUndefined();
+        });
+
+        test('includes sdkInfo when set via setSdkInfo', async () => {
+            mapbox.setSdkInfo('FlutterPlugin/3.0.0-beta.1');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            event.postMapLoadEvent(1, skuToken);
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            const reqBody = await window.server.requests[0].requestBody;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const mapLoadEvent = JSON.parse(reqBody.slice(1, reqBody.length - 1));
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            expect(mapLoadEvent.sdkInfo).toEqual('FlutterPlugin/3.0.0-beta.1');
         });
 
         test('does not POST when mapboxgl.ACCESS_TOKEN is not set', () => {
@@ -1635,6 +1716,34 @@ describe("mapbox", () => {
 
         test('returns null for invalid base64 payload', () => {
             expect(mapbox.parseAccessToken('a.!!!.c')).toBeNull();
+        });
+    });
+
+    describe('setBundleDistribution', () => {
+        let event: any;
+        const skuToken = '1234567890123';
+        beforeEach(() => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            window.useFakeXMLHttpRequest();
+            event = new mapbox.MapLoadEvent();
+        });
+        afterEach(() => {
+            // Reset the module-level state set by these tests (default is 'other').
+            mapbox.setBundleDistribution('other');
+        });
+
+        async function getBundleDistribution(): Promise<string> {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+            const reqBody = await window.server.requests[0].requestBody;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            return JSON.parse(reqBody.slice(1, reqBody.length - 1)).bundleDistribution;
+        }
+
+        test('payload reflects the bundleDistribution set via setBundleDistribution', async () => {
+            mapbox.setBundleDistribution('cdn');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            event.postMapLoadEvent(1, skuToken);
+            expect(await getBundleDistribution()).toEqual('cdn');
         });
     });
 });
