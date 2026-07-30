@@ -1,6 +1,7 @@
 import Actor from '../util/actor';
 import StyleLayerIndex from '../style/style_layer_index';
 import VectorTileWorkerSource from './vector_tile_worker_source';
+import RasterTileWorkerSource from "./raster_tile_worker_source";
 import RasterDEMTileWorkerSource from './raster_dem_tile_worker_source';
 import GeoJSONWorkerSource from './geojson_worker_source';
 import * as Standard from '../../modules/standard_worker';
@@ -81,6 +82,7 @@ export default class MapWorker {
         this.workerSourceTypes = {
             'vector': VectorTileWorkerSource,
             'geojson': GeoJSONWorkerSource,
+            'raster': RasterTileWorkerSource,
             'raster-dem': RasterDEMTileWorkerSource,
             // 'raster-array' and 'batched-model' are registered lazily on first `loadTile`
             // (see below): the raster-array worker source drags in the MRT decoder, and the

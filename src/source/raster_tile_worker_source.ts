@@ -1,151 +1,87 @@
-import transformLngLat from "../geo/projection/coordinates_transform";
-import {lngLatToTileFromZ} from "../geo/projection/tile_transform";
-import {getTileSystem, lngLatToPixel} from "../geo/projection/tile_projection";
-import {DedupedRequest} from "./deduped_request";
-import {loadRasterTile} from "./load_raster_tile";
-import {Evented} from "../util/evented";
+import {getImage} from "../util/ajax";
 
-import type {TileState} from "./tile";
-import type {Callback} from "../types/callback";
 import type {
-    WorkerCoverTilesRequest,
-    WorkerCoverTilesResult,
-    WorkerSource, WorkerSourceRasterTileRequest, WorkerSourceTileRequest
+    WorkerSource,
+    WorkerSourceOptions,
+    WorkerSourceRasterRequest,
+    WorkerSourceRasterResult,
+    WorkerSourceTileRequest
 } from "./worker_source";
+import type {TileProvider} from "mapbox-gl";
 import type {Cancelable} from "../types/cancelable";
-import type {LoadRasterTile} from "./load_raster_tile";
 
-type LoadingTile = {
-    status: TileState,
-    subTiles?: number[],
-    request?: Cancelable
-}
+class RasterTileWorkerSource implements WorkerSource {
+    tileProvider?: TileProvider<ArrayBuffer | ImageBitmap>;
+    loading: Record<number, Cancelable>;
 
-export default class RasterTileWorkerSource extends Evented implements WorkerSource {
-    _loading: { [_: number]: LoadingTile };
-    _subLoading: { [_: number]: ImageBitmap };
-    deduped: DedupedRequest;
-    loadRasterTile: LoadRasterTile;
-
-    constructor() {
-        super();
-        this._loading = {};
-        this._subLoading = {};
-        this.deduped = new DedupedRequest();
-        this.loadRasterTile = loadRasterTile.bind(this);
+    constructor(options: WorkerSourceOptions) {
+        this.tileProvider = options.tileProvider;
+        this.loading = {};
     }
 
-    getCoverTiles(params: WorkerCoverTilesRequest, callback: Callback<WorkerCoverTilesResult>) {
-        return callback(null, this.reprojectedTile(params));
+    async loadTile(params: WorkerSourceRasterRequest): Promise<WorkerSourceRasterResult | null> {
+        const uid = params.uid;
+        const controller = new AbortController();
+        this.loading[uid] = {cancel: () => controller.abort()};
+
+        if (this.tileProvider) {
+            return this.loadTileWithProvider(this.tileProvider, uid, params, controller);
+        }
+
+        try {
+            return await getImage(params.request, controller.signal);
+        } catch (err) {
+            if (controller.signal.aborted) return null;
+            throw err;
+        } finally {
+            delete this.loading[uid];
+        }
     }
 
-    reprojectedTile(params: WorkerCoverTilesRequest): WorkerCoverTilesResult {
-        const {tileID, projection} = params;
-        const canonical = tileID.canonical;
-        const actualZ = canonical.z;
-        const worldSize = 1 << actualZ;
+    async loadTileWithProvider(provider: TileProvider<ArrayBuffer | ImageBitmap>, uid: number, params: WorkerSourceRasterRequest, controller: AbortController): Promise<WorkerSourceRasterResult | null> {
+        const {z, x, y} = params.tileID.canonical;
+        try {
+            const response = await provider.loadTile({z, x, y}, {request: params.request, signal: controller.signal});
 
-        const {direction, fullExtent, transformExtent} = getTileSystem(projection);
+            if (controller.signal.aborted) return null;
 
-        const bound = canonical.toLngLatBounds();
-
-        if (fullExtent) {
-            if (!fullExtent.contains(bound.getNorthWest()) && !fullExtent.contains(bound.getSouthEast())) {
-                return null;
+            if (response == null) {
+                const err: Error & { status?: number } = new Error('Tile not found');
+                err.status = 404;
+                throw err;
             }
+
+            if (response.data == null) return null;
+
+            const headers = new Headers();
+            if (response.expires) headers.set('expires', response.expires);
+            if (response.cacheControl) headers.set('cache-control', response.cacheControl);
+
+            return {data: response.data, headers};
+        } catch (err) {
+            if (controller.signal.aborted) return null;
+            throw err;
+        } finally {
+            delete this.loading[uid];
         }
-
-        if (transformExtent) {
-            if (!transformExtent.contains(bound.getNorthWest()) && !transformExtent.contains(bound.getSouthEast())) {
-                return {
-                    coverTiles: [{x: canonical.x, y: canonical.y, z: canonical.z, dx: 0, dy: 0}],
-                    ltPixel: {x: 0, y: 0},
-                    rbPixel: {x: 256, y: 256}
-                };
-            }
-        }
-        const coverTiles = [];
-
-        // 转换成对应投影的坐标
-        // 左上
-        const northWest = transformLngLat(bound.getNorthWest(), 'WGS84', projection);
-        // 右下
-        const southEast = transformLngLat(bound.getSouthEast(), 'WGS84', projection);
-
-        const northwestTile = lngLatToTileFromZ(northWest, actualZ, projection);
-        const southeastTile = lngLatToTileFromZ(southEast, actualZ, projection);
-
-        const xMin = direction.x > 0 ? northwestTile.x : southeastTile.x;
-        const xMax = direction.x > 0 ? southeastTile.x : northwestTile.x;
-        const yMin = direction.y > 0 ? northwestTile.y : southeastTile.y;
-        const yMax = direction.y > 0 ? southeastTile.y : northwestTile.y;
-
-        const yRange = yMax - yMin;
-        let xRange = xMax - xMin;
-        // 穿过子午线
-        if (xMin > xMax) {
-            xRange = worldSize - xMin;
-            xRange += xMax;
-        }
-        for (let x = 0; x < xRange + 1; x++) {
-            for (let y = 0; y < yRange + 1; y++) {
-                const tileX = (xMin + x) % worldSize, tileY = yMin + y;
-                const dx = x * direction.x + (direction.x < 0 ? xRange : 0);
-                const dy = y * direction.y + (direction.y < 0 ? yRange : 0);
-                coverTiles.push({x: tileX, y: tileY, z: actualZ, dx, dy});
-            }
-        }
-
-        // 左上角像素坐标
-        const ltPixel = lngLatToPixel(northWest, actualZ, projection);
-        // 右下角像素坐标
-        const rbPoint = lngLatToPixel(southEast, actualZ, projection);
-
-        const rbPixel = {x: rbPoint.x + 256 * xRange, y: rbPoint.y + 256 * yRange};
-
-        return {
-            coverTiles,
-            ltPixel,
-            rbPixel
-        };
     }
 
-    loadTile(params: WorkerSourceRasterTileRequest, callback: Callback<ImageBitmap | HTMLCanvasElement>) {
-        const key = params.tileID.key;
-        const loading = this._loading[key] = this._loading[key] || {status: 'loading'};
-        loading.request = this.loadRasterTile(params, (error, result) => {
-            delete this._loading[key];
-            if (loading.status === 'unloaded') return callback(null);
-            callback(error, result);
-        });
-        this.limitedStorage();
-    }
-
-    limitedStorage() {
-        const subLoading = Object.keys(this._subLoading);
-        if (subLoading.length > 300) {
-            // 删除复用率较低的
-            for (let i = 0; i < subLoading.length - 80; i++) {
-                delete this._subLoading[subLoading[i]];
-            }
-        }
+    async reloadTile(_params: WorkerSourceTileRequest) {
+        // No-op: Raster tiles have no persistent worker-side state to reload
     }
 
     abortTile(params: WorkerSourceTileRequest) {
-        const {tileID} = params;
-        const loading = this._loading[tileID.key];
-        if (loading && loading.request) {
-            loading.request.cancel();
-            delete this._loading[tileID.key];
+        const uid = params.uid;
+        const tile = this.loading[uid];
+        if (tile) {
+            tile.cancel();
+            delete this.loading[uid];
         }
     }
 
     removeTile(params: WorkerSourceTileRequest) {
-        this.abortTile(params);
+        // No-op in the RasterTileWorkerSource class
     }
-
-    reloadTile(params: WorkerSourceRasterTileRequest, callback: Callback<ImageBitmap | HTMLCanvasElement>) {
-        this.loadTile(params, callback);
-    }
-
 }
+
+export default RasterTileWorkerSource;

@@ -35,6 +35,7 @@ import type {TileProvider} from './tile_provider';
 export type WorkerSourceType =
     | 'vector'
     | 'geojson'
+    | 'raster'
     | 'raster-dem'
     | 'raster-array'
     | 'batched-model';
@@ -59,6 +60,17 @@ export type WorkerSourceTileRequest = WorkerSourceRequest & {
     request?: RequestParameters;
     projection?: Projection;
 };
+
+export type WorkerSourceRasterRequest = WorkerSourceTileRequest & {
+    type: 'raster';
+    tileProjection?: string
+    request: RequestParameters;
+}
+
+export type WorkerSourceRasterResult = {
+    data: ArrayBuffer | ImageBitmap;
+    headers: Headers;
+}
 
 /**
  * The parameters passed to the {@link VectorTileWorkerSource#loadTile}
@@ -220,7 +232,7 @@ export interface WorkerSource {
      * Sent by {@link Style#removeSource} after the source's tiles are cleared, so
      * it is the last message the WorkerSource receives.
      */
-    removeSource?: (params: {source: string}) => Promise<void>;
+    removeSource?: (params: { source: string }) => Promise<void>;
 }
 
 /**
