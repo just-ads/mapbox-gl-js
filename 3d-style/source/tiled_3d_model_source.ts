@@ -19,7 +19,7 @@ import type {Callback} from '../../src/types/callback';
 import type {Cancelable} from '../../src/types/cancelable';
 import type {OverscaledTileID} from '../../src/source/tile_id';
 import type {ISource, SourceEvents} from '../../src/source/source';
-import type {ModelSourceSpecification, PromoteIdSpecification} from '../../src/style-spec/types';
+import type {CustomTags, ModelSourceSpecification, PromoteIdSpecification} from '../../src/style-spec/types';
 import type {WorkerSourceTiled3dModelRequest, WorkerSourceVectorTileResult} from '../../src/source/worker_source';
 import type {AJAXError} from '../../src/util/ajax';
 
@@ -52,6 +52,8 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
     _tileJSONRequest: Cancelable | null | undefined;
     map: Map;
 
+    customTags?: CustomTags;
+
     onRemove: undefined;
     unloadTile: undefined;
     prepare: undefined;
@@ -71,6 +73,7 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
         this.tiles = this._options.tiles;
         this.maxzoom = options.maxzoom || 19;
         this.minzoom = options.minzoom || 0;
+        this.customTags = options.customTags;
         this.roundZoom = true;
         this.usedInConflation = true;
         this.dispatcher = dispatcher;
@@ -184,7 +187,7 @@ class Tiled3DModelSource extends Evented<SourceEvents> implements ISource {
         };
 
         try {
-            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal, this.customTags, tile.tileID.canonical);
             if (controller.signal.aborted) return callback(null);
 
             const params: WorkerSourceTiled3dModelRequest = {

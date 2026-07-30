@@ -7,7 +7,7 @@
     <title>Mapbox GL JS debug page</title>
     <meta charset='utf-8'>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <link rel='stylesheet' href='../dist/mapbox-gl.css'/>
+    <link rel='stylesheet' href='/dist/mapbox-gl.css'/>
     <link rel='stylesheet' href='https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.1/mapbox-gl-draw.css'
           type='text/css'/>
     <style>
@@ -131,6 +131,7 @@
             <fieldset>
                 <label>Show Debug </label>
                 <div class="debug" id="debug">
+                    <label>开启瓦片缓存 <input id="enablecache" type="checkbox"></label>
                     <label>showTileBoundaries <input id="showTileBoundaries" type="checkbox"></label>
                     <label>showTerrainWireframe <input id="showTerrainWireframe" type="checkbox"></label>
                     <label>showPadding <input id="showPadding" type="checkbox"></label>
@@ -143,14 +144,15 @@
     </details>
 </div>
 
-<script src='../../dist/mapbox-gl-dev.js'></script>
-<script src='../../debug/access_token.js'></script>
 <script src='https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.1/mapbox-gl-draw.js'></script>
 <script src='../analysis/tin.js'></script>
 <script src='../analysis/Delatin.js'></script>
 
 
-<script>
+<script type="module">
+    import * as mapboxgl from '/dist/esm-dev/mapbox-gl.js';
+    import {getAccessToken} from '/debug/access_token_generated.js';
+
     function getTXDy(data, x, y, z) {
         y = y || data.y;
         z = z || data.z;
@@ -168,6 +170,103 @@
         const dy = Math.pow(2, z) - 1 - y;
         return Math.floor(dy / 16);
     }
+
+    const sources = {
+        'mapbox-dem': {
+            type: 'raster-dem',
+            tileSize: 512,
+            maxzoom: 14,
+            minzoom: 5,
+            tiles: [`https://api.mapbox.com/raster/v1/mapbox.mapbox-terrain-dem-v1/{z}/{x}/{y}.webp?access_token=${getAccessToken()}`],
+        },
+        'xinzhi-dem': {
+            type: 'raster-dem',
+            tileSize: 512,
+            maxzoom: 10,
+            minzoom: 5,
+            tiles: ['https://map.xinzhi.space/terrain/srtmv4/{z}/{x}/{y}.png'],
+            bounds: [71.25, 18, 135.5, 54]
+        },
+        'arcgis_satellite': {
+            type: 'raster',
+            tileSize: 512,
+            tiles: ['https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'],
+            projection: 'GCJ02'
+        },
+        'bing_satellite': {
+            type: 'raster',
+            tileSize: 256,
+            tiles: [`https://t.ssl.ak.tiles.virtualearth.net/tiles/a{quadkey}.jpeg?g=12946&n=z&prx=1&xzcacheurl=http://bing_satellite/{x}/{y}/{z}`]
+        },
+        'amap_satellite': {
+            type: 'raster',
+            tileSize: 128,
+            maxzoom: 18,
+            tiles: ['https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'],
+            projection: 'GCJ02'
+        },
+        'tian_road': {
+            type: 'raster',
+            tileSize: 128,
+            maxzoom: 18,
+            // &tk=e67b6383a8f8d5826792cdb19f302c71
+            tiles: ['https://t0.tianditu.gov.cn/cia_w/wmts?service=WMTS&version=1.0.0&request=GetTile&tilematrix={z}&layer=cia&style=default&tilerow={y}&tilecol={x}&tilematrixset=w&format=tiles']
+        },
+        'amap_road': {
+            type: 'raster',
+            tileSize: 256,
+            maxzoom: 18,
+            projection: 'GCJ02',
+            tiles: ['https://webst01.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}&xzcacheurl=http://amap_road/{x}/{y}/{z}']
+        },
+        'bmap_satellite': {
+            type: 'raster',
+            tileSize: 256,
+            maxzoom: 18,
+            projection: 'BAIDU',
+            // showDebugTileLoadTime: true,
+            tiles: [0, 1, 2, 3].map(s => `https://gss${s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46`),//['https://gss{s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46', 'https://mapsv1.bdimg.com/tile/?udt=20200825&qt=tile&styles=pl&x={x}&y={y}&z={z}'
+        },
+        'google_satellite': {
+            type: 'raster',
+            tileSize: 256,
+            projection: 'GCJ02',
+            maxzoom: 21,
+            tiles: ['https://www.google.com/maps/vt?lyrs=s&gl=cn&x={x}&y={y}&z={z}&scale=2']
+        },
+        'tmap_satellite': {
+            type: 'raster',
+            tileSize: 128,
+            projection: 'GCJ02',
+            scheme: 'tms',
+            maxzoom: 18,
+            tiles: [1, 2, 3].map(s => `https://p${s}.map.gtimg.com/sateTiles/{z}/{x16}/{y16}/{x}_{y}.jpg`),
+            customTags: {
+                x16: getTXX16,
+                y16: getTXY16
+            }
+        },
+        'bmap_street_view': {
+            type: 'raster',
+            tileSize: 128,
+            projection: 'BAIDU',
+            maxzoom: 18,
+            tiles: [0, 1].map(s => `https://mapsv${s}.bdimg.com/tile/?udt=20230629&qt=tile&styles=pl&x={x}&y={y}&z={z}`)
+        },
+        'image': {
+            type: "image",
+            url: "./333.png",
+            coordinates: [
+                [-180, 85],
+                [179.8, 85],
+                [179.8, -65],
+                [-180, -65]
+            ]
+        }
+        // 'tian_vt': {
+        //     type: 'vector'
+        // }
+    };
 
     const map = new mapboxgl.Map({
         container: 'map',
@@ -192,102 +291,7 @@
             //     source: 'mapbox-dem',
             //     exaggeration: 1
             // },
-            sources: {
-                'mapbox-dem': {
-                    type: 'raster-dem',
-                    tileSize: 512,
-                    maxzoom: 14,
-                    minzoom: 5,
-                    tiles: [`https://api.mapbox.com/raster/v1/mapbox.mapbox-terrain-dem-v1/{z}/{x}/{y}.webp?access_token=${getAccessToken()}`],
-                },
-                'xinzhi-dem': {
-                    type: 'raster-dem',
-                    tileSize: 512,
-                    maxzoom: 10,
-                    minzoom: 5,
-                    tiles: ['https://map.xinzhi.space/terrain/srtmv4/{z}/{x}/{y}.png'],
-                    bounds: [71.25, 18, 135.5, 54]
-                },
-                'arcgis_satellite': {
-                    type: 'raster',
-                    tileSize: 512,
-                    tiles: ['https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'],
-                    projection: 'GCJ02'
-                },
-                'bing_satellite': {
-                    type: 'raster',
-                    tileSize: 256,
-                    tiles: [`https://t.ssl.ak.tiles.virtualearth.net/tiles/a{quadkey}.jpeg?g=12946&n=z&prx=1&xzcacheurl=http://bing_satellite/{x}/{y}/{z}`]
-                },
-                'amap_satellite': {
-                    type: 'raster',
-                    tileSize: 128,
-                    maxzoom: 18,
-                    tiles: ['https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'],
-                    projection: 'GCJ02'
-                },
-                'tian_road': {
-                    type: 'raster',
-                    tileSize: 128,
-                    maxzoom: 18,
-                    // &tk=e67b6383a8f8d5826792cdb19f302c71
-                    tiles: ['https://t0.tianditu.gov.cn/cia_w/wmts?service=WMTS&version=1.0.0&request=GetTile&tilematrix={z}&layer=cia&style=default&tilerow={y}&tilecol={x}&tilematrixset=w&format=tiles']
-                },
-                'amap_road': {
-                    type: 'raster',
-                    tileSize: 256,
-                    maxzoom: 18,
-                    projection: 'GCJ02',
-                    tiles: ['https://webst01.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}&xzcacheurl=http://amap_road/{x}/{y}/{z}']
-                },
-                'bmap_satellite': {
-                    type: 'raster',
-                    tileSize: 256,
-                    maxzoom: 18,
-                    projection: 'BAIDU',
-                    // showDebugTileLoadTime: true,
-                    tiles: [0, 1, 2, 3].map(s => `https://gss${s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46`),//['https://gss{s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46', 'https://mapsv1.bdimg.com/tile/?udt=20200825&qt=tile&styles=pl&x={x}&y={y}&z={z}'
-                },
-                'google_satellite': {
-                    type: 'raster',
-                    tileSize: 256,
-                    projection: 'GCJ02',
-                    maxzoom: 21,
-                    tiles: ['https://www.google.com/maps/vt?lyrs=s&gl=cn&x={x}&y={y}&z={z}&scale=2']
-                },
-                'tmap_satellite': {
-                    type: 'raster',
-                    tileSize: 128,
-                    projection: 'GCJ02',
-                    scheme: 'tms',
-                    maxzoom: 18,
-                    tiles: [1, 2, 3].map(s => `https://p${s}.map.gtimg.com/sateTiles/{z}/{x16}/{y16}/{x}_{y}.jpg`),
-                    customTags: {
-                        x16: getTXX16,
-                        y16: getTXY16
-                    }
-                },
-                'bmap_street_view': {
-                    type: 'raster',
-                    tileSize: 128,
-                    projection: 'BAIDU',
-                    maxzoom: 18,
-                    tiles: [0, 1].map(s => `https://mapsv${s}.bdimg.com/tile/?udt=20230629&qt=tile&styles=pl&x={x}&y={y}&z={z}`)
-                },
-                'image': {
-                    type: "image",
-                    url: "./333.png",
-                    coordinates: [
-                        [-180, 85],
-                        [179.8, 85],
-                        [179.8, -65],
-                        [-180, -65]
-                    ]
-                }
-                // 'tian_vt': {
-                //     type: 'vector'
-                // }
-            },
+            sources,
             layers: [{
                 id: "background", type: "background", "layout": {}, paint: {
                     "background-color": "hsl(0,0%,30%)"
@@ -403,6 +407,21 @@
 
     debugDiv.addEventListener('click', (e) => {
         if (e.target instanceof HTMLInputElement) {
+            if (e.target.id === 'enablecache') {
+                for (let sourcesKey in sources) {
+                    const source = sources[sourcesKey];
+                    if (source['type'] === 'image') continue;
+                    const tiles = source['tiles'];
+                    console.log(tiles);
+                    if (e.target.checked) {
+                        const newtiles = tiles.map(it => it.includes('?') ? `${it}&xzcacheurl=https://${sourcesKey}/{x}/{y}/{z}` : `${it}?xzcacheurl=https://${sourcesKey}/{x}/{y}/{z}`);
+                        map.getSource(sourcesKey).setTiles(newtiles);
+                    } else {
+                        map.getSource(sourcesKey).setTiles(tiles.slice(0));
+                    }
+                }
+                return;
+            }
             map[e.target.id] = e.target.checked;
         }
     });

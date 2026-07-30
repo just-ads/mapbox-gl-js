@@ -61,7 +61,7 @@ import type {ImageId, StringifiedImageId} from '../style-spec/expression/types/i
 
 const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
 export type TileState =
-    | 'loading'   // Tile data is in the process of _loading.
+    | 'loading'   // Tile data is in the process of loading.
     | 'loaded'    // Tile data has been loaded. Tile can be rendered.
     | 'empty'     // Tile data has been loaded but has no content for rendering.
     | 'reloading' // Tile data has been loaded and is being updated. Tile can be rendered.
@@ -112,7 +112,6 @@ let _elevationGenerationCounter = 0;
  */
 class Tile {
     tileID: OverscaledTileID;
-    url?: string;
     uid: number;
     uses: number;
     tileSize: number;
@@ -160,7 +159,6 @@ class Tile {
     needsHillshadePrepare: boolean | null | undefined;
     needsDEMTextureUpload: boolean | null | undefined;
     request: AbortController | null | undefined;
-    requestTime?: number;
     texture: Texture | null | undefined | UserManagedTexture;
     emissiveTexture: Texture | null | undefined | UserManagedTexture;
     hillshadeFBO: Framebuffer | null | undefined;

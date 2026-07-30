@@ -56,6 +56,8 @@ export default class GeoJSONRT {
                 this.updateCache(updated, cache);
                 this.features.set(id, updated);
             }
+
+            this.updateCache(updated, cache);
         }
     }
 

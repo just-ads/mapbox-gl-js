@@ -21,7 +21,7 @@ class BuildingIndex {
         tileID: OverscaledTileID;
         verticalScale: number;
     }>;
-    layersGotHidden: boolean; // when layer're hidden since the last frame, don't keep previous elevation, while _loading tiles.
+    layersGotHidden: boolean; // when layer're hidden since the last frame, don't keep previous elevation, while loading tiles.
 
     constructor(style: Style) {
         this.style = style;
@@ -98,7 +98,7 @@ class BuildingIndex {
             const currentZOffset = symbolInstance.zOffset;
             const newZOffset = this._getHeightAtTileOffset(tileID, symbolInstance.tileAnchorX, symbolInstance.tileAnchorY);
 
-            // When zooming over integer zooms, keep the elevation while _loading building buckets.
+            // When zooming over integer zooms, keep the elevation while loading building buckets.
             symbolInstance.zOffset = newZOffset !== Number.NEGATIVE_INFINITY ? newZOffset : currentZOffset;
 
             if (!dataChanged && currentZOffset !== symbolInstance.zOffset) {

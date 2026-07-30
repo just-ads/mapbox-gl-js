@@ -15,7 +15,7 @@ import type DEMData from '../data/dem_data';
 import type {DEMSourceEncoding} from '../data/dem_data';
 import type {GlyphMap} from '../render/glyph_manager';
 import type {StyleImageMap} from '../style/style_image';
-import type {PromoteIdSpecification, RasterProjection} from '../style-spec/types';
+import type {PromoteIdSpecification} from '../style-spec/types';
 import type Projection from '../geo/projection/projection';
 import type {LUT} from '../util/lut';
 import type {Callback} from '../types/callback';
@@ -38,26 +38,6 @@ export type WorkerSourceType =
     | 'raster-dem'
     | 'raster-array'
     | 'batched-model';
-
-export type WorkerCoverTilesRequest = WorkerSourceRequest & {
-    tileID: OverscaledTileID,
-    projection: RasterProjection
-}
-
-export type CoverTiles = { x: number, y: number, z: number, dx: number, dy: number }
-
-export type WorkerCoverTilesResult = {
-    coverTiles: CoverTiles[],
-    ltPixel: { x: number, y: number },
-    rbPixel: { x: number, y: number }
-}
-
-export type WorkerSourceRasterTileRequest = WorkerSourceRequest & {
-    tileID: OverscaledTileID,
-    requests: { request: RequestParameters, tile: OverscaledTileID['canonical'], x: number, y: number }[],
-    ltPixel: WorkerCoverTilesResult['ltPixel'],
-    rbPixel: WorkerCoverTilesResult['rbPixel'],
-}
 
 /**
  * The parameters passed to the {@link MapWorker#getWorkerSource}.
@@ -228,7 +208,7 @@ export interface WorkerSource {
      */
     reloadTile: (params: WorkerSourceTileRequest) => Promise<unknown>;
     /**
-     * Aborts _loading a tile that is in progress.
+     * Aborts loading a tile that is in progress.
      */
     abortTile: (params: WorkerSourceTileRequest) => void | Promise<void>;
     /**
@@ -240,7 +220,7 @@ export interface WorkerSource {
      * Sent by {@link Style#removeSource} after the source's tiles are cleared, so
      * it is the last message the WorkerSource receives.
      */
-    removeSource?: (params: { source: string }) => Promise<void>;
+    removeSource?: (params: {source: string}) => Promise<void>;
 }
 
 /**

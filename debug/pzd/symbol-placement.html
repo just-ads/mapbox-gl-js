@@ -4,7 +4,7 @@
     <title>Mapbox GL JS debug page</title>
     <meta charset='utf-8'>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <link rel='stylesheet' href='../dist/mapbox-gl.css'/>
+    <link rel='stylesheet' href='/dist/mapbox-gl.css'/>
     <style>
         body {
             margin: 0;
@@ -37,6 +37,7 @@
         projection: 'globe',
         language: 'zh_CN'
     });
+    map.showCollisionBoxes = true
     map.on('load', () => {
         map.addSource('line', {
             type: "geojson",
@@ -50,14 +51,52 @@
                         coordinates: [106, 39]
                     },
                     properties: {
-                        isTest: false
+                        isTest: false,
+                        name: 'image-top',
+                        'text-anchor': 'image-top'
                     }
                 }, {
                     type: 'Feature',
                     geometry: {
                         type: 'Point',
                         // coordinates: [[106, 39], [106.00012, 39.0015], [106.0014, 39.0014], [106.001589, 39.0014789], [106.001699, 39.0015789]]
-                        coordinates: [106.00012, 39.0015]
+                        coordinates: [106.05, 39.05]
+                    },
+                    properties: {
+                        isTest: false,
+                        name: 'image-left',
+                        'text-anchor': 'image-left'
+                    }
+                }, {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        // coordinates: [[106, 39], [106.00012, 39.0015], [106.0014, 39.0014], [106.001589, 39.0014789], [106.001699, 39.0015789]]
+                        coordinates: [106.05, 39]
+                    },
+                    properties: {
+                        isTest: false,
+                        name: 'image-right',
+                        'text-anchor': 'image-right'
+                    }
+                }, {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        // coordinates: [[106, 39], [106.00012, 39.0015], [106.0014, 39.0014], [106.001589, 39.0014789], [106.001699, 39.0015789]]
+                        coordinates: [106, 39.05]
+                    },
+                    properties: {
+                        isTest: false,
+                        name: 'image-bottom',
+                        'text-anchor': 'image-bottom'
+                    }
+                }, {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        // coordinates: [[106, 39], [106.00012, 39.0015], [106.0014, 39.0014], [106.001589, 39.0014789], [106.001699, 39.0015789]]
+                        coordinates: [106.1, 39.1]
                     },
                     properties: {
                         isTest: true
@@ -83,8 +122,8 @@
                 'icon-anchor': 'center',
                 'icon-size': 2,
                 'icon-image': 'ae-d-route-4',
-                'text-field': '测试1',
-                'text-anchor': 'image-right',
+                'text-field': '{name}',
+                'text-anchor': ['get', 'text-anchor'],
                 'text-size': 10
             }
         });

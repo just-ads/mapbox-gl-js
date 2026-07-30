@@ -75,7 +75,7 @@ class RasterDEMTileSource extends RasterTileSource<'raster-dem'> {
         tile.request = controller;
 
         try {
-            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal, this.customTags, tile.tileID.canonical);
             if (controller.signal.aborted) return callback(null);
 
             const params: WorkerSourceDEMTileRequest = {

@@ -1,6 +1,5 @@
 import assert from '../style-spec/util/assert';
 import {register} from '../util/web_worker_transfer';
-import LngLat, {LngLatBounds} from "../geo/lng_lat";
 
 import type {mat4} from 'gl-matrix';
 
@@ -45,14 +44,6 @@ export class CanonicalTileID {
             .replace(/{y}/g, String(scheme === 'tms' ? (Math.pow(2, this.z) - this.y - 1) : this.y))
             .replace('{quadkey}', quadkey)
             .replace('{bbox-epsg-3857}', bbox);
-    }
-
-    toLngLatBounds(): LngLatBounds {
-        // const sw = tileToLngLat(this.x, this.y + 1, this.z);
-        // const ne = tileToLngLat(this.x + 1, this.y, this.z);
-        const sw = getLngLatFromTileByPixel(this, {x: 0, y: 255});
-        const ne = getLngLatFromTileByPixel(this, {x: 255, y: 0});
-        return new LngLatBounds(sw, ne);
     }
 
     toString(): string {
@@ -127,9 +118,9 @@ export class OverscaledTileID {
         // We're first testing for z == 0, to avoid a 32 bit shift, which is undefined.
         return parent.overscaledZ === 0 || (
             parent.overscaledZ < this.overscaledZ &&
-            parent.canonical.z < this.canonical.z &&
-            parent.canonical.x === (this.canonical.x >> zDifference) &&
-            parent.canonical.y === (this.canonical.y >> zDifference));
+                parent.canonical.z < this.canonical.z &&
+                parent.canonical.x === (this.canonical.x >> zDifference) &&
+                parent.canonical.y === (this.canonical.y >> zDifference));
     }
 
     children(sourceMaxZoom: number): Array<OverscaledTileID> {
@@ -249,14 +240,6 @@ export const neighborCoord = [
     (coord: OverscaledTileID): OverscaledTileID => new OverscaledTileID(coord.overscaledZ, coord.wrap, coord.canonical.z, coord.canonical.x,
         coord.canonical.y === (1 << coord.canonical.z) - 1 ? 0 : coord.canonical.y + 1)
 ] as const;
-
-function getLngLatFromTileByPixel(tile: CanonicalTileID, pixel: { x: number, y: number }): LngLat {
-    const wordSize = Math.pow(2, tile.z);
-    const lng = (tile.x + pixel.x / 256) / wordSize * 360 - 180;
-    const m = Math.PI - 2 * Math.PI * (tile.y + pixel.y / 256) / wordSize;
-    const lat = (180 / Math.PI * Math.atan(0.5 * (Math.exp(m) - Math.exp(-m))));
-    return new LngLat(lng, lat);
-}
 
 register(CanonicalTileID, 'CanonicalTileID');
 register(OverscaledTileID, 'OverscaledTileID', {omit: ['projMatrix', 'expandedProjMatrix']});

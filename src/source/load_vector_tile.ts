@@ -45,7 +45,8 @@ export function loadVectorTile(
             .then(({data, headers}) => {
                 callback(null, {
                     rawData: data,
-                    // vectorTile: skipParse ? undefined : new VectorTile(new Protobuf(data), undefined, params.vtOptions),
+                    // @ts-expect-error
+                    vectorTile: skipParse ? undefined : new VectorTile(new PbfReader(data), undefined, params.vtOptions),
                     headers
                 });
             })

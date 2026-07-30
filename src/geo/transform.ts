@@ -1403,7 +1403,7 @@ class Transform {
                 if (!it.shouldSplit) {
                     // At final zoom level, while corresponding DEM tile is not loaded yet,
                     // assume center elevation. This covers ground to horizon and prevents
-                    // _loading unnecessary tiles until DEM cover is fully loaded.
+                    // loading unnecessary tiles until DEM cover is fully loaded.
                     aabb.min[2] = aabb.max[2] = aabb.center[2] = this._centerAltitude;
                 }
             }
@@ -1461,10 +1461,10 @@ class Transform {
                 const relativeTileScale = circumferenceAtLatitude(closestLat) / circumferenceAtLatitude(centerLatitude);
 
                 // With globe, the rendered scale does not exactly match the mercator scale at low zoom levels.
-                // Account for this difference during LOD of _loading so that you load the correct size tiles.
+                // Account for this difference during LOD of loading so that you load the correct size tiles.
                 // We try to compromise between two conflicting requirements:
-                // - _loading tiles at the camera's zoom level (for visual and styling consistency)
-                // - _loading correct size tiles (to reduce the number of tiles loaded)
+                // - loading tiles at the camera's zoom level (for visual and styling consistency)
+                // - loading correct size tiles (to reduce the number of tiles loaded)
                 // These are arbitrarily balanced:
                 if (closestLat === centerLatitude) {
                     // For tiles that are in the middle of the viewport, prioritize matching the camera
@@ -1477,7 +1477,7 @@ class Transform {
                 }
 
                 // Ensure that all tiles near the center have the same zoom level.
-                // With LOD tile _loading, tile zoom levels can change when scale slightly changes.
+                // With LOD tile loading, tile zoom levels can change when scale slightly changes.
                 // These differences can be pretty different in globe view. Work around this by
                 // making more tiles match the center tile's zoom level. If the tiles are nearly big enough,
                 // round up. Only apply this adjustment before the transition to mercator rendering has started.

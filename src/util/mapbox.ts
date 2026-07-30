@@ -91,7 +91,7 @@ export class RequestManager {
         }
         if (this._transformRequestFn) {
             const options = abortSignal ? {signal: abortSignal} : {};
-            request = this._transformRequestFn(request.url, type, options) || request;
+            request = await this._transformRequestFn(request.url, type, options) || request;
         }
         return request;
     }

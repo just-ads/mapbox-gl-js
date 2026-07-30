@@ -246,15 +246,15 @@ class SymbolStyleLayer extends StyleLayer {
                 expression = (new ZoomConstantExpression('source', styleExpression) as SourceExpression);
             } else {
                 expression = (new ZoomDependentExpression('composite',
-                    styleExpression,
-
-                                                          overriden.value.zoomStops,
-
-                    overriden.value.interpolationType)as CompositeExpression);
+                                                           styleExpression,
+                                                           overriden.value.zoomStops,
+                                                           overriden.value.interpolationType) as CompositeExpression);
             }
-            (this.paint._values as unknown as Record<string, PossiblyEvaluatedPropertyValue<unknown>>)[overridable] = new PossiblyEvaluatedPropertyValue(overriden.property,
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-argumentexpression,
-                                                                                 overriden.parameters);
+            (this.paint._values as unknown as Record<string, PossiblyEvaluatedPropertyValue<unknown>>)[overridable] =
+                new PossiblyEvaluatedPropertyValue(overriden.property,
+                                                   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                                                   expression,
+                                                   overriden.parameters);
         }
     }
 

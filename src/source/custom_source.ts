@@ -117,7 +117,7 @@ function isRaster(data: unknown): boolean {
  */
 
 /**
- * Called when the map starts _loading tile for the current animation frame.
+ * Called when the map starts loading tile for the current animation frame.
  *
  * @function
  * @memberof CustomSourceInterface
@@ -125,7 +125,7 @@ function isRaster(data: unknown): boolean {
  * @name loadTile
  * @param {{ z: number, x: number, y: number }} tile Tile name to load in the XYZ scheme format.
  * @param {Object} options Options.
- * @param {AbortSignal} options.signal A signal object that communicates when the map cancels the tile _loading request.
+ * @param {AbortSignal} options.signal A signal object that communicates when the map cancels the tile loading request.
  * @returns {Promise<TextureImage | undefined | null>} The promise that resolves to the tile image data as an `HTMLCanvasElement`, `HTMLImageElement`, `ImageData`, `ImageBitmap` or object with `width`, `height`, and `data`.
  * If `loadTile` resolves to `undefined`, a map will render an overscaled parent tile in the tile’s space. If `loadTile` resolves to `null`, a map will render nothing in the tile’s space.
  */

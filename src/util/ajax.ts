@@ -3,6 +3,7 @@ import assert from '../style-spec/util/assert';
 import {warnOnce, isWorker} from './util';
 import {cacheGet, cachePut} from './tile_request_cache';
 import {isMapboxHTTPURL, hasCacheDefeatingSku} from './mapbox_url';
+import {getQueryParameters, removeQueryParameters} from "./url";
 
 /**
  * The type of a resource.
@@ -161,6 +162,11 @@ export const getReferrer: () => string = isWorker() ?
 const PROTOCOL_RE = /^\w+:/;
 const NEWLINE_RE = /[\r\n]+/;
 
+const CACHE_KEY = 'xzcacheurl';
+const SECOND_CACHE_KEY = 'xzsecondcacheurl';
+const PERS_CACHE_KEY = 'xzpersistence';
+const CACHE_GROUP = 'tilecachegroup';
+
 // Determines whether a URL is a file:// URL. This is obviously the case if it begins
 // with file://. Relative URLs are also file:// URLs iff the original document was loaded
 // via a file:// URL.
@@ -180,6 +186,15 @@ async function readResponse<T>(requestParameters: RequestParameters, response: R
 }
 
 async function makeFetchRequest<T>(requestParameters: RequestParameters, signal?: AbortSignal): Promise<RequestResponse<T>> {
+    const queryParameters = getQueryParameters(requestParameters.url, [CACHE_KEY, SECOND_CACHE_KEY, PERS_CACHE_KEY, CACHE_GROUP]);
+    const {
+        xzcacheurl: cacheUrl,
+        xzsecondcacheurl: secondCacheUrl,
+        xzpersistence: persistence
+    } = queryParameters || {};
+
+    requestParameters.url = removeQueryParameters(requestParameters.url, [CACHE_KEY, SECOND_CACHE_KEY, PERS_CACHE_KEY, CACHE_GROUP]);
+
     const request = new Request(requestParameters.url, {
         method: requestParameters.method || 'GET',
         body: requestParameters.body,
@@ -190,16 +205,17 @@ async function makeFetchRequest<T>(requestParameters: RequestParameters, signal?
         signal
     });
 
-    const cacheIgnoringSearch = hasCacheDefeatingSku(request.url);
+    const cacheSearch = (queryParameters && (queryParameters[CACHE_KEY] || queryParameters[SECOND_CACHE_KEY])) || hasCacheDefeatingSku(request.url);
+    const cacheIgnoringSave = request.url.indexOf('ignoring=save') > 0;
 
     if (requestParameters.type === 'json') {
         request.headers.set('Accept', 'application/json');
     }
 
-    if (cacheIgnoringSearch) {
+    if (cacheSearch) {
         let cached: {response: Response; fresh: boolean} | null = null;
         try {
-            cached = await cacheGet(request);
+            cached = await cacheGet(request, cacheUrl, persistence === 'true', secondCacheUrl);
         } catch (err) {
             // HTTP pages in Edge trigger a security error that can be ignored.
             if ((err as Error).message !== 'SecurityError') warnOnce((err as Error).toString());
@@ -224,14 +240,20 @@ async function makeFetchRequest<T>(requestParameters: RequestParameters, signal?
     if (signal) signal.throwIfAborted();
     if (!fetched.ok) throw new AJAXError(fetched.statusText, fetched.status, requestParameters.url);
 
+    // 部分接口用 HTTP 200 包了一层业务状态码，放在自定义的 Status 响应头里，
+    // 这里单独校验一次，非 200 时按错误处理，且不进入下面的缓存写入
+    const extraStatus = +fetched.headers.get('Status');
+    if (extraStatus && extraStatus !== 200) {
+        throw new AJAXError(`自定义请求错误${extraStatus}`, extraStatus, requestParameters.url);
+    }
+
     // Clone before reading the body; cache the clone after the read completes. Aborting
     // mid-read can crash the cache insertion in Firefox, so the write must follow the full
     // read. Fire-and-forget: it must not block handing data to the renderer.
-    const clonedResponse = cacheIgnoringSearch ? fetched.clone() : null;
+    const clonedResponse = (cacheSearch && !cacheIgnoringSave) ? fetched.clone() : null;
     const result = await readResponse<T>(requestParameters, fetched);
     if (clonedResponse) {
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
-        cachePut(request, clonedResponse, requestTime);
+        cachePut(request, clonedResponse, requestTime, cacheUrl, Boolean(persistence));
     }
     return result;
 }
@@ -290,6 +312,14 @@ async function makeXMLHttpRequest<T>(requestParameters: RequestParameters, signa
                     const value = parts.join(': ');
                     if (key) headers.set(key, value);
                 });
+
+                // 与 fetch 路径保持一致：非 200 的自定义 Status 头按错误处理
+                const extraStatus = +headers.get('Status');
+                if (extraStatus && extraStatus !== 200) {
+                    reject(new AJAXError(`自定义请求错误${extraStatus}`, extraStatus, requestParameters.url));
+                    return;
+                }
+
                 resolve({data: data as T, headers});
             } else {
                 reject(new AJAXError(xhr.statusText, xhr.status, requestParameters.url));

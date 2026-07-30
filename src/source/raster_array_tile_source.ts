@@ -137,7 +137,7 @@ class RasterArrayTileSource extends RasterTileSource<'raster-array'> {
         };
 
         try {
-            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal, this.customTags, tile.tileID.canonical);
             if (controller.signal.aborted) return callback(null);
 
             tile.requestParams = request;
@@ -378,7 +378,7 @@ class RasterArrayTileSource extends RasterTileSource<'raster-array'> {
         const url = this.map._requestManager.normalizeTileURL(tile.tileID.canonical.url(this.tiles, this.scheme), false, this.tileSize);
 
         try {
-            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile);
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, undefined, this.customTags, tile.tileID.canonical);
             const requestParams: WorkerSourceRasterArrayTileRequest = {
                 request,
                 uid: tile.uid,

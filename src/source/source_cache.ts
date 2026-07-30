@@ -32,7 +32,7 @@ import type {LoadVectorTileResult} from './load_vector_tile';
  *  - creating an instance of `Source`
  *  - forwarding events from `Source`
  *  - caching tiles loaded from an instance of `Source`
- *  - _loading the tiles needed to render a given viewport
+ *  - loading the tiles needed to render a given viewport
  *  - unloading the cached tiles not needed to render a given viewport
  *
  * @private
@@ -283,9 +283,9 @@ class SourceCache extends Evented {
         // - hard to tell without repro steps
         if (!tile) return;
 
-        // The difference between "_loading" tiles and "reloading" or "expired"
+        // The difference between "loading" tiles and "reloading" or "expired"
         // tiles is that "reloading"/"expired" tiles are "renderable".
-        // Therefore, a "_loading" tile cannot become a "reloading" tile without
+        // Therefore, a "loading" tile cannot become a "reloading" tile without
         // first becoming a "loaded" tile.
         if (tile.state !== 'loading') {
             tile.state = state;
@@ -319,25 +319,26 @@ class SourceCache extends Evented {
             } else {
                 this._source.fire(new ErrorEvent(err, {tile}));
                 this._source.fire(new Event('tileloadfail', {
+                    // @ts-expect-error
                     error: err,
                     sourceId: this._source.id,
                     tile,
                     reloadTile: () => this._reloadTile(id, 'expired')
                 }));
             }
-        } else {
-            tile.timeAdded = browser.now();
-            if (previousState === 'expired') tile.refreshedUponExpiration = true;
-            this._setTileReloadTimer(id, tile);
-            if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
-            this._state.initializeTileState(tile, this.map ? this.map.painter : null);
+            return;
+        }
+
+        tile.timeAdded = browser.now();
+        if (previousState === 'expired') tile.refreshedUponExpiration = true;
+        this._setTileReloadTimer(id, tile);
+        if (this._source.type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
+        this._state.initializeTileState(tile, this.map ? this.map.painter : null);
 
         let responseHeaders: Headers = new Headers();
         if (data && data.headers) responseHeaders = data.headers;
 
-            this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id, responseHeaders}));
-        }
-        this._progress();
+        this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID, 'sourceCacheId': this.id, responseHeaders}));
     }
 
     _progress() {

@@ -21,7 +21,7 @@ import {addTileProvider} from './source/tile_provider';
 import {getWorkerCount, setWorkerCount} from './util/worker_pool';
 import WorkerClass from './util/worker_class';
 import {prewarm, clearPrewarmedResources} from './util/worker_pool_factory';
-import {clearTileCache, getCacheContainer} from './util/tile_request_cache';
+import {clearTileCache} from './util/tile_request_cache';
 import {FreeCameraOptions} from './ui/free_camera';
 import browser from './util/browser';
 import {isMapboxHTTPCDNURL} from './util/mapbox_url';
@@ -216,10 +216,6 @@ const exported = {
         setMaxParallelImageRequests(numRequests);
     },
 
-    getStorage() {
-        return getCacheContainer();
-    },
-
     /**
      * Clears browser storage used by this library. Using this method flushes the Mapbox tile
      * cache that is managed by this library. Tiles may still be cached by the browser
@@ -238,7 +234,7 @@ const exported = {
      * mapboxgl.clearStorage();
      */
     clearStorage(callback?: (err?: Error | null) => void) {
-        clearTileCache(callback);
+        clearTileCache().then(()=> callback()).catch(err => callback(err));
     },
     /**
      * Provides an interface for _loading mapbox-gl's WebWorker bundle from a self-hosted URL.

@@ -129,7 +129,7 @@ export default class Globe extends Mercator {
             const pixelRadius = tr.worldSize / (2.0 * Math.PI);
             const approxTileArcHalfAngle = Math.max(tr.width, tr.height) / tr.worldSize * Math.PI;
             const padding = pixelRadius * (1.0 - Math.cos(approxTileArcHalfAngle));
-            // new Event('moveend', eventData)
+
             // During transition to mercator we would like to keep
             // the far plane lower to ensure that geometries (e.g. circles) that are far away and are not supposed
             // to be rendered get culled out correctly. see https://github.com/mapbox/mapbox-gl-js/issues/11476

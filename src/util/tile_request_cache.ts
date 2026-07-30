@@ -1,10 +1,11 @@
+import {BrowserCacheProvider,} from './tile_cache_storage';
+import {IndexedDBCacheProvider} from './tile_db_storage';
 import {warnOnce, parseCacheControl} from './util';
 import {stripQueryParameters, setQueryParameters} from './url';
-import {cacheGetFromDB, cachePutToDB, clearDB, enforceDBCacheSizeLimit, getCacheDB} from "./tile_db_cache";
 
 import type Dispatcher from './dispatcher';
+import type {TileCacheProvider} from './tile_cache_provider';
 
-const CACHE_NAME = 'map-tiles';
 let cacheLimit = 10000; // 1000MB / (100KB/tile) ~= 10000 tiles
 let cacheCheckThreshold = 1000;
 
@@ -22,32 +23,27 @@ export type ResponseOptions = {
     headers: Headers;
 };
 
-// We're using a global shared cache object. Normally, requesting ad-hoc Cache objects is fine, but
-// Safari has a memory leak in which it fails to release memory when requesting keys() from a Cache
-// object. See https://bugs.webkit.org/show_bug.cgi?id=203991 for more information.
-let sharedCache: Promise<Cache> | null | undefined;
+/**
+ * Cache provider is selected here.
+ *
+ * tile_request_cache does not care how the provider stores data.
+ */
+let cacheProvider: TileCacheProvider | undefined;
 
-function getCaches() {
-    try {
-        return caches;
-    } catch (e) {
-        // <iframe sandbox> triggers exceptions when trying to access window.caches
-        // Chrome: DOMException, Safari: SecurityError, Firefox: NS_ERROR_FAILURE
-        // Seems more robust to catch all exceptions instead of trying to match only these.
+function getCacheProvider(): TileCacheProvider {
+    if (cacheProvider) {
+        return cacheProvider;
     }
+    if (BrowserCacheProvider.isAvailable()) {
+        cacheProvider = new BrowserCacheProvider();
+    } else if (IndexedDBCacheProvider.isAvailable()) {
+        cacheProvider = new IndexedDBCacheProvider();
+    }
+    return cacheProvider;
 }
 
-function cacheOpen() {
-    const caches = getCaches();
-    if (caches && sharedCache == null) {
-        sharedCache = caches.open(CACHE_NAME);
-    }
-}
-
-// We're never closing the cache, but our unit tests rely on changing out the global window.caches
-// object, so we have a function specifically for unit tests that allows resetting the shared cache.
-export function cacheClose() {
-    sharedCache = undefined;
+export function setCacheProvider(provider: TileCacheProvider): void {
+    cacheProvider = provider;
 }
 
 // https://fetch.spec.whatwg.org/#null-body-status
@@ -59,16 +55,22 @@ function isNullBodyStatus(status: Response["status"]): boolean {
     return [101, 103, 204, 205, 304].includes(status);
 }
 
-export async function cachePut(request: Request, response: Response, requestTime: number): Promise<void> {
-    cacheOpen();
-    const url = request.headers.get('CacheUrl') || request.url;
-    if (sharedCache == null) {
-        cachePutToDB(url, response);
-        return;
-    }
+export async function cachePut(
+    request: Request,
+    response: Response,
+    requestTime: number,
+    cacheUrl?: string,
+    persistence?: boolean
+): Promise<void> {
+
+    const url = cacheUrl || request.url;
 
     const cacheControl = parseCacheControl(response.headers.get('cache-control') || '');
-    if (cacheControl['no-store']) return;
+
+    // Do not cache no-store responses.
+    if (cacheControl['no-store']) {
+        return;
+    }
 
     const options: ResponseOptions = {
         status: response.status,
@@ -81,10 +83,16 @@ export async function cachePut(request: Request, response: Response, requestTime
     }
 
     const expires = options.headers.get('expires') || EXPIRED_TIME;
-    if (!expires) return;
+
+    if (!expires) {
+        return;
+    }
 
     const timeUntilExpiry = new Date(expires).getTime() - requestTime;
-    if (timeUntilExpiry < MIN_TIME_UNTIL_EXPIRY) return;
+
+    if (timeUntilExpiry < MIN_TIME_UNTIL_EXPIRY) {
+        return;
+    }
 
     let strippedURL = stripQueryParameters(url, {persistentParams: PERSISTENT_PARAMS});
 
@@ -97,13 +105,12 @@ export async function cachePut(request: Request, response: Response, requestTime
         strippedURL = setQueryParameters(strippedURL, {range});
     }
 
+    const cacheKey = persistence ? setQueryParameters(strippedURL, {persistence: 'true'}) : strippedURL;
+
     const clonedResponse = new Response(isNullBodyStatus(response.status) ? null : response.body, options);
 
-    cacheOpen();
-    if (sharedCache == null) return;
     try {
-        const cache = await sharedCache;
-        await cache.put(strippedURL, clonedResponse);
+        await getCacheProvider().put(cacheKey, clonedResponse);
     } catch (e) {
         warnOnce((e as Error).message);
     }
@@ -111,63 +118,67 @@ export async function cachePut(request: Request, response: Response, requestTime
 
 export async function cacheGet(
     request: Request,
-): Promise<{response: Response; fresh: boolean} | null> {
-    cacheOpen();
-    if (sharedCache == null) return null;
-    const url = request.headers.get('CacheUrl') || request.url;
-    const secondUrl = request.headers.get('SecondCacheUrl');
-    request.headers.delete('CacheUrl');
-    request.headers.delete('Persistence');
-    request.headers.delete('CacheGroup');
-    request.headers.delete('SecondCacheUrl');
+    cacheUrl?: string,
+    persistence?: boolean,
+    secondUrl?: string,
+): Promise<{ response: Response; fresh: boolean } | null> {
 
-    const getCache = (url: string, callback: (error?: Error, response?: Response, fresh?: boolean) => void) => {
-        if (sharedCache == null) return cacheGetFromDB(url, callback);
+    const url = cacheUrl || request.url;
 
-        sharedCache
-            .then(cache => {
-                let strippedURL = stripQueryParameters(url, {persistentParams: PERSISTENT_PARAMS});
+    const getCache = async (lookupUrl: string): Promise<{ response: Response; fresh: boolean } | null> => {
 
-                const range = request.headers.get('Range');
-                if (range) strippedURL = setQueryParameters(strippedURL, {range});
+        let strippedURL = stripQueryParameters(lookupUrl, {persistentParams: PERSISTENT_PARAMS});
 
-                // manually strip URL instead of `ignoreSearch: true` because of a known
-                // performance issue in Chrome https://github.com/mapbox/mapbox-gl-js/issues/8431
-                cache.match(strippedURL)
-                    .then(response => {
-                        const fresh = isFresh(response);
+        const range = request.headers.get('Range');
 
-                        // Reinsert into cache so that order of keys in the cache is the order of access.
-                        // This line makes the cache a LRU instead of a FIFO cache.
-                        cache.delete(strippedURL).catch(callback);
-                        if (fresh) {
-                            cache.put(strippedURL, response.clone()).catch(callback);
-                        }
+        if (range) {
+            strippedURL = setQueryParameters(strippedURL, {range});
+        }
 
-                        callback(null, response, fresh);
-                    })
-                    .catch(callback);
-            })
-            .catch(callback);
-    };
-    if (secondUrl) {
-        getCache(secondUrl, (error, response, fresh) => {
-            if (!response) {
-                getCache(url, callback);
-            } else {
-                callback(error, response, fresh);
+        const cacheKey = persistence ? setQueryParameters(strippedURL, {persistence: 'true'}) : strippedURL;
+
+        let response: Response | null;
+
+        try {
+            response = await getCacheProvider().get(cacheKey);
+        } catch (e) {
+            warnOnce((e as Error).message);
+            return null;
+        }
+
+        if (!response) {
+            return null;
+        }
+
+        const fresh = isFresh(response);
+
+        if (fresh) {
+            try {
+                await getCacheProvider().put(cacheKey, response.clone());
+            } catch (e) {
+                warnOnce((e as Error).message);
             }
-        });
-    } else {
-        getCache(url, callback);
+        }
+
+        return {response, fresh};
+    };
+
+    if (secondUrl) {
+        const secondResult = await getCache(secondUrl);
+        if (secondResult) {
+            return secondResult;
+        }
     }
+    return getCache(url);
 }
 
-function isFresh(response: Response) {
-    if (!response) return false;
+function isFresh(response: Response): boolean {
+    if (!response) {
+        return false;
+    }
     const expires = new Date(response.headers.get('expires') || EXPIRED_TIME);
     const cacheControl = parseCacheControl(response.headers.get('cache-control') || '');
-    return Number(expires) > Date.now() && !cacheControl['no-cache'];
+    return (Number(expires) > Date.now() && !cacheControl['no-cache']);
 }
 
 // `Infinity` triggers a cache check after the first tile is loaded
@@ -188,50 +199,23 @@ export function cacheEntryPossiblyAdded(dispatcher: Dispatcher) {
 }
 
 // runs on worker, see above comment
-export function enforceCacheSizeLimit(limit: number) {
-    cacheOpen();
-    if (sharedCache == null) {
-        enforceDBCacheSizeLimit(limit);
-        return;
-    }
-
-    sharedCache
-        .then(cache => {
-            cache.keys().then(keys => {
-                for (let i = 0; i < keys.length - limit; i++) {
-                    if (keys[i].headers.get('Persistence')) continue;
-                    cache.delete(keys[i]).catch((e: Error) => warnOnce(e.message));
-                }
-            }).catch((e: Error) => warnOnce(e.message));
-        })
-        .catch((e: Error) => warnOnce(e.message));
-}
-
-export function clearTileCache(callback?: (err?: Error | null) => void) {
-    const caches = getCaches();
-    if (!caches) {
-        clearDB(callback);
-        return;
-    }
-
-    const promise = caches.delete(CACHE_NAME);
-    if (callback) {
-        promise.then(() => callback()).catch(callback);
+export async function enforceCacheSizeLimit(limit: number): Promise<void> {
+    try {
+        await getCacheProvider().enforceLimit(limit);
+    } catch (e) {
+        warnOnce((e as Error).message);
     }
 }
 
-export function setCacheLimits(limit: number, checkThreshold: number) {
+export async function clearTileCache(): Promise<void> {
+    try {
+        await getCacheProvider().clear();
+    } catch (e) {
+        warnOnce((e as Error).message);
+    }
+}
+
+export function setCacheLimits(limit: number, checkThreshold: number): void {
     cacheLimit = limit;
     cacheCheckThreshold = checkThreshold;
-}
-
-export function getCacheContainer(): Promise<Cache | {
-    db: IDBDatabase
-    getStore: (mode?: IDBTransactionMode, options?: IDBTransactionOptions) => IDBObjectStore
-}> {
-    return new Promise((resolve, reject) => {
-        cacheOpen();
-        const cachePromise = sharedCache !== null ? sharedCache : getCacheDB();
-        cachePromise.then(resolve).catch(reject);
-    });
 }

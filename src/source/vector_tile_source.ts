@@ -6,7 +6,8 @@ import TileBounds from './tile_bounds';
 import {ResourceType} from '../util/ajax';
 import browser from '../util/browser';
 import {cacheEntryPossiblyAdded} from '../util/tile_request_cache';
-import {DedupedRequest, loadVectorTile} from './load_vector_tile';
+import {loadVectorTile} from './load_vector_tile';
+import {DedupedRequest} from "./deduped_request";
 import {makeFQID} from '../util/fqid';
 import {isMapboxURL} from '../util/mapbox_url';
 import {resolveTileProvider, processTileJSON} from './tile_provider';
@@ -21,7 +22,7 @@ import type Dispatcher from '../util/dispatcher';
 import type Tile from './tile';
 import type {Callback} from '../types/callback';
 import type {Cancelable} from '../types/cancelable';
-import type {VectorSourceSpecification, PromoteIdSpecification} from '../style-spec/types';
+import type {VectorSourceSpecification, PromoteIdSpecification, CustomTags} from '../style-spec/types';
 import type {TileJSON} from '../types/tilejson';
 import type Actor from '../util/actor';
 import type {WorkerInbox} from '../util/actor_messages';
@@ -72,6 +73,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
     // eslint-disable-next-line camelcase
     mapbox_logo?: boolean;
     promoteId?: PromoteIdSpecification | null;
+    customTags?: CustomTags
 
     _options: VectorSourceSpecification & {provider?: string | false; collectResourceTiming: boolean};
     _collectResourceTiming: boolean;
@@ -112,7 +114,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
         this.isTileClipped = true;
         this._loaded = false;
 
-        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize', 'promoteId']));
+        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize', 'promoteId', 'customTags']));
         this._options = {type: 'vector', ...options};
 
         this._collectResourceTiming = !!options.collectResourceTiming;
@@ -333,7 +335,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'
         tile.request = controller;
 
         try {
-            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal, this.customTags, tile.tileID.canonical);
             if (controller.signal.aborted) return callback(null);
             this.dispatchTile(tile, url, tileUrl, request, controller, isFresh, callback);
         } catch (err) {

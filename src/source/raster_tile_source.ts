@@ -22,7 +22,7 @@ import type {TileJSON} from '../types/tilejson';
 import type {
     RasterSourceSpecification,
     RasterDEMSourceSpecification,
-    RasterArraySourceSpecification,
+    RasterArraySourceSpecification, CustomTags,
 } from '../style-spec/types';
 
 /**
@@ -73,6 +73,8 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
     dispatcher: Dispatcher;
     map: Map;
     tiles: Array<string>;
+    customTags?: CustomTags;
+    projection?: string;
 
     _loaded: boolean;
     _options: (RasterSourceSpecification | RasterDEMSourceSpecification | RasterArraySourceSpecification) & {provider?: string | false};
@@ -98,7 +100,7 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
         this._loaded = false;
 
         this._options = {type: 'raster', ...options};
-        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize']));
+        Object.assign(this, pick(options, ['url', 'scheme', 'tileSize', 'customTags', 'projection']));
     }
 
     load(callback?: Callback<undefined>) {
@@ -282,7 +284,7 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
             this.loadTileWithProvider(tile, this._tileProvider, url, controller, callback);
         } else {
             try {
-                const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+                const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal, this.customTags, tile.tileID.canonical);
                 if (controller.signal.aborted) {
                     delete tile.request;
                     return callback(null);
@@ -316,7 +318,7 @@ class RasterTileSource<T = 'raster'> extends Evented<SourceEvents> implements IS
     async loadTileWithProvider(tile: Tile, provider: TileProvider<ArrayBuffer | ImageBitmap>, url: string, controller: AbortController, callback: Callback<undefined>) {
         const {z, x, y} = tile.tileID.canonical;
         try {
-            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal);
+            const request = await this.map._requestManager.transformRequest(url, ResourceType.Tile, controller.signal, this.customTags, tile.tileID.canonical);
             if (controller.signal.aborted) return callback(null);
 
             const response = await provider.loadTile({z, x, y}, {request, signal: controller.signal});

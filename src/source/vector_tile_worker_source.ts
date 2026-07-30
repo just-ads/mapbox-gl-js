@@ -3,7 +3,8 @@ import {PbfReader} from 'pbf';
 import WorkerTile from './worker_tile';
 import {getPerformanceMeasurement} from '../util/performance';
 import {Evented} from '../util/evented';
-import {loadVectorTile, DedupedRequest} from './load_vector_tile';
+import {loadVectorTile} from './load_vector_tile';
+import {DedupedRequest} from "./deduped_request";
 
 import type {
     WorkerSource,
@@ -196,7 +197,8 @@ class VectorTileWorkerSource extends Evented implements WorkerSource {
 
         // response.vectorTile will be present in the GeoJSON worker case (which inherits from this class)
         // because we stub the vector tile interface around JSON data instead of parsing it directly
-        workerTile.vectorTile = response.vectorTile || new VectorTile(new PbfReader(rawTileData));
+        // @ts-expect-error
+        workerTile.vectorTile = response.vectorTile || new VectorTile(new PbfReader(rawTileData), undefined, params.vtOptions);
 
         this.loaded = this.loaded || {};
         this.loaded[uid] = workerTile;
