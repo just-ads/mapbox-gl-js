@@ -1,4 +1,4 @@
-import {arrayBufferToImage, getImage} from "../util/ajax";
+import {getImage} from "../util/ajax";
 import offscreenCanvasSupported from "../util/offscreen_canvas_supported";
 import {asyncAll, isWorker} from "../util/util";
 
@@ -8,6 +8,26 @@ import type {RequestParameters} from "../util/ajax";
 import type {WorkerSourceRasterTileRequest} from "./worker_source";
 
 const supportImageBitmap = typeof createImageBitmap === 'function';
+
+const transparentPngUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQYV2NgAAIAAAUAAarVyFEAAAAASUVORK5CYII=';
+
+function arrayBufferToImage(data: ArrayBuffer, callback: Callback<HTMLImageElement>) {
+    const img: HTMLImageElement = new Image();
+    img.onload = () => {
+        callback(null, img);
+        URL.revokeObjectURL(img.src);
+        // prevent image dataURI memory leak in Safari;
+        // but don't free the image immediately because it might be uploaded in the next frame
+        // https://github.com/mapbox/mapbox-gl-js/issues/10226
+        img.onload = null;
+        requestAnimationFrame(() => {
+            img.src = transparentPngUrl;
+        });
+    };
+    img.onerror = () => callback(new Error('Could not load image. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.'));
+    const blob: Blob = new Blob([new Uint8Array(data)], {type: 'image/png'});
+    img.src = data.byteLength ? URL.createObjectURL(blob) : transparentPngUrl;
+}
 
 function dataToTextureImage(data: ArrayBuffer | HTMLImageElement, cb: Callback<ImageBitmap | HTMLImageElement>) {
     if (data instanceof ArrayBuffer) {

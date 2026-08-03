@@ -801,15 +801,31 @@ class SourceCache extends Evented {
         }
     }
 
+    _retainLoadedParents(retain: Partial<Record<number | string, OverscaledTileID>>) {
+        if (!this._isRaster) return;
+        let min = Infinity;
+        for (const id in this._tiles) {
+            min = Math.min(min, this._tiles[id].tileID.overscaledZ);
+        }
+        if (!Number.isFinite(min)) return;
+        for (const id in this._tiles) {
+            const tileID = this._tiles[id].tileID;
+            if (tileID.overscaledZ === min) {
+                retain[tileID.key] = tileID;
+            }
+        }
+    }
+
     _updateRetainedTiles(idealTileIDs: Array<OverscaledTileID>): Partial<Record<number | string, OverscaledTileID>> {
         const retain: Partial<Record<number | string, OverscaledTileID>> = {};
+        this._retainLoadedParents(retain);
         if (idealTileIDs.length === 0) { return retain; }
 
         const checked: Partial<Record<number | string, boolean>> = {};
         const minZoom = idealTileIDs.reduce((min, id) => Math.min(min, id.overscaledZ), Infinity);
         const maxZoom = idealTileIDs[0].overscaledZ;
         assert(minZoom <= maxZoom);
-        const minCoveringZoom = Math.max(maxZoom - SourceCache.maxOverzooming, this._source.minzoom);
+        // const minCoveringZoom = Math.max(maxZoom - SourceCache.maxOverzooming, this._source.minzoom);
         const maxCoveringZoom = Math.max(maxZoom + SourceCache.maxUnderzooming,  this._source.minzoom);
 
         const missingTiles: Record<string, OverscaledTileID> = {};
@@ -856,13 +872,13 @@ class SourceCache extends Evented {
                     retain[children[3].key]) continue; // tile is covered by children
             }
 
-            for (let overscaledZ = tileID.overscaledZ - 1; overscaledZ >= minCoveringZoom; --overscaledZ) {
+            for (let overscaledZ = tileID.overscaledZ - 1; overscaledZ >= this._source.minzoom; --overscaledZ) {
                 const parentId = tileID.scaledTo(overscaledZ);
                 // Break parent tile ascent if this route has been previously checked by another child.
                 if (checked[parentId.key]) break;
                 checked[parentId.key] = true;
 
-                tile = this.getTile(parentId) || this._cache.get(parentId);
+                tile = this.getTile(parentId);
                 if (!tile) {
                     tile = this._addTile(parentId);
                 }

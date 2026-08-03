@@ -222,17 +222,17 @@
         'bmap_satellite': {
             type: 'raster',
             tileSize: 256,
+            minzoom: 1,
             maxzoom: 18,
             projection: 'BAIDU',
             // showDebugTileLoadTime: true,
-            tiles: [0, 1, 2, 3].map(s => `https://gss${s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46`),//['https://gss{s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46', 'https://mapsv1.bdimg.com/tile/?udt=20200825&qt=tile&styles=pl&x={x}&y={y}&z={z}'
+            tiles: [0, 1, 2, 3].map(s => `https://gss${s}.bdstatic.com/5bwHcj7lABFT8t_jkk_Z1zRvfdw6buu/it/u=x={x};y={y};z={z};v=009;type=sate&fm=46`),
         },
         'google_satellite': {
             type: 'raster',
             tileSize: 256,
-            projection: 'GCJ02',
             maxzoom: 21,
-            tiles: ['https://www.google.com/maps/vt?lyrs=s&gl=cn&x={x}&y={y}&z={z}&scale=2']
+            tiles: ['https://www.google.com/maps/vt?lyrs=s&hl=zh-CN&x={x}&y={y}&z={z}&scale=2']
         },
         'tmap_satellite': {
             type: 'raster',
@@ -490,7 +490,9 @@
             // e.target.tiles
             // e.target.setTiles(['https://t0.tianditu.gov.cn/cia_w/wmts?service=WMTS&version=1.0.0&request=GetTile&tilematrix={z}&layer=cia&style=default&tilerow={y}&tilecol={x}&tilematrixset=w&format=tiles&tk=e67b6383a8f8d5826792cdb19f302c71'])
         });
-        console.log(map);
+
+        window.map = map;
+        // console.log(map);
 
         // function getStreetBriefByLocation() {
         //     // http://apisv0.bdimg.com/?qt=qsdata&x=11857323.466123164&y=3433626.2685959353&r=50&action=1&auth_key=1688006760-1688004960000-HwOIc6QgPXmI6uBjZVGOlTGZwrnfG7X3-595920211df458015b1313531e2a4411&&fn=jsonp57929&sign=5f6d0b96eb84

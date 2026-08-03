@@ -121,11 +121,11 @@ export async function cacheGet(
     cacheUrl?: string,
     persistence?: boolean,
     secondUrl?: string,
-): Promise<{ response: Response; fresh: boolean } | null> {
+): Promise<{response: Response; fresh: boolean} | null> {
 
     const url = cacheUrl || request.url;
 
-    const getCache = async (lookupUrl: string): Promise<{ response: Response; fresh: boolean } | null> => {
+    const getCache = async (lookupUrl: string): Promise<{response: Response; fresh: boolean} | null> => {
 
         let strippedURL = stripQueryParameters(lookupUrl, {persistentParams: PERSISTENT_PARAMS});
 
