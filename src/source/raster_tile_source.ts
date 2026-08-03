@@ -9,6 +9,7 @@ import {cacheEntryPossiblyAdded} from '../util/tile_request_cache';
 import {makeFQID} from '../util/fqid';
 import Texture from '../render/texture';
 import {resolveTileProvider, loadTileProvider, processTileJSON} from './tile_provider';
+import RasterReprojector from "@ads/raster-reprojection";
 
 import type {TileProvider} from './tile_provider';
 import type {ISource, SourceEvents, SourceRasterLayer} from './source';
@@ -24,7 +25,6 @@ import type {
     RasterDEMSourceSpecification,
     RasterArraySourceSpecification, CustomTags,
 } from '../style-spec/types';
-import RasterReprojector from "@ads/raster-reprojection";
 
 /**
  * A source containing raster tiles.
